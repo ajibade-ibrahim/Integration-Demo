@@ -1,10 +1,15 @@
 /**
- * Helpers for JSON held in SQLite TEXT columns.
+ * Helpers for JSON held in TEXT columns.
  *
- * Prisma has no `Json` type on SQLite, so `customFields`, `providerMetadata`
- * and `errorsJson` are strings. Reads must tolerate anything — a hand-edited
- * row or a value written by an older schema should degrade to a default rather
- * than crash a sync mid-run.
+ * `customFields`, `providerMetadata` and `errorsJson` are `String` rather
+ * than `Json`, a shape inherited from when the tests ran on SQLite, where
+ * Prisma has no `Json` type. Postgres does, and promoting these to `jsonb`
+ * would retire this module — see the header of prisma/schema.prisma for why
+ * that is a separate change.
+ *
+ * Until then, reads must tolerate anything: a hand-edited row or a value
+ * written by an older schema should degrade to a default rather than crash a
+ * sync mid-run.
  */
 
 export function readJsonObject(raw: string | null | undefined): Record<string, string> {

@@ -160,7 +160,7 @@
 
             <div class="stack">
               <div class="node" data-k="store" id="s1-repo"><span class="t">repositories/</span><span class="n">The modules that speak Prisma</span></div>
-              <div class="node" data-k="store" id="s1-db"><span class="t">SQLite via Prisma</span><span class="n">9 tables, one ownership spine</span></div>
+              <div class="node" data-k="store" id="s1-db"><span class="t">Postgres via Prisma</span><span class="n">9 tables, one ownership spine</span></div>
             </div>
           </div>
 
@@ -616,7 +616,7 @@
             <div class="node" data-k="a2" id="l-prov"><span class="t">src/core/providers/</span><span class="n">No DB, no OAuth service — refresh arrives as a callback on <code>HandlerContext</code></span></div>
           </div>
           <div class="pair">
-            <div class="node" data-k="store" id="l-db"><span class="t">Prisma / SQLite</span></div>
+            <div class="node" data-k="store" id="l-db"><span class="t">Prisma / Postgres</span></div>
             <div class="node" data-k="a2" id="l-http"><span class="t">outbound HTTP</span></div>
           </div>
         </div>
@@ -681,7 +681,7 @@
             </div>
           </section>
 
-          <div class="node" data-k="store" id="r8-db" style="grid-row:2;grid-column:2"><span class="t">SQLite</span><span class="n">Prisma client stashed on <code>globalThis</code> outside production, so hot reload does not leak a connection pool per edit</span></div>
+          <div class="node" data-k="store" id="r8-db" style="grid-row:2;grid-column:2"><span class="t">Postgres</span><span class="n">Prisma client stashed on <code>globalThis</code> outside production, so hot reload does not leak a connection pool per edit</span></div>
 
         </div>
       </div>

@@ -1,9 +1,11 @@
 /**
  * Const-union types standing in for database enums.
  *
- * SQLite (via Prisma) has no enum support, so these columns are stored as
- * `String` and validated here. Keeping the union and its runtime guard adjacent
- * means the two cannot drift.
+ * These columns are stored as `String` and validated here, a shape inherited
+ * from when the tests ran on SQLite, which has no enum support through Prisma.
+ * Postgres does, so native enums are now available — see the header of
+ * prisma/schema.prisma for why that is a separate change. Keeping each union
+ * and its runtime guard adjacent means the two cannot drift.
  */
 
 // ---------------------------------------------------------------------------

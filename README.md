@@ -30,13 +30,24 @@ nothing downstream branches on a provider name.
 
 ## Run it
 
+Needs a Postgres server. Any one will do — a local install, Supabase, or Neon —
+and there is no SQLite fallback on purpose; see [Deploying](#the-database) for
+why one engine everywhere is worth the server.
+
 ```bash
 npm install
-cp .env.example .env          # then set TOKEN_ENCRYPTION_KEY and AUTH_SECRET
+cp .env.example .env          # then set DATABASE_URL, DIRECT_URL,
+                              # TEST_DATABASE_URL, TOKEN_ENCRYPTION_KEY
+                              # and AUTH_SECRET
+psql -U postgres -c "CREATE DATABASE integration_demo"
 npx prisma db push
 npm run seed
 npm run dev
 ```
+
+`DIRECT_URL` is required even against a local server with no pooler — Prisma
+reads it while parsing the schema, so an unset value fails `prisma generate`
+outright. Point it at the same place as `DATABASE_URL`.
 
 Open <http://localhost:3000> and sign in. `npm run seed` prints the demo
 account's password, or set `DEMO_USER_PASSWORD` before running it to choose one.
@@ -381,8 +392,10 @@ typechecking, so a suite can pass green over a build that does not compile.
 - **Integration tests** (msw) cover pagination, 429 with and without
   `Retry-After`, 401 → refresh → retry, SOQL construction, and field discovery
   against mocked HubSpot and Salesforce APIs.
-- Tests that need a database use a throwaway SQLite file built by
-  `tests/global-setup.ts`; the dev database is never touched.
+- Tests that need a database run inside a dedicated Postgres schema built by
+  `tests/global-setup.ts` and named by `TEST_DATABASE_URL`; the dev database
+  is never touched. That schema is dropped and recreated on every run, so the
+  suite refuses to start unless the URL names a schema other than `public`.
 
 Property tests were checked by mutation — deliberately breaking the code to
 confirm the test fails. Two survived initially and the tests were strengthened
@@ -392,53 +405,58 @@ until they didn't.
 
 ## Deploying
 
-The demo runs on SQLite, which is the right default for a clone-and-run repo and
-the wrong one for a deployment: `prisma/dev.db` is a file, and most hosts give
-you an ephemeral filesystem that discards it on every deploy.
-
 ### The database
 
-Deployment targets **Supabase Postgres**. Local development and the test suite
-stay on SQLite, so `npm test` still needs no server.
+Postgres everywhere — local development, the test suite and deployment all run
+the same engine, so deploying is `npm run build` and nothing else.
 
-Both cannot come from one schema file — Prisma's datasource `provider` must be a
-literal rather than `env()`, and the generated client is provider-specific, so a
-client built for `postgresql` rejects a `file:` URL outright. Instead
-[`scripts/pg-schema.mts`](scripts/pg-schema.mts) generates a Postgres variant at
-build time. The two files differ by the datasource block and nothing else, which
-only works because the schema avoids `enum` and `Json` in favour of `String`
-columns validated in app code. The generator enforces that: it refuses to run if
-either type appears, rather than quietly emitting a SQLite schema the tests can
-no longer use.
+That uniformity is the point rather than a convenience. Prisma’s datasource
+`provider` must be a literal rather than `env()`, and the generated client is
+provider-specific: a client built for `postgresql` refuses a `file:` URL
+outright. One schema file can therefore only ever serve one engine. An earlier
+version of this repo ran SQLite locally and generated a Postgres variant of the
+schema at build time to bridge the gap. It worked, but it made `npm run build`
+quietly wrong for deployment, it left a developer’s generated client in
+whichever mode they had last built, and it meant the schema the tests ran
+against was never quite the schema production used.
+
+Any Postgres will do — a local server, Supabase, or Neon. Nothing in the code
+names a vendor.
 
 ```bash
-npm run db:pg        # generate prisma/schema.postgres.prisma (gitignored)
-npm run db:pg:push   # generate, then push the schema to Supabase
-npm run build:deploy # generate, prisma generate, next build
+psql -U postgres -c "CREATE DATABASE integration_demo"   # once
+npm run db:push                                          # create the tables
+npm run seed                                             # demo data
 ```
 
-Two connection strings are needed, both from Supabase → Project Settings →
-Database → Connection string:
+Two connection strings are needed, and both are required:
 
-| Variable | Port | Used by |
+| Variable | Points at | Used by |
 |---|---|---|
-| `DATABASE_URL` | 6543, transaction pooler | The app. Needs `?pgbouncer=true`. |
-| `DIRECT_URL` | 5432, session pooler | `db push` / `migrate` only. |
+| `DATABASE_URL` | The pooler, in deployment | The app. Needs `?pgbouncer=true` behind a transaction pooler. |
+| `DIRECT_URL` | An unpooled connection | `prisma db push` / `migrate` only. |
 
-`pgbouncer=true` is not optional. Without it Prisma issues prepared statements
-that the pooler cannot carry across the connections it multiplexes, and queries
-fail *intermittently* rather than outright. For `DIRECT_URL`, prefer the session
-pooler host over `db.<ref>.supabase.co` — the latter resolves to IPv6 only,
-which many hosts and CI runners cannot reach.
+`DIRECT_URL` is required **even when there is no pooler anywhere**, which is
+the one genuinely surprising part. Prisma resolves `env()` while *parsing* the
+schema, so leaving it unset fails `prisma generate`, `prisma validate` and
+`npm run build` with P1012 before anything tries to open a connection. Against
+a plain local server, set it to the same value as `DATABASE_URL`.
 
-No seed step is required: `currentUserId()` upserts the demo user on first
-request.
+The reason it exists at all: migrations take advisory locks and run DDL,
+neither of which survives transaction-mode pooling. For the same reason,
+`pgbouncer=true` on the pooled URL is not optional on Supabase or Neon —
+without it Prisma issues prepared statements the pooler cannot carry across the
+connections it multiplexes, and queries then fail *intermittently* rather than
+outright, which is a miserable thing to debug.
 
-`build:deploy` belongs in a build environment. Running it on your own machine
-also regenerates Prisma Client for Postgres, and local dev and tests cannot open
-SQLite again until `npx prisma generate` puts the SQLite client back.
+Pooled and direct URLs differ by **port** on Supabase (6543 and 5432) and by
+**hostname** on Neon (a `-pooler` suffix, same port). One easily missed
+substring between “works” and “migrations hang”, so check it first when a push
+stalls. On Supabase, prefer the session pooler host over `db.<ref>.supabase.co`
+for `DIRECT_URL` — the latter resolves to IPv6 only, which many hosts and CI
+runners cannot reach.
 
-> `db:pg:push` uses `prisma db push`, which has no migration history. That is
+> `db:push` uses `prisma db push`, which has no migration history. That is
 > fine for a demo with no data worth protecting; anything real wants
 > `prisma migrate deploy` and a committed `prisma/migrations/`.
 

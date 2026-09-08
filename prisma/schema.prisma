@@ -1,25 +1,43 @@
 // Integration Platform data model.
 //
-// SQLite constraints worth knowing before editing:
-//   - Prisma does not support `enum` on SQLite. Status/type columns are `String`
-//     and validated in app code against const unions in src/core/types.
-//   - Prisma `Json` is not supported on SQLite either. JSON columns are `String`
-//     holding serialized JSON, read/written through helpers in
-//     src/core/repositories/json-column.ts.
-// Both choices keep this schema portable, and deployment depends on that:
-// scripts/pg-schema.mts generates a Postgres variant of this file whose only
-// difference is the datasource block. Tests and local dev stay on SQLite and
-// need no server. Promoting these columns to native enum/jsonb would be a real
-// improvement, but it forfeits that — the generator refuses to run if either
-// type appears here, rather than emitting a SQLite schema tests cannot use.
+// Postgres everywhere: local dev, the test suite and deployment all run the
+// same provider. Prisma's datasource `provider` must be a literal rather than
+// `env()`, and the generated client is provider-specific — a client built for
+// `postgresql` refuses a `file:` URL outright — so one schema can only ever
+// serve one engine. Keeping that engine the same in every environment is what
+// makes this file the whole story rather than a template for two.
+//
+// Two conventions below are older than that decision:
+//   - Status/type columns are `String`, validated in app code against const
+//     unions in src/core/types.
+//   - JSON columns are `String` holding serialized JSON, read and written
+//     through helpers in src/core/repositories/json-column.ts.
+// Both exist because the tests used to run on SQLite, which supports neither
+// `enum` nor `Json` through Prisma. Postgres supports both, so promoting these
+// columns to native enum/jsonb is now possible and worth doing — but it is a
+// data migration plus a sweep through the repositories and the type layer, not
+// a schema edit, so it is left as a follow-up rather than smuggled into a
+// change of provider.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider = "postgresql"
+
+  // What the app runs on. In deployment this is a transaction pooler and needs
+  // `pgbouncer=true`; against a plain local server it is just the server.
+  url = env("DATABASE_URL")
+
+  // An unpooled route, used only by `prisma db push` / `migrate`: those take
+  // advisory locks and run DDL, neither of which survives transaction-mode
+  // pooling. With no pooler in front, set it to the same value as DATABASE_URL.
+  //
+  // Not optional, even locally. Prisma resolves `env()` while *parsing* this
+  // file, so an unset DIRECT_URL fails `generate`, `validate` and every other
+  // CLI command with P1012 before any of them tries to reach a database.
+  directUrl = env("DIRECT_URL")
 }
 
 model User {

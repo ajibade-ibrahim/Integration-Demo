@@ -76,7 +76,7 @@ function keyRejected(): void {
  * Integrations belonging to this test's own user.
  *
  * Scoped, never a global count or a global truncate: test files share one
- * SQLite database and vitest runs them in parallel, so counting everything
+ * database schema and vitest runs them in parallel, so counting everything
  * would see rows another file is in the middle of creating.
  */
 async function integrationCount(): Promise<number> {

@@ -59,10 +59,11 @@
     </div>
 
     <div class="callout">
-      <b>SQLite has neither <code>enum</code> nor <code>Json</code> through Prisma.</b> Both are
-      modelled as <code>String</code> and constrained in application code, which keeps the schema
-      portable — moving to Postgres is a datasource swap plus promoting those columns to native
-      <code>enum</code> / <code>jsonb</code>. See §3.
+      <b>Some columns are strings that are not really strings.</b> Status, type and JSON
+      columns are modelled as <code>String</code> and constrained in application code — a shape
+      inherited from when the tests ran on SQLite, which has neither <code>enum</code> nor
+      <code>Json</code> through Prisma. Everything now runs Postgres, so promoting them to native
+      <code>enum</code> / <code>jsonb</code> is available but not yet done. See §3.
     </div>
 
 

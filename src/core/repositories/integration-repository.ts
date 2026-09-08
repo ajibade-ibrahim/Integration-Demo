@@ -184,8 +184,10 @@ export async function addFunctions(
   id: string,
   functionNames: readonly string[]
 ): Promise<IntegrationRecord | undefined> {
-  // `createMany({ skipDuplicates })` is unsupported on SQLite, so filter against
-  // what is already there. Re-adding an existing function is a no-op, not an error.
+  // Filter against what is already there, so re-adding an existing function is
+  // a no-op rather than a unique-constraint error. This predates Postgres:
+  // `createMany({ skipDuplicates: true })` would now do the same job in one
+  // round trip, and replacing this is a small, deliberate follow-up.
   const existing = await prisma.integrationFunction.findMany({
     where: { integrationId: id },
     select: { functionName: true },

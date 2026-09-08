@@ -194,10 +194,16 @@ scheduler sweep, `FieldMapping(integrationId)` and
 
 ## Columns that are strings but are not really strings
 
-Prisma supports neither `enum` nor `Json` on SQLite. Both are modelled as
-`String` and constrained in application code, which keeps the schema portable —
-moving to Postgres is a datasource swap plus promoting these columns to native
-`enum` / `jsonb`.
+Both are modelled as `String` and constrained in application code. The reason
+is historical: the tests used to run on SQLite, where Prisma supports neither
+`enum` nor `Json`, so avoiding both was what let one schema serve SQLite
+locally and Postgres in deployment.
+
+Everything now runs Postgres, which supports both, so that constraint is gone
+and promoting these columns to native `enum` / `jsonb` is available. It is a
+data migration plus a sweep through the repositories and the type layer rather
+than a schema edit, so it has not been done here — the guards below are still
+the source of truth.
 
 ### Enum-shaped
 

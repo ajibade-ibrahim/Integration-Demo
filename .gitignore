@@ -3,10 +3,9 @@ node_modules/
 out/
 build/
 
-# Generated at deploy time by scripts/pg-schema.mts
-prisma/schema.postgres.prisma
-
-# Local database
+# Leftover SQLite files from before the move to Postgres. Nothing reads them
+# now, but the rules stay so existing working copies do not start
+# reporting them as new.
 *.db
 *.db-journal
 prisma/dev.db*
@@ -22,7 +21,6 @@ prisma/dev.db*
 *.tsbuildinfo
 next-env.d.ts
 coverage/
-prisma/test.db
 
 # HubSpot CLI — holds a personal access key for your portal
 hubspot.config.yml

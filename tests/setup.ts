@@ -2,16 +2,29 @@
  * Vitest global setup.
  *
  * Sets the env vars that core modules read at import time so unit and property
- * tests never depend on a developer's local .env.
+ * tests never depend on a developer's local .env. The one deliberate exception
+ * is TEST_DATABASE_URL, which can only come from the developer's machine —
+ * `tests/test-database-url.ts` reads that single key and nothing else.
  */
+
+import { resolveTestDatabase } from "./test-database-url";
 
 // Deterministic 32-byte key for AES-256-GCM in tests.
 process.env["TOKEN_ENCRYPTION_KEY"] = Buffer.alloc(32, 7).toString("base64");
 
-// Point every test at the throwaway database built by global-setup, never at
-// the developer's own. Most tests never touch it; the ones that do truncate
-// freely, which is only safe because of this line.
-process.env["DATABASE_URL"] = "file:./test.db";
+/*
+ * Point every test at the schema built by global-setup, never at the
+ * developer's own database. Most tests never touch it; the ones that do delete
+ * rows freely, which is only safe because of these two lines.
+ *
+ * DIRECT_URL is pinned alongside it, to the same value. Nothing at runtime
+ * reads it — it is a Prisma CLI concern — but leaving it to arrive from `.env`
+ * (see the note below on how that happens) would leave a live deployment
+ * connection string in the environment of a process running destructive tests.
+ */
+const testDatabase = resolveTestDatabase();
+process.env["DATABASE_URL"] = testDatabase.url;
+process.env["DIRECT_URL"] = testDatabase.url;
 
 process.env["APP_BASE_URL"] ??= "http://localhost:3000";
 process.env["ENABLE_MOCK_PROVIDER"] = "true";

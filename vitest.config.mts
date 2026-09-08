@@ -8,7 +8,7 @@ export default defineConfig({
     // Property tests run 100+ cases each; give them room.
     testTimeout: 20_000,
     setupFiles: ["tests/setup.ts"],
-    // Builds the throwaway SQLite database the repository tests use.
+    // Builds the throwaway Postgres schema the repository tests use.
     globalSetup: ["tests/global-setup.ts"],
   },
   resolve: {

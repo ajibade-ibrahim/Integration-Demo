@@ -68,7 +68,7 @@ flowchart TB
     end
 
     REPOS["<b>repositories/</b> — the modules that speak Prisma"]
-    DB[("SQLite via Prisma<br/>9 tables")]
+    DB[("Postgres via Prisma<br/>9 tables")]
 
     entry --> BOOT
     BOOT --> registries
@@ -382,7 +382,7 @@ adding one is filling in a known shape, not designing anything.
 flowchart TB
     A["src/app/ - pages, route handlers"] --> B["src/core/ - orchestration"]
     B --> C["src/core/repositories/"]
-    C --> D[("Prisma / SQLite")]
+    C --> D[("Prisma / Postgres")]
     B --> E["src/core/providers/"]
     E --> F["outbound HTTP"]
 
@@ -444,7 +444,7 @@ flowchart LR
     end
 
     CC -->|fetch| RH
-    RSC -->|direct read| DB[("SQLite")]
+    RSC -->|direct read| DB[("Postgres")]
     RH --> DB
     RH --> EXT
     W -->|"POST /api/cron/sync<br/>bearer CRON_SECRET"| RH
@@ -499,7 +499,7 @@ where a new test belongs.
 |---|---|---|
 | `tests/unit/` | Pure logic — mapper, crypto, SOQL, clock, scheduler policy | nothing |
 | `tests/property/` | The seven invariants that carry weight: scope isolation, provider filtering, mapping round-trip, target validation, absent-source-yields-null, upsert identity, pagination completeness | fast-check |
-| `tests/integration/` | Handlers against mocked provider APIs — pagination, 429 with and without `Retry-After`, 401 then refresh then retry, field discovery | msw, plus a throwaway SQLite file from `tests/global-setup.ts` |
+| `tests/integration/` | Handlers against mocked provider APIs — pagination, 429 with and without `Retry-After`, 401 then refresh then retry, field discovery | msw, plus a throwaway Postgres schema built by `tests/global-setup.ts` |
 
 `npm test` runs `tsc --noEmit` **first, as a gate**: Vitest transpiles without
 typechecking, so a suite can otherwise pass green over a build that does not
