@@ -17,20 +17,20 @@
  * nothing.
  */
 
-import { readFile } from "node:fs/promises";
-import { PrismaClient } from "@prisma/client";
+import { readFile } from 'node:fs/promises'
+import { PrismaClient } from '@prisma/client'
 
-import { hashPassword } from "../src/lib/password";
+import { hashPassword } from '../src/lib/password'
 
-const USERS_FILE = new URL("./users.json", import.meta.url);
+const USERS_FILE = new URL('./users.json', import.meta.url)
 
 interface Entry {
-  email: string;
-  password: string;
+  email: string
+  password: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /**
@@ -40,87 +40,94 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * hand-edited file takes one pass instead of one run per typo.
  */
 function parseEntries(raw: unknown): { entries: Entry[]; errors: string[] } {
-  const errors: string[] = [];
+  const errors: string[] = []
 
   if (!Array.isArray(raw)) {
-    return { entries: [], errors: ["expected a JSON array of { email, password }"] };
+    return {
+      entries: [],
+      errors: ['expected a JSON array of { email, password }'],
+    }
   }
 
-  const entries: Entry[] = [];
-  const seen = new Set<string>();
+  const entries: Entry[] = []
+  const seen = new Set<string>()
 
   raw.forEach((item, index) => {
-    const at = `entry ${index}`;
+    const at = `entry ${index}`
 
     if (!isRecord(item)) {
-      errors.push(`${at}: expected an object`);
-      return;
+      errors.push(`${at}: expected an object`)
+      return
     }
 
-    const { email, password } = item;
+    const { email, password } = item
 
-    if (typeof email !== "string" || email.trim() === "") {
-      errors.push(`${at}: "email" must be a non-empty string`);
-      return;
+    if (typeof email !== 'string' || email.trim() === '') {
+      errors.push(`${at}: "email" must be a non-empty string`)
+      return
     }
 
     // The login lowercases and trims before looking a row up, so storing any
     // other casing creates an account nobody can ever sign into.
-    const normalized = email.trim().toLowerCase();
+    const normalized = email.trim().toLowerCase()
 
-    if (typeof password !== "string" || password === "") {
-      errors.push(`${at} (${normalized}): "password" must be a non-empty string`);
-      return;
+    if (typeof password !== 'string' || password === '') {
+      errors.push(
+        `${at} (${normalized}): "password" must be a non-empty string`,
+      )
+      return
     }
 
     // A duplicate is ambiguous about which password wins, and the answer would
     // depend on list order. Refuse instead of picking one.
     if (seen.has(normalized)) {
-      errors.push(`${at}: duplicate email ${normalized}`);
-      return;
+      errors.push(`${at}: duplicate email ${normalized}`)
+      return
     }
 
-    seen.add(normalized);
-    entries.push({ email: normalized, password });
-  });
+    seen.add(normalized)
+    entries.push({ email: normalized, password })
+  })
 
-  return { entries, errors };
+  return { entries, errors }
 }
 
 async function main(): Promise<void> {
-  let contents: string;
+  let contents: string
   try {
-    contents = await readFile(USERS_FILE, "utf8");
+    contents = await readFile(USERS_FILE, 'utf8')
   } catch {
-    console.error("No scripts/users.json. Copy scripts/users.example.json to it and edit.");
-    process.exitCode = 1;
-    return;
+    console.error(
+      'No scripts/users.json. Copy scripts/users.example.json to it and edit.',
+    )
+    process.exitCode = 1
+    return
   }
 
-  let raw: unknown;
+  let raw: unknown
   try {
-    raw = JSON.parse(contents);
+    raw = JSON.parse(contents)
   } catch (error: unknown) {
-    console.error(`scripts/users.json is not valid JSON: ${String(error)}`);
-    process.exitCode = 1;
-    return;
+    console.error(`scripts/users.json is not valid JSON: ${String(error)}`)
+    process.exitCode = 1
+    return
   }
 
-  const { entries, errors } = parseEntries(raw);
+  const { entries, errors } = parseEntries(raw)
 
   if (errors.length > 0) {
-    console.error("scripts/users.json is not usable:");
-    for (const error of errors) console.error(`  - ${error}`);
-    process.exitCode = 1;
-    return;
+    console.error('scripts/users.json is not usable:')
+    for (const error of errors) console.error(`  - ${error}`)
+    process.exitCode = 1
+    return
   }
 
   if (entries.length === 0) {
-    console.log("scripts/users.json lists no users. Nothing to do.");
-    return;
+    console.log('scripts/users.json lists no users. Nothing to do.')
+    return
   }
 
-  const prisma = new PrismaClient();
+  const prisma = new PrismaClient()
 
   try {
     // One query for the whole list. Checking per entry would be N round trips
@@ -128,14 +135,14 @@ async function main(): Promise<void> {
     const existing = await prisma.user.findMany({
       where: { email: { in: entries.map((entry) => entry.email) } },
       select: { email: true, passwordHash: true },
-    });
+    })
 
-    const existingByEmail = new Map(existing.map((user) => [user.email, user]));
+    const existingByEmail = new Map(existing.map((user) => [user.email, user]))
 
-    let created = 0;
+    let created = 0
 
     for (const entry of entries) {
-      const match = existingByEmail.get(entry.email);
+      const match = existingByEmail.get(entry.email)
 
       if (match !== undefined) {
         // `passwordHash` is nullable and a null is a refusal, so this row
@@ -143,27 +150,30 @@ async function main(): Promise<void> {
         // this script's one prohibition — but silence would look like success.
         const note =
           match.passwordHash === null
-            ? " (warning: no password set, so this account cannot sign in)"
-            : "";
-        console.log(`skip    ${entry.email}${note}`);
-        continue;
+            ? ' (warning: no password set, so this account cannot sign in)'
+            : ''
+        console.log(`skip    ${entry.email}${note}`)
+        continue
       }
 
       // Hash inside the loop rather than up front: scrypt is memory-hard by
       // design, and hashing entries that turn out to be skips wastes the one
       // resource it is deliberately expensive in.
       await prisma.user.create({
-        data: { email: entry.email, passwordHash: await hashPassword(entry.password) },
-      });
+        data: {
+          email: entry.email,
+          passwordHash: await hashPassword(entry.password),
+        },
+      })
 
-      created += 1;
-      console.log(`created ${entry.email}`);
+      created += 1
+      console.log(`created ${entry.email}`)
     }
 
-    console.log(`\n${created} created, ${entries.length - created} skipped.`);
+    console.log(`\n${created} created, ${entries.length - created} skipped.`)
   } finally {
-    await prisma.$disconnect();
+    await prisma.$disconnect()
   }
 }
 
-await main();
+await main()
