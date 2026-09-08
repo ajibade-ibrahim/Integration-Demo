@@ -30,7 +30,6 @@ hubspot-app/.hs/
 hubspot-app/**/node_modules/
 
 # Local login accounts for scripts/add-users.mts — plaintext passwords
-scripts/users.json
 scripts/users*.json
 scripts/stripe-sandbox-fixtures.json
 README.md
