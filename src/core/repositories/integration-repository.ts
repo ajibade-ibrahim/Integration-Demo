@@ -184,22 +184,28 @@ export async function addFunctions(
   id: string,
   functionNames: readonly string[]
 ): Promise<IntegrationRecord | undefined> {
-  // Filter against what is already there, so re-adding an existing function is
-  // a no-op rather than a unique-constraint error. This predates Postgres:
-  // `createMany({ skipDuplicates: true })` would now do the same job in one
-  // round trip, and replacing this is a small, deliberate follow-up.
-  const existing = await prisma.integrationFunction.findMany({
-    where: { integrationId: id },
-    select: { functionName: true },
+  // Re-adding a function an integration already serves is a no-op, not an
+  // error, and the database is what decides that: `skipDuplicates` compiles to
+  // `INSERT ... ON CONFLICT DO NOTHING` against
+  // @@unique([integrationId, functionName]).
+  //
+  // Reading the existing rows first and filtering in app code reaches the same
+  // answer, and did until this ran on Postgres, but check-then-insert is not
+  // atomic. Two requests adding the same function concurrently — a double
+  // click is enough — both see it missing, and the second insert then fails
+  // the constraint with P2002, which is precisely the error the filtering was
+  // there to avoid. Resolving the conflict inside one statement is what makes
+  // the no-op hold under concurrency rather than only in a quiet test.
+  //
+  // The Set dedupes within the argument itself; the constraint covers the rest.
+  await prisma.integrationFunction.createMany({
+    data: [...new Set(functionNames)].map((functionName) => ({
+      integrationId: id,
+      functionName,
+    })),
+    skipDuplicates: true,
   });
-  const have = new Set(existing.map((f) => f.functionName));
-  const toAdd = [...new Set(functionNames)].filter((name) => !have.has(name));
 
-  if (toAdd.length > 0) {
-    await prisma.integrationFunction.createMany({
-      data: toAdd.map((functionName) => ({ integrationId: id, functionName })),
-    });
-  }
   return findIntegration(id);
 }
 
