@@ -1,0 +1,35 @@
+node_modules/
+.next/
+out/
+build/
+
+# Generated at deploy time by scripts/pg-schema.mts
+prisma/schema.postgres.prisma
+
+# Local database
+*.db
+*.db-journal
+prisma/dev.db*
+
+# Env
+.env
+.env.*
+.env.local
+.env*.local
+
+# Misc
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+coverage/
+prisma/test.db
+
+# HubSpot CLI — holds a personal access key for your portal
+hubspot.config.yml
+hubspot-app/.hs/
+hubspot-app/**/node_modules/
+
+# Local login accounts for scripts/add-users.mts — plaintext passwords
+scripts/users.json
+scripts/users*.json
+scripts/stripe-sandbox-fixtures.json

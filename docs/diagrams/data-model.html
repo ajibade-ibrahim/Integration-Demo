@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integration Platform — Data Model</title>
+<meta name="description" content="Interactive entity diagram, cascade explorer and status lifecycle for the integration platform.">
+<link rel="stylesheet" href="styles.css">
+<script>
+  try {
+    var d = document.documentElement, s = window.localStorage;
+    var t = s.getItem("arch-theme");
+    if (t === "light" || t === "dark") d.setAttribute("data-theme", t);
+    if (s.getItem("arch-nav") === "off") d.setAttribute("data-nav", "off");
+  } catch (e) {}
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="btn icon-btn" id="navBtn" type="button" aria-expanded="true" aria-controls="sidebar" title="Hide contents  [">
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+      <rect x="1.6" y="2.6" width="12.8" height="10.8" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <line x1="6.2" y1="2.6" x2="6.2" y2="13.4" stroke="currentColor" stroke-width="1.4"/>
+      <rect class="ico-fill" x="2.3" y="3.3" width="3.2" height="9.4" rx="1" fill="currentColor"/>
+    </svg>
+    <span class="nav-txt">Hide contents</span>
+  </button>
+  <div class="brand">Integration Platform</div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="index.html">Architecture</a>
+    <a href="data-model.html" aria-current="page">Data model</a>
+  </nav>
+  <div class="spacer"></div>
+  <button class="btn" id="themeBtn" type="button">Dark mode</button>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar" id="sidebar"><nav id="toc" aria-label="Sections"></nav></aside>
+
+  <main id="main">
+
+    <div class="lede">
+      <h1>Data model</h1>
+      <p>Nine tables, one ownership spine: <b>everything hangs off <code>Integration</code></b>.
+         Transcribed from <code>prisma/schema.prisma</code> and the const-union types in
+         <code>src/core/types/common.ts</code>.</p>
+      <p>The HTML companion to <code>docs/data-model.md</code>. Hover any table to isolate its
+         relationships, and use the control in §1 to watch a delete propagate.</p>
+      <div class="legend">
+        <span class="legend-item"><span class="badge pk" style="width:26px">PK</span>Primary key</span>
+        <span class="legend-item"><span class="badge fk" style="width:26px">FK</span>Foreign key</span>
+        <span class="legend-item"><span class="badge uk" style="width:26px">UK</span>Part of a unique constraint</span>
+        <span class="legend-item"><code>name?</code> — nullable</span>
+      </div>
+    </div>
+
+    <div class="callout">
+      <b>SQLite has neither <code>enum</code> nor <code>Json</code> through Prisma.</b> Both are
+      modelled as <code>String</code> and constrained in application code, which keeps the schema
+      portable — moving to Postgres is a datasource swap plus promoting those columns to native
+      <code>enum</code> / <code>jsonb</code>. See §3.
+    </div>
+
+
+    <!-- =================================================== 1 · ENTITIES ==== -->
+    <figure class="fig" id="fig-er">
+      <div class="fig-head">
+        <h2><span class="n">1</span>The nine tables</h2>
+        <p><code>Integration</code> is the tenancy boundary. Every synced record, mapping rule,
+           discovered field and run carries <code>integrationId</code> — which is why deleting one
+           integration is a clean sweep, and why no query leaks another integration's data by
+           omission.</p>
+      </div>
+
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+
+      <div class="fn-picker" id="cascadePick" role="radiogroup" aria-label="Show the effect of a delete">
+        <label><input type="radio" name="cascade" value="none" checked> No deletion</label>
+        <label><input type="radio" name="cascade" value="user"> Delete a User</label>
+        <label><input type="radio" name="cascade" value="integration"> Delete an Integration</label>
+        <label><input type="radio" name="cascade" value="customer"> Delete a Customer</label>
+      </div>
+      <div style="padding:0 26px 14px"><p class="cascade-out" id="cascadeOut"></p></div>
+
+      <div class="viewport">
+        <div class="canvas dg-er" id="c-er" data-edges='[
+          {"from":"e-user","to":"e-integration","fs":"right","ts":"left","label":"owns · 1..n"},
+          {"from":"e-integration","to":"e-fn","fs":"left","ts":"right","label":"1..n"},
+          {"from":"e-integration","to":"e-token","fs":"left","ts":"right","label":"0..1"},
+          {"from":"e-integration","to":"e-mapping","fs":"left","ts":"right","label":"1..n"},
+          {"from":"e-integration","to":"e-discovered","fs":"left","ts":"right","label":"1..n"},
+          {"from":"e-integration","to":"e-customer","fs":"right","ts":"left","label":"1..n"},
+          {"from":"e-integration","to":"e-contact","fs":"right","ts":"left","label":"1..n"},
+          {"from":"e-integration","to":"e-syncrun","fs":"right","ts":"left","label":"1..n"},
+          {"from":"e-customer","to":"e-contact","fs":"bottom","ts":"top","label":"employs · 0..n\nlink is nullable"}
+        ]'>
+
+          <div class="col">
+            <div class="node ent" id="e-user">
+              <div class="ent-h">User <span class="rel">ownership only</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">email</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">createdAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="e-fn">
+              <div class="ent-h">IntegrationFunction<span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">functionName</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">addedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="e-token">
+              <div class="ent-h">OAuthToken <span class="rel">PK is the FK</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">accessTokenEnc</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">refreshTokenEnc</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">expiresAt</span><span class="ftype">DateTime</span></li>
+                <li><span class="badge none"></span><span class="fname">grantedScopes</span><span class="ftype">String = ""</span></li>
+                <li><span class="badge none"></span><span class="fname">providerMetadata</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="e-mapping">
+              <div class="ent-h">FieldMapping<span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">functionName</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">targetObject</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">sourceFieldPath</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">targetFieldPath</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">transform</span><span class="ftype">String = none</span></li>
+                <li><span class="badge none"></span><span class="fname">createdAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="e-discovered">
+              <div class="ent-h">DiscoveredField <span class="rel">a cache</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">functionName</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">targetObject</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">path</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">label</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">type</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">fetchedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="col col-mid">
+            <div class="node ent spine" id="e-integration">
+              <div class="ent-h">Integration <span class="rel">the spine</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk">FK</span><span class="fname">userId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">providerName</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">instanceLabel</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">syncIntervalHours</span><span class="ftype">Int = 24</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">authorizationTimestamp</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">lastSyncTimestamp</span><span class="ftype">DateTime</span></li>
+                <li><span class="badge none"></span><span class="fname">pendingTokenRevocation</span><span class="ftype">Bool = false</span></li>
+                <li><span class="badge none"></span><span class="fname">createdAt</span><span class="ftype">DateTime</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="node ent" id="e-customer">
+              <div class="ent-h">Customer<span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">name</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">domain</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">industry</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">createDate</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">type</span><span class="ftype">String · §3</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="e-contact">
+              <div class="ent-h">Contact<span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">name</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">email</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">jobTitle</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">phone</span><span class="ftype">String</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">customerId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalCustomerId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="e-syncrun">
+              <div class="ent-h">SyncRun <span class="rel">the audit trail</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §3</span></li>
+                <li><span class="badge none"></span><span class="fname">trigger</span><span class="ftype">String = manual</span></li>
+                <li><span class="badge none"></span><span class="fname">startedAt</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">completedAt</span><span class="ftype">DateTime</span></li>
+                <li><span class="badge none"></span><span class="fname">customerCount</span><span class="ftype">Int = 0</span></li>
+                <li><span class="badge none"></span><span class="fname">contactCount</span><span class="ftype">Int = 0</span></li>
+                <li><span class="badge none"></span><span class="fname">attempt</span><span class="ftype">Int = 1</span></li>
+                <li><span class="badge none"></span><span class="fname">errorsJson</span><span class="ftype">JSON = []</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <p class="fig-note"><strong>Two relationships carry the design load.</strong>
+        <code>Integration → IntegrationFunction</code> is one-to-many, not one-to-one: a single
+        HubSpot connection can serve <em>identity</em> and <em>support</em>, and the scopes requested
+        are the union across these rows — which is why the function set must be known before
+        authorization.</p>
+      <p class="fig-note"><code>Customer → Contact</code> is optional on the contact side. Providers
+        hand back their <em>own</em> company id, never our UUID, so customers are written first to
+        build an <code>external → internal</code> index; a contact whose company will not resolve is
+        kept with <code>customerId = null</code> and its <code>externalCustomerId</code> retained, so
+        a later sync links it once that company arrives.</p>
+    </figure>
+
+
+    <!-- ================================================= 2 · UNIQUENESS ==== -->
+    <figure class="fig" id="fig-identity">
+      <div class="fig-head">
+        <h2><span class="n">2</span>Where identity actually lives</h2>
+        <p>The constraints that decide whether a re-run updates a row or duplicates it.</p>
+      </div>
+      <div class="viewport">
+        <table class="matrix">
+          <thead>
+            <tr><th scope="col">Table</th><th scope="col">Constraint</th><th scope="col">Why</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">User</th><td><span class="chip">email</span></td><td>The stable handle the demo looks the user up by.</td></tr>
+            <tr><th scope="row">Customer</th><td><span class="chip">integrationId</span><span class="chip">externalSourceId</span></td><td><b>The upsert key.</b> Re-running a sync updates rather than duplicates.</td></tr>
+            <tr><th scope="row">Contact</th><td><span class="chip">integrationId</span><span class="chip">externalSourceId</span></td><td>Same. This is why a <em>stable</em> synthesized id matters for Metrifox, whose contacts are flattened out of nested <code>contact_people[]</code> — an unstable id would not error, it would quietly duplicate every contact on every run.</td></tr>
+            <tr><th scope="row">IntegrationFunction</th><td><span class="chip">integrationId</span><span class="chip">functionName</span></td><td>A function is declared once per integration.</td></tr>
+            <tr><th scope="row">FieldMapping</th><td><span class="chip">integrationId</span><span class="chip">functionName</span><span class="chip">targetObject</span><span class="chip">targetFieldPath</span></td><td>One rule per target field. Function and target object are part of the identity, because two functions on one integration can write to the same object.</td></tr>
+            <tr><th scope="row">DiscoveredField</th><td><span class="chip">integrationId</span><span class="chip">functionName</span><span class="chip">targetObject</span><span class="chip">path</span></td><td>The cache key.</td></tr>
+            <tr><th scope="row">OAuthToken</th><td><span class="chip">integrationId</span> <span class="ftype">as the primary key</span></td><td>Structurally at most one live credential per integration — not a rule enforced in code.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="fig-note"><strong>Indexes beyond those:</strong>
+        <code>Integration(userId)</code> and <code>Integration(status)</code> for the scheduler sweep;
+        <code>IntegrationFunction(functionName)</code>;
+        <code>FieldMapping(integrationId)</code> and <code>(integrationId, functionName)</code>;
+        <code>DiscoveredField(integrationId, functionName, targetObject)</code>;
+        <code>Customer(integrationId)</code>;
+        <code>Contact(integrationId)</code> and <code>Contact(customerId)</code>;
+        <code>SyncRun(integrationId, startedAt)</code> for run-history ordering.</p>
+    </figure>
+
+
+    <!-- ==================================================== 3 · STRINGS ==== -->
+    <figure class="fig" id="fig-strings">
+      <div class="fig-head">
+        <h2><span class="n">3</span>Columns that are strings but are not really strings</h2>
+        <p>Each union lives beside its runtime guard in
+           <code>src/core/types/common.ts</code>, so the type and its check cannot drift.</p>
+      </div>
+      <div class="viewport">
+        <table class="matrix">
+          <thead>
+            <tr><th scope="col">Column</th><th scope="col">Legal values</th><th scope="col">Guard</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Integration.status</th>
+              <td><span class="chip">pending_authorization</span><span class="chip">active</span><span class="chip">expired</span><span class="chip">requires_reauthorization</span><span class="chip">error</span></td>
+              <td><code>isIntegrationStatus</code></td>
+            </tr>
+            <tr>
+              <th scope="row">Customer.type</th>
+              <td><span class="chip">prospect</span><span class="chip">customer</span><span class="chip">partner</span><span class="chip">vendor</span><span class="chip">null</span></td>
+              <td><code>isCustomerType</code></td>
+            </tr>
+            <tr>
+              <th scope="row">FieldMapping.targetObject</th>
+              <td><span class="chip">customer</span><span class="chip">contact</span></td>
+              <td><code>isTargetObject</code></td>
+            </tr>
+            <tr>
+              <th scope="row">SyncRun.status</th>
+              <td><span class="chip">running</span><span class="chip">success</span><span class="chip">partial</span><span class="chip">failed</span><span class="chip">discarded</span></td>
+              <td><code>isSyncRunStatus</code></td>
+            </tr>
+            <tr>
+              <th scope="row">FieldMapping.transform</th>
+              <td><span class="chip">none</span><span class="chip">trim</span><span class="chip">lowercase</span><span class="chip">domainFromUrl</span><span class="chip">dateOnly</span></td>
+              <td><code>isFieldTransform</code></td>
+            </tr>
+            <tr>
+              <th scope="row">SyncRun.trigger</th>
+              <td><span class="chip">manual</span><span class="chip">scheduled</span></td>
+              <td class="none">none — narrowed by the caller's type, not checked at runtime</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="fig-note"><strong>JSON-shaped columns</strong> are read and written only through
+        <code>repositories/json-column.ts</code>:
+        <code>Customer.customFields</code> and <code>Contact.customFields</code> hold
+        <code>Record&lt;string, string&gt;</code> (customers are capped at 50 keys in app code);
+        <code>OAuthToken.providerMetadata</code> holds provider extras from the token response —
+        Salesforce's <code>instance_url</code>, and <code>authKind</code>/<code>keyPrefix</code> for
+        an API key; <code>SyncRun.errorsJson</code> holds <code>RecordIssue[]</code>, each
+        <code>{ sourceRecordId, targetObject, reason, fieldName?, severity }</code>.</p>
+    </figure>
+
+
+    <!-- ================================================== 4 · LIFECYCLE ==== -->
+    <figure class="fig" id="fig-lifecycle">
+      <div class="fig-head">
+        <h2><span class="n">4</span>The <code>Integration.status</code> lifecycle</h2>
+        <p>The one column with real behaviour behind it. Every write goes through
+           <code>updateStatus</code> or <code>markAuthorized</code> in
+           <code>integration-repository.ts</code>.</p>
+      </div>
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+      <div class="viewport">
+        <div class="canvas dg-states" id="c-states" data-edges='[
+          {"from":"st-start","to":"st-pending","fs":"bottom","ts":"top"},
+          {"from":"st-pending","to":"st-active","fs":"right","ts":"left","label":"consent granted\ntoken stored"},
+          {"from":"st-pending","to":"st-expired","fs":"bottom","ts":"top","label":"abandoned > 30 min\nscheduler sweep"},
+          {"from":"st-pending","to":"st-error","fs":"bottom","ts":"top","label":"callback or token\nexchange failed"},
+          {"from":"st-active","to":"st-error","fs":"bottom","ts":"top","label":"credential\nwrite failed"},
+          {"from":"st-active","to":"st-requires","fs":"right","ts":"left","label":"second 401, or\nrefresh failed"},
+          {"from":"st-error","to":"st-active","fs":"right","ts":"right","bow":62,"label":"reconnected"},
+          {"from":"st-requires","to":"st-active","fs":"top","ts":"top","bow":50,"label":"reconnected"}
+        ]'>
+          <div class="node start" id="st-start" style="grid-row:1;grid-column:1"><span class="t">created with its function set</span></div>
+
+          <div class="node state" id="st-pending" style="grid-row:2;grid-column:1"><span class="t">pending_authorization</span><span class="n">No credential yet. The only state an integration can be created in.</span></div>
+          <div class="node state" data-k="good" id="st-active" style="grid-row:2;grid-column:2"><span class="t">active</span><span class="n">The only state that syncs. The scheduler skips everything else, and the sync route, fields route and mapping page each gate on it independently rather than trusting the caller.</span></div>
+          <div class="node state" data-k="warn" id="st-requires" style="grid-row:2;grid-column:3"><span class="t">requires_reauthorization</span><span class="n">The grant is dead and no retry can revive it. A human must reconnect.</span></div>
+
+          <div class="node state" id="st-expired" style="grid-row:3;grid-column:1"><span class="t">expired</span><span class="n">Narrower than it sounds: <em>abandoned before authorization ever completed</em> — not "token past expiresAt".</span></div>
+          <div class="node state" data-k="crit" id="st-error" style="grid-row:3;grid-column:2"><span class="t">error</span><span class="n">Something failed while establishing or writing the credential.</span></div>
+        </div>
+      </div>
+      <p class="fig-note"><strong><code>expired</code> is not what you would guess.</strong> An expired
+        access token on a live integration is simply a refresh attempt; only a <em>failed</em> refresh
+        moves the integration, and it moves to <code>requires_reauthorization</code>.
+        <code>expired</code> means the user walked away from the consent screen and the scheduler swept
+        the row 30 minutes later.</p>
+      <p class="fig-note"><strong>Three things move an integration to
+        <code>requires_reauthorization</code>:</strong> a 401 that survived a token refresh, a 401
+        with no refresh token to try (every API-key integration), or a refresh attempt that itself
+        failed. All three mean the same thing operationally — the stored credential is dead and only
+        a human can fix it.</p>
+      <p class="fig-note">Note there is no transition out of <code>expired</code>. Reconnecting is
+        available from <code>error</code> and <code>requires_reauthorization</code>; an abandoned
+        pending integration is simply deleted and recreated.</p>
+    </figure>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../data-model.md">docs/data-model.md</a> ·
+     source of truth is <a href="../../prisma/schema.prisma">prisma/schema.prisma</a> ·
+     <a href="index.html">architecture diagrams</a>.
+     Hover a table to isolate its relationships; <span class="kbd">[</span> hides the contents panel.</p>
+</footer>
+
+<script src="diagrams.js" defer></script>
+</body>
+</html>

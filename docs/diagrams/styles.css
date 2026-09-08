@@ -1,0 +1,666 @@
+/* ==========================================================================
+   Integration Platform — architecture diagrams
+   Palette: validated categorical slots 1-3 + reserved status colors.
+   Color never carries meaning alone; every node has a visible ink label.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  --surface-1: #fcfcfb;
+  --plane: #f9f9f7;
+  --sunken: #f2f1ed;
+
+  --ink-1: #0b0b0b;
+  --ink-2: #52514e;
+  --ink-3: #898781;
+
+  --hair: #e1e0d9;
+  --rule: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.1);
+
+  /* categorical slots 1-3 — validated all-pairs, light surface */
+  --a1: #2a78d6; /* app / entry layer   */
+  --a2: #eb6834; /* providers / outside */
+  --a3: #1baf7a; /* pure logic / contract */
+
+  /* reserved status roles — never reused as a category */
+  --st-good: #0ca30c;
+  --st-warn: #fab219;
+  --st-crit: #d03b3b;
+
+  --edge: #a8a69e;
+  --edge-hi: #2a78d6;
+
+  --tint: 10%;
+  --tint-strong: 16%;
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+
+  --shadow: 0 1px 2px rgba(11, 11, 11, 0.05), 0 4px 12px rgba(11, 11, 11, 0.04);
+
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --plane: #0d0d0d;
+    --sunken: #131312;
+    --ink-1: #ffffff;
+    --ink-2: #c3c2b7;
+    --ink-3: #898781;
+    --hair: #2c2c2a;
+    --rule: #383835;
+    --border: rgba(255, 255, 255, 0.1);
+    --a1: #3987e5;
+    --a2: #d95926;
+    --a3: #199e70;
+    --edge: #6f6d67;
+    --edge-hi: #3987e5;
+    --tint: 18%;
+    --tint-strong: 26%;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.3);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --plane: #0d0d0d;
+  --sunken: #131312;
+  --ink-1: #ffffff;
+  --ink-2: #c3c2b7;
+  --ink-3: #898781;
+  --hair: #2c2c2a;
+  --rule: #383835;
+  --border: rgba(255, 255, 255, 0.1);
+  --a1: #3987e5;
+  --a2: #d95926;
+  --a3: #199e70;
+  --edge: #6f6d67;
+  --edge-hi: #3987e5;
+  --tint: 18%;
+  --tint-strong: 26%;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+/* --------------------------------------------------------------- base ---- */
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition: none !important; animation: none !important; }
+}
+
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink-1);
+  font: 15px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--a1); }
+
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+
+.skip {
+  position: absolute; left: -9999px; top: 0; z-index: 100;
+  background: var(--a1); color: #fff; padding: 10px 16px; border-radius: 0 0 var(--r-sm) 0;
+}
+.skip:focus { left: 0; }
+
+/* ------------------------------------------------------------ topbar ---- */
+
+.topbar {
+  position: sticky; top: 0; z-index: 40;
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 22px;
+  background: color-mix(in oklab, var(--surface-1) 92%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--hair);
+}
+
+.brand { font-weight: 650; letter-spacing: -0.01em; }
+.brand span { color: var(--ink-3); font-weight: 450; }
+
+.topbar .spacer { flex: 1; }
+
+.btn {
+  font: inherit; font-size: 13px;
+  color: var(--ink-2);
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 5px 11px;
+  cursor: pointer;
+}
+.btn:hover { color: var(--ink-1); border-color: var(--ink-3); }
+.btn:focus-visible { outline: 2px solid var(--a1); outline-offset: 2px; }
+
+/* ------------------------------------------------------------- shell ---- */
+
+.shell {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 34px;
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 26px 26px 120px;
+}
+
+.sidebar { position: sticky; top: 74px; align-self: start; max-height: calc(100vh - 96px); overflow-y: auto; }
+
+/* Collapsed contents panel — the diagrams reclaim its 236px and refit. No
+   layout transition on purpose: the wires are redrawn from measured geometry
+   the instant this flips, and animating it would draw them mid-flight. */
+:root[data-nav="off"] .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+:root[data-nav="off"] .sidebar { display: none; }
+
+.icon-btn { display: inline-flex; align-items: center; gap: 7px; }
+.icon-btn svg { flex: none; }
+/* The filled rail in the glyph mirrors the panel's actual state. */
+.icon-btn.is-off .ico-fill { display: none; }
+.icon-btn.is-off { color: var(--ink-3); }
+
+#toc { display: flex; flex-direction: column; gap: 1px; }
+#toc a {
+  display: block;
+  padding: 7px 11px;
+  border-radius: var(--r-sm);
+  color: var(--ink-2);
+  text-decoration: none;
+  font-size: 13.5px;
+  border-left: 2px solid transparent;
+}
+#toc a:hover { background: var(--sunken); color: var(--ink-1); }
+#toc a.active { background: var(--sunken); color: var(--ink-1); border-left-color: var(--a1); font-weight: 550; }
+#toc .toc-num { color: var(--ink-3); margin-right: 7px; font-variant-numeric: tabular-nums; }
+
+main { min-width: 0; }
+
+.lede {
+  background: var(--surface-1);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-lg);
+  padding: 22px 26px;
+  margin-bottom: 30px;
+}
+.lede h1 { margin: 0 0 8px; font-size: 25px; letter-spacing: -0.02em; }
+.lede p { margin: 0 0 10px; color: var(--ink-2); max-width: 76ch; }
+.lede p:last-child { margin-bottom: 0; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--hair); }
+.legend-item { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-2); }
+.legend-sw { width: 13px; height: 13px; border-radius: 4px; border: 1px solid var(--border); flex: none; }
+.legend-sw.k-a1 { background: color-mix(in oklab, var(--a1) var(--tint-strong), var(--surface-1)); border-color: var(--a1); }
+.legend-sw.k-a2 { background: color-mix(in oklab, var(--a2) var(--tint-strong), var(--surface-1)); border-color: var(--a2); }
+.legend-sw.k-a3 { background: color-mix(in oklab, var(--a3) var(--tint-strong), var(--surface-1)); border-color: var(--a3); }
+.legend-sw.k-n { background: var(--surface-1); border-color: var(--rule); }
+.legend-sw.k-seam { background: var(--sunken); border: 1px dashed var(--ink-3); }
+
+/* ------------------------------------------------------------ figure ---- */
+
+.fig {
+  margin: 0 0 30px;
+  background: var(--surface-1);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.fig-head { padding: 20px 26px 16px; border-bottom: 1px solid var(--hair); }
+.fig-head h2 { margin: 0 0 6px; font-size: 18px; letter-spacing: -0.01em; }
+.fig-head h2 .n { color: var(--ink-3); font-variant-numeric: tabular-nums; margin-right: 8px; }
+.fig-head p { margin: 0; color: var(--ink-2); max-width: 82ch; font-size: 14px; }
+
+.fig-tools { display: flex; align-items: center; gap: 6px; padding: 10px 26px; background: var(--sunken); border-bottom: 1px solid var(--hair); }
+.fig-tools .lbl { font-size: 12px; color: var(--ink-3); margin-right: 4px; }
+.fig-tools .spacer { flex: 1; }
+.fig-tools .btn { padding: 4px 9px; font-size: 12.5px; }
+.zoom-val { font-size: 12px; color: var(--ink-3); min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
+
+.viewport { overflow: auto; padding: 30px 26px; background: var(--surface-1); }
+.viewport.grabbing { cursor: grabbing; user-select: none; }
+
+/* Width is the viewport's, not the content's: long note text then wraps into
+   the space available instead of stretching the canvas off-screen. Diagrams
+   that genuinely need more room declare their own min-width below, and the
+   viewport scrolls that far and no further. */
+.canvas { position: relative; transform-origin: top left; width: 100%; }
+
+.fig-note {
+  margin: 0; padding: 16px 26px 20px;
+  border-top: 1px solid var(--hair);
+  background: var(--sunken);
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+.fig-note strong { color: var(--ink-1); }
+.fig-note + .fig-note { border-top: none; padding-top: 0; }
+
+/* ------------------------------------------------------- wires + nodes -- */
+
+/* The overlays must never take a grid placement. An absolutely-positioned
+   grid item WITH one is positioned against its grid AREA rather than the
+   container padding box, which silently shifts every wire by the width of the
+   preceding column. Hence the :not(svg):not(.wire-labels) guards on the
+   `.dg-* > *` rules further down. */
+svg.wires { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; z-index: 2; }
+svg.wires path { fill: none; stroke: var(--edge); stroke-width: 1.6; }
+svg.wires path.dash { stroke-dasharray: 5 4; }
+svg.wires path.hi { stroke: var(--edge-hi); stroke-width: 2.4; }
+svg.wires path.dim { opacity: 0.18; }
+
+/* Above the nodes, not below them: a label pushed into a gutter must never be
+   swallowed by a card that happens to sit at the curve's midpoint. */
+.wire-labels { position: absolute; left: 0; top: 0; z-index: 4; pointer-events: none; }
+.wire-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  background: var(--surface-1);
+  color: var(--ink-3);
+  font-size: 11.5px;
+  line-height: 1.35;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: pre;
+  text-align: center;
+}
+.wire-label.hi { color: var(--ink-1); box-shadow: 0 0 0 1px var(--edge-hi); }
+.wire-label.dim { opacity: 0.18; }
+
+.node {
+  position: relative; z-index: 3;
+  display: block;
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  padding: 11px 14px;
+  box-shadow: var(--shadow);
+  transition: opacity 0.12s, box-shadow 0.12s;
+}
+.node:focus-visible { outline: 2px solid var(--a1); outline-offset: 2px; }
+
+.node .t { display: block; font-weight: 600; font-size: 13.5px; letter-spacing: -0.005em; }
+.node .s { display: block; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); margin-top: 3px; word-break: break-word; }
+.node .n { display: block; font-size: 11.5px; color: var(--ink-3); margin-top: 5px; line-height: 1.4; }
+
+.node[data-k="a1"] { border-color: var(--a1); background: color-mix(in oklab, var(--a1) var(--tint), var(--surface-1)); }
+.node[data-k="a2"] { border-color: var(--a2); background: color-mix(in oklab, var(--a2) var(--tint), var(--surface-1)); }
+.node[data-k="a3"] { border-color: var(--a3); background: color-mix(in oklab, var(--a3) var(--tint), var(--surface-1)); }
+.node[data-k="good"] { border-color: var(--st-good); background: color-mix(in oklab, var(--st-good) var(--tint), var(--surface-1)); }
+.node[data-k="warn"] { border-color: var(--st-warn); background: color-mix(in oklab, var(--st-warn) var(--tint), var(--surface-1)); }
+.node[data-k="crit"] { border-color: var(--st-crit); background: color-mix(in oklab, var(--st-crit) var(--tint), var(--surface-1)); }
+.node[data-k="store"] { border-color: var(--ink-3); background: var(--sunken); border-style: solid; }
+.node[data-k="store"] .t::before { content: "▤ "; color: var(--ink-3); }
+
+/* decisions: shape + glyph, so the branch is not signalled by color alone */
+.node.dec {
+  border-style: dashed;
+  border-radius: 999px;
+  text-align: center;
+  padding: 9px 20px;
+}
+.node.dec .t::before { content: "◆ "; color: var(--ink-3); }
+
+/* dimming during hover-highlight */
+.canvas.focusing .node { opacity: 0.3; }
+.canvas.focusing .node.near { opacity: 1; box-shadow: 0 0 0 2px var(--edge-hi), var(--shadow); }
+.canvas.focusing .group { opacity: 0.45; }
+.canvas.focusing .group.near { opacity: 1; }
+
+/* --------------------------------------------------------------- group -- */
+
+.group {
+  /* z-index:auto on purpose — a stacking context here would trap the node
+     cards below the wire layer. Painting order then falls out correctly:
+     group fill (positioned, auto) < wires (2) < cards (3) < labels (4). */
+  position: relative;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-lg);
+  background: var(--sunken);
+  padding: 32px 14px 14px;
+  transition: opacity 0.12s;
+}
+.group > .gh {
+  /* h3 carries a default 1em margin, which on an abspos box is added to `top`
+     and drops the heading into the first row of cards. */
+  margin: 0;
+  position: absolute; top: 9px; left: 14px;
+  font-size: 11px; font-weight: 650; letter-spacing: 0.055em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.group > .gh .gh-note { text-transform: none; letter-spacing: 0; font-weight: 450; margin-left: 8px; }
+.group[data-k="a1"] { border-color: color-mix(in oklab, var(--a1) 42%, var(--hair)); }
+.group[data-k="a1"] > .gh { color: var(--a1); }
+.group[data-k="a2"] { border-color: color-mix(in oklab, var(--a2) 42%, var(--hair)); }
+.group[data-k="a2"] > .gh { color: var(--a2); }
+.group[data-k="a3"] { border-color: color-mix(in oklab, var(--a3) 42%, var(--hair)); }
+.group[data-k="a3"] > .gh { color: var(--a3); }
+.group[data-k="seam"] { border-style: dashed; border-color: var(--ink-3); }
+
+.gb { display: grid; gap: 10px; }
+.gb.c2 { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+.gb.c3 { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
+.gb.c4 { grid-template-columns: repeat(4, minmax(140px, 1fr)); }
+.gb.c5 { grid-template-columns: repeat(5, minmax(132px, 1fr)); }
+
+/* --------------------------------------------------- diagram 1: system -- */
+
+/* Column 1 is a routing gutter: the one edge that skips a band curves through
+   it, and its label needs room to sit clear of the cards in column 2. */
+.dg-system { display: grid; grid-template-columns: 96px minmax(700px, 1fr); row-gap: 46px; column-gap: 0; }
+.dg-system > *:not(svg):not(.wire-labels) { grid-column: 2; }
+.dg-system .row-split { display: grid; gap: 18px; }
+.dg-system .split-boot { grid-template-columns: minmax(210px, 0.8fr) minmax(0, 2fr); gap: 74px; align-items: start; }
+.dg-system .split-low { grid-template-columns: minmax(0, 1fr) minmax(0, 1.45fr) minmax(0, 0.85fr); align-items: start; }
+.dg-system .stack { display: grid; gap: 46px; align-content: start; }
+
+/* --------------------------------------------------- diagram 2: matrix -- */
+
+.matrix-wrap { display: grid; gap: 22px; }
+
+table.matrix { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 13px; }
+table.matrix th, table.matrix td { border-bottom: 1px solid var(--hair); padding: 10px 12px; text-align: left; vertical-align: top; }
+table.matrix thead th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.055em; color: var(--ink-3); border-bottom: 1px solid var(--rule); white-space: nowrap; }
+table.matrix tbody th { font-weight: 600; white-space: nowrap; }
+table.matrix tbody th .sub { display: block; font-weight: 450; font-size: 11px; color: var(--ink-3); }
+table.matrix tbody tr:hover td, table.matrix tbody tr:hover th { background: var(--sunken); }
+table.matrix td.none { color: var(--ink-3); font-family: var(--mono); }
+
+.chip {
+  display: inline-block;
+  font-family: var(--mono); font-size: 11px;
+  background: var(--sunken);
+  border: 1px solid var(--hair);
+  border-radius: 5px;
+  padding: 2px 6px;
+  margin: 0 3px 3px 0;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.chip.on { background: color-mix(in oklab, var(--a1) var(--tint), var(--surface-1)); border-color: var(--a1); color: var(--ink-1); }
+.chip.add { background: color-mix(in oklab, var(--a2) var(--tint), var(--surface-1)); border-color: var(--a2); color: var(--ink-1); }
+
+/* interactive scope resolver */
+.resolver { border: 1px solid var(--rule); border-radius: var(--r-lg); overflow: hidden; }
+.resolver-head { padding: 14px 18px; background: var(--sunken); border-bottom: 1px solid var(--hair); }
+.resolver-head h3 { margin: 0 0 4px; font-size: 14px; }
+.resolver-head p { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+.fn-picker { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 18px; border-bottom: 1px solid var(--hair); }
+.fn-picker label {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--rule); border-radius: 999px;
+  padding: 6px 13px 6px 10px; font-size: 13px; cursor: pointer;
+}
+.fn-picker label:has(input:checked) { border-color: var(--a1); background: color-mix(in oklab, var(--a1) var(--tint), var(--surface-1)); font-weight: 550; }
+.fn-picker label:has(input:focus-visible) { outline: 2px solid var(--a1); outline-offset: 2px; }
+.fn-picker input { accent-color: var(--a1); margin: 0; }
+
+.resolver-out { display: grid; grid-template-columns: repeat(auto-fit, minmax(228px, 1fr)); gap: 1px; background: var(--hair); }
+.pcard { background: var(--surface-1); padding: 14px 16px; min-height: 132px; }
+.pcard h4 { margin: 0 0 2px; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+.pcard .kind { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); border: 1px solid var(--hair); border-radius: 4px; padding: 1px 5px; }
+.pcard .count { font-size: 12px; color: var(--ink-2); margin: 0 0 9px; font-variant-numeric: tabular-nums; }
+.pcard.off { background: var(--sunken); }
+.pcard.off .why { font-size: 12.5px; color: var(--ink-2); margin: 6px 0 0; }
+.pcard .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.pcard .dot.ok { background: var(--st-good); }
+.pcard .dot.no { background: var(--ink-3); }
+
+/* ------------------------------------------------- diagram 3: sequence -- */
+
+.seq-stack { display: grid; gap: 18px; min-width: 720px; }
+.seq-split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 1180px) { .seq-split { grid-template-columns: 1fr; } }
+
+.seq {
+  border: 1px solid var(--hair);
+  border-radius: var(--r-lg);
+  background: var(--surface-1);
+  padding: 0 0 14px;
+}
+.seq.branch { border-color: var(--rule); }
+.seq.branch[data-k="a1"] { border-color: color-mix(in oklab, var(--a1) 45%, var(--hair)); }
+.seq.branch[data-k="a2"] { border-color: color-mix(in oklab, var(--a2) 45%, var(--hair)); }
+
+.seq-title { padding: 11px 16px; border-bottom: 1px solid var(--hair); background: var(--sunken); border-radius: var(--r-lg) var(--r-lg) 0 0; }
+.seq-title b { font-size: 13px; }
+.seq-title .cond { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); display: block; margin-top: 2px; }
+
+.seq-grid { display: grid; position: relative; padding: 14px 16px 0; row-gap: 9px; }
+.seq-lifelines { position: absolute; inset: 44px 16px 0; display: grid; pointer-events: none; }
+.seq-lifelines i { justify-self: center; width: 1px; background: repeating-linear-gradient(to bottom, var(--rule) 0 4px, transparent 4px 8px); }
+
+.seq-actor {
+  grid-row: 1;
+  justify-self: center;
+  font-size: 11.5px; font-weight: 600; text-align: center;
+  border: 1px solid var(--rule); border-radius: var(--r-sm);
+  background: var(--surface-1);
+  padding: 5px 9px;
+  position: relative; z-index: 2;
+  max-width: 100%;
+}
+.seq-actor .a-sub { display: block; font-weight: 450; font-size: 10.5px; color: var(--ink-3); font-family: var(--mono); }
+
+.seq-msg { position: relative; z-index: 1; align-self: center; height: 30px; display: flex; align-items: flex-end; }
+/* A message spanning S equal tracks must run centre-to-centre, i.e. inset by
+   half a track at each end — which is exactly 50%/S of its own width. */
+.seq-msg .line {
+  position: absolute;
+  left: calc(50% / var(--span, 2));
+  right: calc(50% / var(--span, 2));
+  bottom: 6px; height: 1.6px; background: var(--edge);
+}
+.seq-msg.ret .line { background: none; border-top: 1.6px dashed var(--edge); height: 0; }
+.seq-msg .line::after {
+  content: ""; position: absolute; top: 50%; width: 0; height: 0;
+  border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent;
+}
+.seq-msg.fwd .line::after { right: -1px; transform: translateY(-50%); border-left: 8px solid var(--edge); }
+.seq-msg.bwd .line::after { left: -1px; transform: translateY(-50%); border-right: 8px solid var(--edge); }
+.seq-msg .txt {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+  background: var(--surface-1); padding: 0 7px;
+  font-size: 11.5px; color: var(--ink-1); white-space: nowrap;
+}
+.seq-msg .txt em { font-style: normal; font-family: var(--mono); color: var(--ink-2); }
+
+.seq-note {
+  grid-column: 1 / -1; position: relative; z-index: 2;
+  background: var(--sunken); border: 1px solid var(--hair); border-left: 3px solid var(--ink-3);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  padding: 7px 11px; font-size: 11.5px; color: var(--ink-2);
+  margin: 2px 0;
+}
+.seq-note b { color: var(--ink-1); }
+.seq-note[data-k="crit"] { border-left-color: var(--st-crit); }
+.seq-note[data-k="good"] { border-left-color: var(--st-good); }
+
+.seq-step { position: absolute; left: -10px; top: 50%; transform: translateY(-50%); font-size: 10px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* -------------------------------------------------- diagram 4: mapping -- */
+
+.dg-map { display: grid; row-gap: 54px; min-width: 860px; }
+.dg-map .pipe { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr) minmax(160px, 0.8fr) minmax(200px, 1fr); gap: 46px; align-items: center; }
+.dg-map .contract { display: grid; grid-template-columns: minmax(230px, 0.9fr) minmax(0, 1.6fr); gap: 60px; align-items: center; }
+
+/* ----------------------------------------------------- diagram 5: sync -- */
+
+.dg-sync { display: grid; grid-template-columns: minmax(320px, 1fr) 56px minmax(230px, 0.75fr); row-gap: 26px; align-items: center; min-width: 700px; }
+
+/* ---------------------------------------------------- diagram 6: retry -- */
+
+.dg-retry { display: grid; grid-template-columns: 58px minmax(920px, 1fr); row-gap: 40px; }
+.dg-retry > *:not(svg):not(.wire-labels) { grid-column: 2; }
+.dg-retry .lanes { display: grid; grid-template-columns: repeat(5, minmax(172px, 1fr)); gap: 16px; align-items: start; }
+.lane { display: grid; gap: 26px; align-content: start; }
+.lane-head {
+  position: relative; z-index: 3;
+  text-align: center; font-family: var(--mono); font-size: 13px; font-weight: 650;
+  border: 1px solid var(--rule); border-radius: var(--r-sm);
+  padding: 7px 6px; background: var(--sunken);
+}
+.lane-head[data-k="good"] { border-color: var(--st-good); color: var(--ink-1); background: color-mix(in oklab, var(--st-good) var(--tint), var(--surface-1)); }
+.lane-head[data-k="warn"] { border-color: var(--st-warn); background: color-mix(in oklab, var(--st-warn) var(--tint), var(--surface-1)); }
+.lane-head[data-k="crit"] { border-color: var(--st-crit); background: color-mix(in oklab, var(--st-crit) var(--tint), var(--surface-1)); }
+
+/* ------------------------------------------------- diagram 7: layering -- */
+
+.dg-layer { display: grid; grid-template-columns: 92px minmax(560px, 1fr) 92px; row-gap: 44px; }
+.dg-layer > *:not(svg):not(.wire-labels) { grid-column: 2; }
+.dg-layer .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+
+/* -------------------------------------------------- diagram 8: runtime -- */
+
+.dg-run { display: grid; grid-template-columns: minmax(190px, 0.85fr) minmax(250px, 1.1fr) minmax(200px, 0.9fr); column-gap: 64px; row-gap: 46px; align-items: start; min-width: 760px; }
+.dg-run .stack { display: grid; gap: 14px; }
+
+/* --------------------------------------------------------------- misc --- */
+
+.callout {
+  border-left: 3px solid var(--a1);
+  background: var(--sunken);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  padding: 12px 16px;
+  margin: 0 0 22px;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+.callout b { color: var(--ink-1); }
+
+.kbd {
+  font-family: var(--mono); font-size: 11px;
+  border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 4px;
+  padding: 1px 5px; color: var(--ink-2);
+}
+
+footer.foot { max-width: 1560px; margin: 0 auto; padding: 0 26px 60px; color: var(--ink-3); font-size: 13px; }
+footer.foot a { color: var(--ink-2); }
+
+/* ------------------------------------------------------------ responsive */
+
+@media (max-width: 1080px) {
+  .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .sidebar { position: static; max-height: none; margin-bottom: 20px; }
+  #toc { flex-direction: row; flex-wrap: wrap; }
+  #toc a { border-left: none; border-bottom: 2px solid transparent; }
+  #toc a.active { border-left: none; border-bottom-color: var(--a1); }
+}
+
+/* ---------------------------------------------------------------- print - */
+
+@media print {
+  .topbar, .sidebar, .fig-tools, .skip { display: none !important; }
+  body { background: #fff; }
+  .shell { display: block; padding: 0; max-width: none; }
+  .fig { break-inside: avoid; page-break-inside: avoid; border-color: #ccc; box-shadow: none; }
+  .viewport { overflow: visible !important; }
+  .canvas { transform: none !important; }
+  .node { box-shadow: none; }
+}
+
+/* fullscreen presentation */
+.fig:fullscreen { overflow: auto; background: var(--surface-1); border-radius: 0; }
+.fig:fullscreen .viewport { padding: 40px; }
+
+/* ==========================================================================
+   data-model.html — entity cards, ER layout, cascade explorer, state machine
+   ========================================================================== */
+
+/* ------------------------------------------------------- page switcher --- */
+
+.pageswitch { display: inline-flex; gap: 2px; padding: 2px; background: var(--sunken); border: 1px solid var(--hair); border-radius: var(--r-sm); }
+.pageswitch a {
+  padding: 4px 11px; border-radius: 4px; font-size: 12.5px;
+  color: var(--ink-2); text-decoration: none; white-space: nowrap;
+}
+.pageswitch a:hover { color: var(--ink-1); }
+.pageswitch a[aria-current="page"] { background: var(--surface-1); color: var(--ink-1); font-weight: 600; box-shadow: var(--shadow); }
+
+/* ---------------------------------------------------------- entity card -- */
+
+.ent { padding: 0; overflow: hidden; }
+.ent .ent-h {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid var(--hair);
+  background: var(--sunken); font-weight: 650; font-size: 13.5px;
+}
+.ent .ent-h .rel { font-size: 10.5px; font-weight: 450; color: var(--ink-3); font-family: var(--mono); }
+.ent.spine { border-width: 2px; border-color: var(--ink-2); }
+.ent.spine .ent-h { background: color-mix(in oklab, var(--ink-2) 8%, var(--surface-1)); }
+
+.ent-f { list-style: none; margin: 0; padding: 6px 0; }
+.ent-f li {
+  display: grid; grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 8px; align-items: baseline; padding: 2px 12px; font-size: 11.5px;
+}
+.ent-f li + li.sep { margin-top: 5px; padding-top: 5px; border-top: 1px dashed var(--hair); }
+.ent-f .fname { font-family: var(--mono); color: var(--ink-1); overflow-wrap: anywhere; }
+.ent-f .ftype { font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
+/* Nullability is marked with a glyph, not a colour. */
+.ent-f li.opt .fname::after { content: "?"; color: var(--ink-3); font-weight: 700; }
+
+.badge {
+  font-size: 8.5px; font-weight: 800; letter-spacing: 0.03em;
+  border: 1px solid; border-radius: 3px; padding: 1px 0; text-align: center;
+  line-height: 1.35;
+}
+.badge.pk { color: var(--a1); border-color: var(--a1); }
+.badge.fk { color: var(--a2); border-color: var(--a2); }
+.badge.uk { color: var(--a3); border-color: var(--a3); }
+.badge.none { border-color: transparent; }
+
+/* State applied by the cascade explorer. Always paired with a word. */
+.ent-state { display: none; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; margin-left: auto; }
+.canvas.cascading .ent-state { display: inline; }
+.canvas.cascading .ent { opacity: 0.5; }
+.canvas.cascading .ent.st-gone,
+.canvas.cascading .ent.st-unlinked,
+.canvas.cascading .ent.st-kept { opacity: 1; }
+.ent.st-gone { border-color: var(--st-crit); }
+.ent.st-gone .ent-h { background: color-mix(in oklab, var(--st-crit) var(--tint), var(--surface-1)); }
+.ent.st-gone .ent-state { color: var(--st-crit); }
+.ent.st-unlinked { border-color: var(--st-warn); }
+.ent.st-unlinked .ent-h { background: color-mix(in oklab, var(--st-warn) var(--tint), var(--surface-1)); }
+.ent.st-unlinked .ent-state { color: var(--ink-1); }
+.ent.st-kept { border-color: var(--st-good); }
+.ent.st-kept .ent-h { background: color-mix(in oklab, var(--st-good) var(--tint), var(--surface-1)); }
+.ent.st-kept .ent-state { color: var(--st-good); }
+
+/* ------------------------------------------------------------ ER layout -- */
+
+.dg-er {
+  display: grid;
+  grid-template-columns: minmax(215px, 1fr) minmax(240px, 1.05fr) minmax(215px, 1fr);
+  column-gap: 78px; align-items: start; min-width: 900px;
+}
+.dg-er .col { display: grid; gap: 26px; align-content: start; }
+.dg-er .col-mid { align-self: center; }
+
+.cascade-out { margin: 0; padding: 12px 16px; border: 1px solid var(--rule); border-radius: var(--r-md); background: var(--sunken); font-size: 13px; color: var(--ink-2); }
+.cascade-out b { color: var(--ink-1); }
+
+/* -------------------------------------------------------- state machine -- */
+
+.dg-states {
+  display: grid; grid-template-columns: repeat(3, minmax(210px, 1fr));
+  /* Wide gaps because the transition labels live in them. */
+  column-gap: 124px; row-gap: 92px; min-width: 940px;
+}
+.node.state { text-align: center; }
+.node.state .t { font-family: var(--mono); font-size: 12.5px; }
+.node.start {
+  justify-self: start; padding: 6px 14px; border-radius: 999px;
+  border-style: dashed; text-align: center;
+}
+.node.start .t { font-size: 11.5px; font-weight: 550; color: var(--ink-2); }

@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integration Platform — Architecture Diagrams</title>
+<meta name="description" content="Interactive architecture diagrams for the function-scoped OAuth integration platform.">
+<link rel="stylesheet" href="styles.css">
+<script>
+  /* Applied before first paint so the stored theme and panel state do not
+     flash the wrong layout. diagrams.js re-reads both and is idempotent. */
+  try {
+    var d = document.documentElement, s = window.localStorage;
+    var t = s.getItem("arch-theme");
+    if (t === "light" || t === "dark") d.setAttribute("data-theme", t);
+    if (s.getItem("arch-nav") === "off") d.setAttribute("data-nav", "off");
+  } catch (e) {}
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="btn icon-btn" id="navBtn" type="button" aria-expanded="true" aria-controls="sidebar" title="Hide contents  [">
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+      <rect x="1.6" y="2.6" width="12.8" height="10.8" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <line x1="6.2" y1="2.6" x2="6.2" y2="13.4" stroke="currentColor" stroke-width="1.4"/>
+      <rect class="ico-fill" x="2.3" y="3.3" width="3.2" height="9.4" rx="1" fill="currentColor"/>
+    </svg>
+    <span class="nav-txt">Hide contents</span>
+  </button>
+  <div class="brand">Integration Platform</div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="index.html" aria-current="page">Architecture</a>
+    <a href="data-model.html">Data model</a>
+  </nav>
+  <div class="spacer"></div>
+  <button class="btn" id="themeBtn" type="button">Dark mode</button>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar" id="sidebar"><nav id="toc" aria-label="Diagrams"></nav></aside>
+
+  <main id="main">
+
+    <div class="lede">
+      <h1>Architecture diagrams</h1>
+      <p>The same eight diagrams as <code>docs/architecture.md</code>, rendered as HTML so they
+         are actually legible: zoom, drag to pan, full screen, and hover any box to isolate
+         what it connects to. The scope matrix in §2 is live — tick functions and watch
+         <code>resolveScopes()</code> recompute.</p>
+      <p>Everything here is static and dependency-free. Open <code>index.html</code> straight
+         off disk; no server, no build, no network.</p>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-sw k-a1"></span>App / entry layer</span>
+        <span class="legend-item"><span class="legend-sw k-n"></span>Core orchestration</span>
+        <span class="legend-item"><span class="legend-sw k-seam"></span>Registry seam</span>
+        <span class="legend-item"><span class="legend-sw k-a3"></span>Pure logic</span>
+        <span class="legend-item"><span class="legend-sw k-a2"></span>Providers / outside</span>
+        <span class="legend-item"><span class="legend-sw k-n"></span>▤ Persistence</span>
+      </div>
+    </div>
+
+    <div class="callout">
+      <b>Colour never carries meaning on its own here.</b> Every box is labelled, every
+      decision is marked <b>◆</b>, and persistence is marked <b>▤</b> — so the diagrams survive
+      greyscale printing and colour-vision deficiency. Palette validated for both themes.
+    </div>
+
+
+    <!-- ==================================================== 1 · SYSTEM ==== -->
+    <figure class="fig" id="fig-system">
+      <div class="fig-head">
+        <h2><span class="n">1</span>The whole system</h2>
+        <p>Four entry points, one framework-free core, one database. <code>src/core/</code> has no
+           <code>next/*</code> imports, so the sync engine, the OAuth flow and every provider run
+           from a plain script or a test with no HTTP server.</p>
+      </div>
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+      <div class="viewport">
+        <div class="canvas dg-system" id="c-system" data-edges='[
+          {"from":"s1-entry","to":"s1-boot","label":"calls first"},
+          {"from":"s1-boot","to":"s1-reg","fs":"right","ts":"left","label":"registers"},
+          {"from":"s1-entry","to":"s1-svc","fs":"left","ts":"left","bow":72,"label":"app layer\ncalls core"},
+          {"from":"s1-reg","to":"s1-svc","label":"resolves handler\n+ scopes"},
+          {"from":"s1-svc","to":"s1-pure","fs":"bottom","ts":"top","label":"validate · map · encrypt"},
+          {"from":"s1-svc","to":"s1-prov","fs":"bottom","ts":"top","label":"fetch pages"},
+          {"from":"s1-svc","to":"s1-repo","fs":"bottom","ts":"top","label":"persist · read"},
+          {"from":"s1-repo","to":"s1-db","fs":"bottom","ts":"top"}
+        ]'>
+
+          <section class="group" id="s1-entry" data-k="a1">
+            <h3 class="gh">Entry points<span class="gh-note">every code path starts in one of these</span></h3>
+            <div class="gb c4">
+              <div class="node" data-k="a1" id="s1-pages"><span class="t">Server components</span><span class="s">src/app/**/page.tsx</span><span class="n">Read state and render</span></div>
+              <div class="node" data-k="a1" id="s1-routes"><span class="t">Route handlers</span><span class="s">src/app/api/**/route.ts</span><span class="n">The only mutation surface</span></div>
+              <div class="node" data-k="a1" id="s1-cron"><span class="t">Cron route</span><span class="s">/api/cron/sync</span><span class="n">Poked by scripts/worker.ts</span></div>
+              <div class="node" data-k="a1" id="s1-scripts"><span class="t">Scripts</span><span class="s">prisma/seed.ts · scripts/*.mts</span><span class="n">No HTTP involved</span></div>
+            </div>
+          </section>
+
+          <div class="row-split split-boot">
+            <div class="node" id="s1-boot"><span class="t">bootstrap()</span><span class="s">src/core/bootstrap.ts</span><span class="n">Idempotent — safe to call from every entry point without guarding at the call site</span></div>
+
+            <section class="group" id="s1-reg" data-k="seam">
+              <h3 class="gh">Registries<span class="gh-note">the extension seam</span></h3>
+              <div class="gb c3">
+                <div class="node" id="s1-reg-fn"><span class="t">functionRegistry</span><span class="n">identity · support · billing · usage · communication</span></div>
+                <div class="node" id="s1-reg-prov"><span class="t">providerRegistry</span><span class="n">hubspot · salesforce · metrifox · stripe · mock</span></div>
+                <div class="node" id="s1-reg-han"><span class="t">handler + discovery</span><span class="n">keyed <code>function:provider</code></span></div>
+              </div>
+            </section>
+          </div>
+
+          <section class="group" id="s1-svc">
+            <h3 class="gh">Orchestration<span class="gh-note">provider-agnostic policy</span></h3>
+            <div class="gb c5">
+              <div class="node" id="s1-oauth"><span class="t">oauth-service</span><span class="n">authorize · callback · refresh · revoke</span></div>
+              <div class="node" id="s1-key"><span class="t">api-key-service</span><span class="n">validate · probe · store</span></div>
+              <div class="node" id="s1-engine"><span class="t">sync-engine</span><span class="n">guard · fetch · map · write · record</span></div>
+              <div class="node" id="s1-disco"><span class="t">discovery-service</span><span class="n">source fields, cached 1 h</span></div>
+              <div class="node" id="s1-sched"><span class="t">scheduler</span><span class="n">what is due, what expired</span></div>
+            </div>
+          </section>
+
+          <div class="row-split split-low">
+            <section class="group" id="s1-pure" data-k="a3">
+              <h3 class="gh">Pure logic<span class="gh-note">no I/O</span></h3>
+              <div class="gb">
+                <div class="node" data-k="a3" id="s1-schema"><span class="t">identity-schema.ts</span><span class="n">The target contract — one source of truth for three readers</span></div>
+                <div class="node" data-k="a3" id="s1-mapper"><span class="t">field-mapper/</span><span class="n">validate · apply · serialize</span></div>
+                <div class="node" data-k="a3" id="s1-crypto"><span class="t">oauth/crypto.ts</span><span class="n">AES-256-GCM, no fallback key</span></div>
+              </div>
+            </section>
+
+            <section class="group" id="s1-prov" data-k="a2">
+              <h3 class="gh">Providers<span class="gh-note">one directory each, all interchangeable</span></h3>
+              <div class="gb c2">
+                <div class="node" data-k="a2" id="s1-hs"><span class="t">hubspot/</span><span class="n">OAuth · granular scopes</span></div>
+                <div class="node" data-k="a2" id="s1-sf"><span class="t">salesforce/</span><span class="n">OAuth · SOQL · instance_url</span></div>
+                <div class="node" data-k="a2" id="s1-mf"><span class="t">metrifox/</span><span class="n">API key · x-api-key header</span></div>
+                <div class="node" data-k="a2" id="s1-st"><span class="t">stripe/</span><span class="n">API key · bearer + pinned version · cursor paging</span></div>
+                <div class="node" data-k="a2" id="s1-mk"><span class="t">mock/</span><span class="n">OAuth · runs with no credentials</span></div>
+              </div>
+              <div class="gb" style="margin-top:10px">
+                <div class="node" data-k="a2" id="s1-http"><span class="t">providers/http.ts</span><span class="n">Shared failure policy — every provider request goes through it. 401 / 429 / 5xx handled once.</span></div>
+              </div>
+            </section>
+
+            <div class="stack">
+              <div class="node" data-k="store" id="s1-repo"><span class="t">repositories/</span><span class="n">The modules that speak Prisma</span></div>
+              <div class="node" data-k="store" id="s1-db"><span class="t">SQLite via Prisma</span><span class="n">9 tables, one ownership spine</span></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <p class="fig-note"><strong>Reading it:</strong> the spine runs top to bottom. The one edge that
+        skips a band — entry points straight to orchestration, curving down the left — is the everyday
+        path: a route handler parses a request and calls a core function. <code>bootstrap()</code> is off
+        to the side because it runs once, before any of that.</p>
+    </figure>
+
+
+    <!-- ================================================= 2 · THE GRID ===== -->
+    <figure class="fig" id="fig-grid">
+      <div class="fig-head">
+        <h2><span class="n">2</span>The one idea: <span class="mono">function × provider</span></h2>
+        <p>Scopes depend on <em>both</em> the function and the provider, so nothing can be keyed by
+           either alone. That single constraint is why the codebase has the shape it does.</p>
+      </div>
+      <div class="viewport">
+        <div class="matrix-wrap">
+
+          <table class="matrix">
+            <thead>
+              <tr>
+                <th scope="col">Function</th>
+                <th scope="col">HubSpot</th>
+                <th scope="col">Salesforce</th>
+                <th scope="col">Metrifox</th>
+                <th scope="col">Stripe</th>
+                <th scope="col">Mock CRM</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Identity<span class="sub">customer · contact</span></th>
+                <td><span class="chip">crm.objects.companies.read</span><span class="chip">crm.objects.contacts.read</span><span class="chip">crm.schemas.companies.read</span><span class="chip">crm.schemas.contacts.read</span></td>
+                <td><span class="chip">api</span><span class="chip">refresh_token</span></td>
+                <td><span class="chip">customers:read</span><span class="chip">contacts:read</span></td>
+                <td><span class="chip">customers:read</span></td>
+                <td><span class="chip">crm.objects.companies.read</span><span class="chip">crm.objects.contacts.read</span><span class="chip">crm.schemas.read</span></td>
+              </tr>
+              <tr>
+                <th scope="row">Support<span class="sub">ticket</span></th>
+                <td><span class="chip">tickets</span><span class="chip">crm.objects.tickets.read</span><span class="chip">crm.schemas.tickets.read</span></td>
+                <td><span class="chip">api</span><span class="chip">refresh_token</span></td>
+                <td class="none">—</td>
+                <td class="none">—</td>
+                <td><span class="chip">crm.objects.tickets.read</span><span class="chip">crm.schemas.read</span></td>
+              </tr>
+              <tr>
+                <th scope="row">Billing<span class="sub">invoice · subscription</span></th>
+                <td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td>
+                <td><span class="chip">billing.invoices.read</span></td>
+              </tr>
+              <tr>
+                <th scope="row">Usage<span class="sub">usageEvent</span></th>
+                <td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td>
+              </tr>
+              <tr>
+                <th scope="row">Communication<span class="sub">message</span></th>
+                <td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="resolver">
+            <div class="resolver-head">
+              <h3>resolveScopes(functions, provider) — live</h3>
+              <p>The union of <code>scopesByProvider</code> across the selected functions. A provider
+                 that declares nothing for any selected function is filtered out of the picker entirely.</p>
+            </div>
+            <div class="fn-picker">
+              <label><input type="checkbox" value="identity" checked> Identity</label>
+              <label><input type="checkbox" value="support"> Support</label>
+              <label><input type="checkbox" value="billing"> Billing</label>
+              <label><input type="checkbox" value="usage"> Usage</label>
+              <label><input type="checkbox" value="communication"> Communication</label>
+            </div>
+            <div class="resolver-out" id="resolverOut"></div>
+          </div>
+
+        </div>
+      </div>
+      <p class="fig-note"><strong>Try it:</strong> tick <b>Support</b> alongside Identity. HubSpot's
+        request widens by three scopes; Salesforce's does not move, because its coarse <code>api</code>
+        scope already spans Case. Both are true at once only because scopes are held per
+        <em>(function, provider)</em> pair rather than per function. Tick <b>Billing</b> and every real
+        provider drops out — the flow is blocked rather than silently degraded.</p>
+      <p class="fig-note">The same pair keys three more things: the <b>sync handler</b>, the
+        <b>field discovery</b>, and the <b>default mappings</b>. Mock CRM only registers when
+        <code>ENABLE_MOCK_PROVIDER=true</code>.</p>
+    </figure>
+
+
+    <!-- ================================================== 3 · CONNECT ===== -->
+    <figure class="fig" id="fig-connect">
+      <div class="fig-head">
+        <h2><span class="n">3</span>Connecting — two credential kinds, one destination</h2>
+        <p><code>ProviderDefinition.auth</code> is a discriminated union, so the compiler forces every
+           branch to be handled rather than letting an API-key provider quietly assume a token endpoint.
+           The two paths diverge for exactly one step, then rejoin.</p>
+      </div>
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+      <div class="viewport">
+        <div class="canvas">
+          <div class="seq-stack">
+
+            <div class="seq">
+              <div class="seq-title"><b>Shared — create the integration</b><span class="cond">functions are chosen before a provider, and before consent</span></div>
+              <div class="seq-grid" style="grid-template-columns:repeat(4,1fr)">
+                <div class="seq-lifelines" style="grid-template-columns:repeat(4,1fr)"><i></i><i></i><i></i><i></i></div>
+                <div class="seq-actor" style="grid-column:1">User</div>
+                <div class="seq-actor" style="grid-column:2">/integrations/new<span class="a-sub">page</span></div>
+                <div class="seq-actor" style="grid-column:3">/api/integrations<span class="a-sub">POST</span></div>
+                <div class="seq-actor" style="grid-column:4">Database</div>
+                <div class="seq-msg fwd" style="grid-row:2;grid-column:1/3;--span:2"><span class="line"></span><span class="txt">pick functions, then a provider</span></div>
+                <div class="seq-note" style="grid-row:3"><b>providerNamesForFunctions()</b> lists only providers covering <b>every</b> selected function — one integration is a single grant against a single account.</div>
+                <div class="seq-msg fwd" style="grid-row:4;grid-column:2/4;--span:2"><span class="line"></span><span class="txt">label, provider, function set</span></div>
+                <div class="seq-msg fwd" style="grid-row:5;grid-column:3/5;--span:2"><span class="line"></span><span class="txt"><em>createIntegration()</em></span></div>
+                <div class="seq-msg bwd ret" style="grid-row:6;grid-column:3/5;--span:2"><span class="line"></span><span class="txt">status = pending_authorization</span></div>
+              </div>
+            </div>
+
+            <div class="seq-split">
+
+              <div class="seq branch" data-k="a1">
+                <div class="seq-title"><b>Branch A — OAuth</b><span class="cond">auth.kind === "oauth" · HubSpot, Salesforce, Mock</span></div>
+                <div class="seq-grid" style="grid-template-columns:repeat(4,1fr)">
+                  <div class="seq-lifelines" style="grid-template-columns:repeat(4,1fr)"><i></i><i></i><i></i><i></i></div>
+                  <div class="seq-actor" style="grid-column:1">User</div>
+                  <div class="seq-actor" style="grid-column:2">/oauth/{p}/start</div>
+                  <div class="seq-actor" style="grid-column:3">Provider</div>
+                  <div class="seq-actor" style="grid-column:4">/oauth/{p}/callback</div>
+                  <div class="seq-msg fwd" style="grid-row:2;grid-column:1/3;--span:2"><span class="line"></span><span class="txt"><em>GET ?integrationId</em></span></div>
+                  <div class="seq-note" style="grid-row:3"><b>resolveScopes()</b> + <b>issueState()</b> — the consent screen asks for exactly these scopes and nothing else.</div>
+                  <div class="seq-msg fwd" style="grid-row:4;grid-column:2/4;--span:2"><span class="line"></span><span class="txt">302 to consent screen</span></div>
+                  <div class="seq-msg fwd" style="grid-row:5;grid-column:3/5;--span:2"><span class="line"></span><span class="txt"><em>GET ?code&amp;state</em></span></div>
+                  <div class="seq-note" style="grid-row:6"><b>consumeState()</b> — single-use, constant-time compare. State is validated <em>before</em> the code is used, so a replayed callback discards the code unexchanged.</div>
+                  <div class="seq-msg bwd" style="grid-row:7;grid-column:3/5;--span:2"><span class="line"></span><span class="txt">exchange code</span></div>
+                  <div class="seq-msg fwd ret" style="grid-row:8;grid-column:3/5;--span:2"><span class="line"></span><span class="txt">access + refresh + granted scopes</span></div>
+                  <div class="seq-note" data-k="good" style="grid-row:9"><b>encryptToken() → saveToken()</b> — <code>grantedScopes</code> records what consent actually gave, so a later function addition surfaces as a reconnect prompt rather than a mid-sync 403.</div>
+                </div>
+              </div>
+
+              <div class="seq branch" data-k="a2">
+                <div class="seq-title"><b>Branch B — API key</b><span class="cond">auth.kind === "apiKey" · Metrifox</span></div>
+                <div class="seq-grid" style="grid-template-columns:repeat(3,1fr)">
+                  <div class="seq-lifelines" style="grid-template-columns:repeat(3,1fr)"><i></i><i></i><i></i></div>
+                  <div class="seq-actor" style="grid-column:1">User</div>
+                  <div class="seq-actor" style="grid-column:2">/integrations/{id}/credentials</div>
+                  <div class="seq-actor" style="grid-column:3">Provider</div>
+                  <div class="seq-msg fwd" style="grid-row:2;grid-column:1/3;--span:2"><span class="line"></span><span class="txt">POST — the pasted key</span></div>
+                  <div class="seq-note" style="grid-row:3"><b>validateKeyShape()</b> — local, no network. An obviously wrong paste costs no round trip.</div>
+                  <div class="seq-msg fwd" style="grid-row:4;grid-column:2/4;--span:2"><span class="line"></span><span class="txt"><em>probeCredential()</em></span></div>
+                  <div class="seq-msg bwd ret" style="grid-row:5;grid-column:2/4;--span:2"><span class="line"></span><span class="txt">200 — or 401</span></div>
+                  <div class="seq-note" data-k="crit" style="grid-row:6">On 401 the key is <b>never stored</b> and the integration goes to <code>error</code>. A key that cannot read anything must not sit there looking active.</div>
+                  <div class="seq-note" data-k="good" style="grid-row:7"><b>encryptToken() → saveToken()</b> — the same encrypted column as a bearer token, with <code>expiresAt = never</code> and <code>metadata.authKind = "apiKey"</code>.</div>
+                </div>
+              </div>
+
+            </div>
+
+            <div class="seq">
+              <div class="seq-title"><b>Shared — finalizeConnection()</b><span class="cond">one implementation, so the two paths cannot drift apart</span></div>
+              <div class="seq-grid" style="grid-template-columns:repeat(3,1fr)">
+                <div class="seq-lifelines" style="grid-template-columns:repeat(3,1fr)"><i></i><i></i><i></i></div>
+                <div class="seq-actor" style="grid-column:1">finalizeConnection<span class="a-sub">oauth-service.ts</span></div>
+                <div class="seq-actor" style="grid-column:2">Integration</div>
+                <div class="seq-actor" style="grid-column:3">FieldMapping</div>
+                <div class="seq-msg fwd" style="grid-row:2;grid-column:1/3;--span:2"><span class="line"></span><span class="txt"><em>markAuthorized()</em></span></div>
+                <div class="seq-msg fwd" style="grid-row:3;grid-column:1/4;--span:3"><span class="line"></span><span class="txt"><em>seedMappingsIfEmpty()</em> — only fills an empty rule set</span></div>
+                <div class="seq-note" data-k="good" style="grid-row:4"><b>status = active.</b> Seeding the defaults is the difference between "connected" and "connected and able to sync" — reconnecting never disturbs a user's edits.</div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+      <p class="fig-note"><strong>What deliberately does not differ:</strong> encryption at rest,
+        pagination, field mapping, record writing and the whole failure policy are identical. They have
+        no idea which kind of credential they are running on. The one real divergence downstream is that
+        an API-key handler is never handed a <code>refreshAccessToken</code> callback, which
+        <code>HandlerContext</code> documents as "a 401 is terminal" — the right answer for a revoked key.</p>
+    </figure>
+
+
+    <!-- ================================================== 4 · MAPPING ===== -->
+    <figure class="fig" id="fig-mapping">
+      <div class="fig-head">
+        <h2><span class="n">4</span>Mapping — a provider field becomes one of ours</h2>
+        <p>Target paths are <em>object-qualified</em> (<code>customer.name</code>,
+           <code>contact.email</code>) so a contact field can never be mapped onto a customer record
+           and still validate.</p>
+      </div>
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+      <div class="viewport">
+        <div class="canvas dg-map" id="c-map" data-edges='[
+          {"from":"m-src","to":"m-rule"},
+          {"from":"m-rule","to":"m-tf"},
+          {"from":"m-tf","to":"m-out"},
+          {"from":"m-schema","to":"m-rule","label":"legal target paths"},
+          {"from":"m-schema","to":"m-cons","label":"one definition,\nthree readers"}
+        ]'>
+
+          <div class="pipe">
+            <section class="group" id="m-src" data-k="a2">
+              <h3 class="gh">Source side</h3>
+              <div class="gb">
+                <div class="node" data-k="a2" id="m-disco"><span class="t">discovery-service</span><span class="n">Reads the provider's own schema API, cached 1 h in <code>DiscoveredField</code></span></div>
+                <div class="node" data-k="a2" id="m-free"><span class="t">free-text entry</span><span class="n">The escape hatch — a dropdown that cannot express a valid mapping is worse than one with a way out</span></div>
+              </div>
+            </section>
+
+            <div class="node" id="m-rule"><span class="t">FieldMappingRule</span><span class="s">sourceFieldPath<br>targetObject<br>targetFieldPath<br>transform</span><span class="n">One row per target field</span></div>
+
+            <div class="node" id="m-tf"><span class="t">transform</span><span class="s">none · trim · lowercase<br>domainFromUrl · dateOnly</span><span class="n"><code>domainFromUrl</code> is load-bearing: Salesforce gives a full URL, our target is a bare domain</span></div>
+
+            <div class="node" data-k="store" id="m-out"><span class="t">MappedRecord</span><span class="s">fields + customFields</span><span class="n">A mapped-but-absent source field yields <code>null</code>, never a missing key — output shape follows the rule set, not the record</span></div>
+          </div>
+
+          <div class="contract">
+            <div class="node" data-k="a3" id="m-schema"><span class="t">identity-schema.ts</span><span class="s">IDENTITY_SCHEMA</span><span class="n">The single source of truth. <code>contact.associatedCustomerId</code> is marked read-only and never offered — the sync engine derives it.</span></div>
+
+            <section class="group" id="m-cons" data-k="a3">
+              <h3 class="gh">Three readers<span class="gh-note">so they cannot drift apart</span></h3>
+              <div class="gb c3">
+                <div class="node" data-k="a3" id="m-c1"><span class="t">validateMappings()</span><span class="n">Every rule checked, every violation reported at once</span></div>
+                <div class="node" data-k="a3" id="m-c2"><span class="t">mapping editor</span><span class="n">The target dropdown</span></div>
+                <div class="node" data-k="a3" id="m-c3"><span class="t">sync engine</span><span class="n">Record validation at write time</span></div>
+              </div>
+            </section>
+          </div>
+
+        </div>
+      </div>
+      <p class="fig-note"><strong>The subtle one:</strong> <code>readPath</code> walks own properties
+        only. Source paths come from user-editable mappings, so a path like <code>constructor</code> or
+        <code>__proto__</code> would otherwise reach up the prototype chain and pull back a function.</p>
+    </figure>
+
+
+    <!-- ===================================================== 5 · SYNC ===== -->
+    <figure class="fig" id="fig-sync">
+      <div class="fig-head">
+        <h2><span class="n">5</span>Sync — the pipeline, and the ordering that matters</h2>
+        <p>Provider specifics live in handlers. This is what holds regardless of provider: one run at a
+           time, customers before contacts, per-record failures that do not abort the run, and a durable
+           account of what happened.</p>
+      </div>
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+      <div class="viewport">
+        <div class="canvas dg-sync" id="c-sync" data-edges='[
+          {"from":"p-start","to":"p-g1"},
+          {"from":"p-g1","to":"p-fail","label":"no"},
+          {"from":"p-g1","to":"p-g2","label":"yes"},
+          {"from":"p-g2","to":"p-disc","label":"yes"},
+          {"from":"p-g2","to":"p-lock","label":"no"},
+          {"from":"p-lock","to":"p-token"},
+          {"from":"p-token","to":"p-loop"},
+          {"from":"p-loop","to":"p-fetch"},
+          {"from":"p-fetch","to":"p-map"},
+          {"from":"p-map","to":"p-wc"},
+          {"from":"p-wc","to":"p-wk","label":"external → internal index"},
+          {"from":"p-wk","to":"p-relink"},
+          {"from":"p-relink","to":"p-g3"},
+          {"from":"p-g3","to":"p-ok","label":"none"},
+          {"from":"p-g3","to":"p-part","label":"some"},
+          {"from":"p-ok","to":"p-done"},
+          {"from":"p-part","to":"p-done"}
+        ]'>
+          <div class="node" id="p-start" style="grid-row:1;grid-column:1"><span class="t">executeSync(integrationId)</span><span class="n">Manual button, or the scheduler</span></div>
+
+          <div class="node dec" id="p-g1" style="grid-row:2;grid-column:1"><span class="t">status === "active"?</span></div>
+          <div class="node" data-k="crit" id="p-fail" style="grid-row:2;grid-column:3"><span class="t">failed</span><span class="n">"Integration is {status}; connect it before syncing"</span></div>
+
+          <div class="node dec" id="p-g2" style="grid-row:3;grid-column:1"><span class="t">already in flight?</span></div>
+          <div class="node" data-k="warn" id="p-disc" style="grid-row:3;grid-column:3"><span class="t">discarded</span><span class="n">The second caller is told, not silently ignored</span></div>
+
+          <div class="node" id="p-lock" style="grid-row:4;grid-column:1"><span class="t">claim the lock · create SyncRun(running)</span><span class="n">Released in a <code>finally</code>, or the integration is wedged until the process restarts</span></div>
+          <div class="node" id="p-token" style="grid-row:5;grid-column:1"><span class="t">getValidToken()</span><span class="n">Refreshes proactively within 5 min of expiry, so a run never starts on a dying token</span></div>
+          <div class="node" id="p-loop" style="grid-row:6;grid-column:1"><span class="t">for each declared function</span><span class="n"><code>requireSyncHandler(fn, provider)</code> + <code>findMappings(fn)</code> — no rules is an error, not a silent empty run</span></div>
+          <div class="node" data-k="a2" id="p-fetch" style="grid-row:7;grid-column:1"><span class="t">handler.fetchPages()</span><span class="n">An async iterable — pages are mapped as they arrive. Buffering a whole org buys nothing and risks memory on large tenants.</span></div>
+          <div class="node" data-k="a3" id="p-map" style="grid-row:8;grid-column:1"><span class="t">applyMappings() per record</span></div>
+
+          <div class="node" data-k="store" id="p-wc" style="grid-row:9;grid-column:1"><span class="t">1 · writeCustomers()</span><span class="n">Upsert on <code>(integrationId, externalSourceId)</code>. Re-running updates rather than duplicates.</span></div>
+          <div class="node" data-k="store" id="p-wk" style="grid-row:10;grid-column:1"><span class="t">2 · writeContacts()</span><span class="n">Resolve the association through the index, then fall back to a DB lookup for customers written by earlier runs</span></div>
+          <div class="node" data-k="store" id="p-relink" style="grid-row:11;grid-column:1"><span class="t">3 · relinkOrphanedContacts()</span><span class="n">Contacts stranded by earlier runs get linked as soon as their company arrives</span></div>
+
+          <div class="node dec" id="p-g3" style="grid-row:12;grid-column:1"><span class="t">any rejected records?</span></div>
+          <div class="node" data-k="good" id="p-ok" style="grid-row:12;grid-column:3"><span class="t">success</span></div>
+          <div class="node" data-k="warn" id="p-part" style="grid-row:13;grid-column:3"><span class="t">partial</span><span class="n">Wrote 19 of 20 — the reason for the twentieth is stored and shown</span></div>
+
+          <div class="node" id="p-done" style="grid-row:14;grid-column:1"><span class="t">release the lock · markLastSync()</span></div>
+        </div>
+      </div>
+      <p class="fig-note"><strong>Why customers go first.</strong> Providers return their <em>own</em>
+        company id on a contact — HubSpot in an associations block, Salesforce as <code>AccountId</code> —
+        never our internal UUID. Writing that into a foreign key produces a dangling reference. Customers
+        are written first to build the <code>external → internal</code> index; a contact that still cannot
+        be resolved is <strong>kept with a null link and a warning</strong>, its
+        <code>externalCustomerId</code> retained so a later run links it.</p>
+      <p class="fig-note"><strong>Severity decides.</strong> A malformed email <em>rejects</em> a contact —
+        a broken primary identifier poisons later matching. An unrecognised customer type only
+        <em>warns</em> — an org-specific picklist value shouldn't cost the whole record.</p>
+    </figure>
+
+
+    <!-- ==================================================== 6 · RETRY ===== -->
+    <figure class="fig" id="fig-retry">
+      <div class="fig-head">
+        <h2><span class="n">6</span>Failing well — two nested retry loops</h2>
+        <p>The part most worth understanding before debugging a flaky sync, because the two loops are
+           easy to confuse. The inner one retries <em>one request</em>; the outer one retries
+           <em>the whole run</em>.</p>
+      </div>
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+      <div class="viewport">
+        <div class="canvas dg-retry" id="c-retry" data-edges='[
+          {"from":"r-top","to":"r-h200","fs":"bottom","ts":"top"},
+          {"from":"r-top","to":"r-h401","fs":"bottom","ts":"top"},
+          {"from":"r-top","to":"r-h429","fs":"bottom","ts":"top"},
+          {"from":"r-top","to":"r-h5xx","fs":"bottom","ts":"top"},
+          {"from":"r-top","to":"r-hoth","fs":"bottom","ts":"top"},
+          {"from":"r-h200","to":"r-200out"},
+          {"from":"r-h401","to":"r-401a"},
+          {"from":"r-401a","to":"r-401b"},
+          {"from":"r-401b","to":"r-401out"},
+          {"from":"r-h429","to":"r-429a"},
+          {"from":"r-429a","to":"r-429b"},
+          {"from":"r-429b","to":"r-429out"},
+          {"from":"r-h5xx","to":"r-5xxout"},
+          {"from":"r-hoth","to":"r-othout"},
+          {"from":"r-429out","to":"r-outer"},
+          {"from":"r-5xxout","to":"r-outer"},
+          {"from":"r-outer","to":"r-failed","label":"attempts exhausted"},
+          {"from":"r-outer","to":"r-top","fs":"left","ts":"left","bow":48,"label":"attempts left —\nretry the whole run"}
+        ]'>
+
+          <div class="node" data-k="a2" id="r-top"><span class="t">One provider request</span><span class="s">createProviderSession() · src/core/providers/http.ts</span><span class="n">Shared by every provider. No database imports here — token refresh arrives as a callback, which is what lets these paths be tested against msw with no Prisma client in sight.</span></div>
+
+          <div class="lanes">
+            <div class="lane">
+              <div class="lane-head" data-k="good" id="r-h200">200</div>
+              <div class="node" data-k="good" id="r-200out"><span class="t">page returned</span><span class="n">Handed straight to the mapper — the run continues</span></div>
+            </div>
+
+            <div class="lane">
+              <div class="lane-head" data-k="crit" id="r-h401">401</div>
+              <div class="node dec" id="r-401a"><span class="t">refresh available?</span><span class="n">Withheld entirely for API keys — there is nothing to exchange</span></div>
+              <div class="node" id="r-401b"><span class="t">refresh, retry once</span><span class="n">A long sync can outlive its access token; a 401 on page 40 costs one extra request, not the whole run</span></div>
+              <div class="node" data-k="crit" id="r-401out"><span class="t">ReauthorizationRequiredError</span><span class="n">A second 401 — or no refresh at all — means the grant is dead. Integration → <code>requires_reauthorization</code>. Deliberately <em>not</em> retryable: waiting cannot fix it.</span></div>
+            </div>
+
+            <div class="lane">
+              <div class="lane-head" data-k="warn" id="r-h429">429</div>
+              <div class="node" data-k="warn" id="r-429a"><span class="t">wait</span><span class="n"><code>Retry-After</code> if given, else <code>RATE_LIMIT_FALLBACK_MS</code>. Capped, so a provider asking for an hour cannot park the sync.</span></div>
+              <div class="node" id="r-429b"><span class="t">retry the same request</span><span class="n">Not the run — so pagination resumes at the same cursor instead of restarting from page 1</span></div>
+              <div class="node" id="r-429out"><span class="t">after 2 waits: give up inline</span><span class="s">MAX_INLINE_RATE_LIMIT_WAITS = 2</span><span class="n">Bounded by our patience, not the provider's willingness to keep saying no</span></div>
+            </div>
+
+            <div class="lane">
+              <div class="lane-head" id="r-h5xx">5xx</div>
+              <div class="node" id="r-5xxout"><span class="t">RetryableSyncError</span><span class="n">The provider may simply be having a moment — hand it to the run-level loop</span></div>
+            </div>
+
+            <div class="lane">
+              <div class="lane-head" id="r-hoth">other</div>
+              <div class="node" data-k="crit" id="r-othout"><span class="t">fail the run</span><span class="n">Everything already written stays written — a partial sync is not rolled back</span></div>
+            </div>
+          </div>
+
+          <div class="node" data-k="a1" id="r-outer"><span class="t">Outer loop — sync-engine</span><span class="s">SYNC_MAX_ATTEMPTS = 3 · SYNC_RETRY_DELAY_MS = 5 min</span><span class="n">Exponential backoff, unless the provider said how long to wait. All timing goes through an injected <code>Clock</code>, so tests assert retry schedules instantly rather than sitting through them.</span></div>
+
+          <div class="node" data-k="crit" id="r-failed"><span class="t">SyncRun = failed</span><span class="n">The integration stays <code>active</code> — one bad run must not block the schedule</span></div>
+
+        </div>
+      </div>
+      <p class="fig-note"><strong>The distinction that matters</strong> is not the status code but what
+        the caller should do next: <code>RetryableSyncError</code> → wait and try the whole run again;
+        <code>ReauthorizationRequiredError</code> → stop, a human must reconnect; anything else → fail
+        the run and keep what was written.</p>
+    </figure>
+
+
+    <!-- ================================================= 7 · LAYERING ===== -->
+    <figure class="fig" id="fig-layering">
+      <div class="fig-head">
+        <h2><span class="n">7</span>Layering rules — and where reality bends</h2>
+        <p>Enforced by convention, not by tooling. Dashed arrows are the edges that must never exist.</p>
+      </div>
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+      <div class="viewport">
+        <div class="canvas dg-layer" id="c-layer" data-edges='[
+          {"from":"l-app","to":"l-core","label":"parse, call, shape a response"},
+          {"from":"l-core","to":"l-repo"},
+          {"from":"l-core","to":"l-prov"},
+          {"from":"l-repo","to":"l-db"},
+          {"from":"l-prov","to":"l-http"},
+          {"from":"l-app","to":"l-db","kind":"dashed","fs":"left","ts":"left","bow":74,"label":"never"},
+          {"from":"l-core","to":"l-app","kind":"dashed","fs":"right","ts":"right","bow":66,"label":"never"},
+          {"from":"l-prov","to":"l-db","kind":"dashed","fs":"left","ts":"right","label":"never"}
+        ]'>
+          <div class="node" data-k="a1" id="l-app"><span class="t">src/app/</span><span class="s">pages · route handlers</span><span class="n">A thin adapter</span></div>
+          <div class="node" id="l-core"><span class="t">src/core/</span><span class="s">orchestration · registries · pure logic</span><span class="n">Framework-free — zero <code>next/*</code> imports</span></div>
+          <div class="pair">
+            <div class="node" data-k="store" id="l-repo"><span class="t">src/core/repositories/</span><span class="n">The Prisma boundary</span></div>
+            <div class="node" data-k="a2" id="l-prov"><span class="t">src/core/providers/</span><span class="n">No DB, no OAuth service — refresh arrives as a callback on <code>HandlerContext</code></span></div>
+          </div>
+          <div class="pair">
+            <div class="node" data-k="store" id="l-db"><span class="t">Prisma / SQLite</span></div>
+            <div class="node" data-k="a2" id="l-http"><span class="t">outbound HTTP</span></div>
+          </div>
+        </div>
+      </div>
+      <p class="fig-note"><strong>Two honest caveats.</strong> <code>sync-engine.ts</code> and
+        <code>record-writer.ts</code> import <code>prisma</code> directly for <code>SyncRun</code>
+        bookkeeping and the record upserts, and <code>app/integrations/[id]/page.tsx</code> imports it
+        for a read the repositories do not expose. So "repositories are the <em>only</em> layer importing
+        the Prisma client" is the intent, with those three files as the exception.</p>
+      <p class="fig-note"><strong>Everything else holds</strong>, and it buys something concrete: because
+        no provider file imports the database or the OAuth service, <code>tests/integration/</code>
+        exercises real pagination and 401→refresh→retry against msw with no Prisma client in the process.</p>
+    </figure>
+
+
+    <!-- ================================================== 8 · RUNTIME ===== -->
+    <figure class="fig" id="fig-runtime">
+      <div class="fig-head">
+        <h2><span class="n">8</span>What runs where</h2>
+        <p>Pages read state; route handlers change it. The fakes are served over real HTTP from routes
+           inside this app, so the real clients run completely unchanged.</p>
+      </div>
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+      <div class="viewport">
+        <div class="canvas dg-run" id="c-run" data-edges='[
+          {"from":"r8-cc","to":"r8-rh","label":"fetch"},
+          {"from":"r8-worker","to":"r8-rh","label":"POST /api/cron/sync\nbearer CRON_SECRET"},
+          {"from":"r8-rh","to":"r8-ext","label":"outbound calls"},
+          {"from":"g-server","to":"r8-db","fs":"bottom","ts":"top","label":"pages read · handlers write"}
+        ]'>
+
+          <section class="group" id="g-browser" data-k="a1" style="grid-row:1;grid-column:1">
+            <h3 class="gh">Browser</h3>
+            <div class="gb">
+              <div class="node" data-k="a1" id="r8-cc"><span class="t">5 client components</span><span class="s">new/form · mapping/editor<br>sync-panel · key-form · delete-button</span><span class="n">Everything else renders on the server</span></div>
+            </div>
+          </section>
+
+          <section class="group" id="g-server" style="grid-row:1;grid-column:2">
+            <h3 class="gh">Next.js server</h3>
+            <div class="gb">
+              <div class="node" id="r8-rsc"><span class="t">Server components</span><span class="n">Render from the database directly</span></div>
+              <div class="node" id="r8-rh"><span class="t">Route handlers</span><span class="n">The only mutation surface</span></div>
+              <div class="node" data-k="a3" id="r8-fake"><span class="t">In-app fakes</span><span class="s">/api/fake/metrifox/* · /api/oauth/mock/*</span><span class="n">Served over real HTTP, so the real clients run unchanged — real headers, pagination, status codes. Enabled by <code>ENABLE_MOCK_PROVIDER</code> / <code>ENABLE_METRIFOX_FAKE</code>.</span></div>
+            </div>
+          </section>
+
+          <section class="group" id="g-out" data-k="a2" style="grid-row:1;grid-column:3">
+            <h3 class="gh">Outside the app</h3>
+            <div class="gb">
+              <div class="node" data-k="a2" id="r8-worker"><span class="t">scripts/worker.ts</span><span class="n">Polls every 60 s. Next has no scheduler, so the policy lives in a plain function an HTTP route pokes.</span></div>
+              <div class="node" data-k="a2" id="r8-ext"><span class="t">HubSpot · Salesforce · Metrifox</span><span class="n">The real APIs</span></div>
+            </div>
+          </section>
+
+          <div class="node" data-k="store" id="r8-db" style="grid-row:2;grid-column:2"><span class="t">SQLite</span><span class="n">Prisma client stashed on <code>globalThis</code> outside production, so hot reload does not leak a connection pool per edit</span></div>
+
+        </div>
+      </div>
+      <p class="fig-note"><strong>Three singletons on <code>globalThis</code>, for one reason.</strong>
+        Next compiles route modules separately and re-evaluates them on hot reload. A plain module-level
+        <code>Map</code> would hand <code>/start</code> and <code>/callback</code> different OAuth state
+        stores — every callback would fail validation — and a plain <code>Set</code> would let two
+        concurrent requests each believe they held the sync lock.</p>
+    </figure>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../architecture.md">docs/architecture.md</a> ·
+     data model as a <a href="data-model.html">page</a> or <a href="../data-model.md">markdown</a> ·
+     narrative in <a href="../../README.md">README.md</a>.
+     Hover a box to isolate its connections; <span class="kbd">Tab</span> does the same from the keyboard.
+     <span class="kbd">[</span> hides the contents panel so the diagrams take the full width.</p>
+</footer>
+
+<script src="diagrams.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,253 @@
+// Integration Platform data model.
+//
+// SQLite constraints worth knowing before editing:
+//   - Prisma does not support `enum` on SQLite. Status/type columns are `String`
+//     and validated in app code against const unions in src/core/types.
+//   - Prisma `Json` is not supported on SQLite either. JSON columns are `String`
+//     holding serialized JSON, read/written through helpers in
+//     src/core/repositories/json-column.ts.
+// Both choices keep this schema portable, and deployment depends on that:
+// scripts/pg-schema.mts generates a Postgres variant of this file whose only
+// difference is the datasource block. Tests and local dev stay on SQLite and
+// need no server. Promoting these columns to native enum/jsonb would be a real
+// improvement, but it forfeits that — the generator refuses to run if either
+// type appears here, rather than emitting a SQLite schema tests cannot use.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(uuid())
+  email        String        @unique
+
+  /// scrypt hash of the login password, formatted `scrypt$<salt>$<key>` by
+  /// src/lib/password.ts.
+  ///
+  /// Nullable, and a null is a refusal rather than a wildcard: a user may exist
+  /// before a password is set, and `authorize` rejects any account without one.
+  /// The seeded demo user takes its password from DEMO_USER_PASSWORD.
+  passwordHash String?
+
+  createdAt    DateTime      @default(now())
+  integrations Integration[]
+}
+
+model Integration {
+  id       String @id @default(uuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Registered provider name, e.g. "hubspot" | "salesforce" | "mock".
+  providerName String
+
+  /// IntegrationStatus: pending_authorization | active | expired |
+  /// requires_reauthorization | error
+  status String
+
+  /// User-facing label, e.g. "HubSpot — Acme sandbox".
+  instanceLabel String
+
+  /// Hours between scheduled syncs. Clamped to 1..168 in app code.
+  syncIntervalHours Int @default(24)
+
+  authorizationTimestamp DateTime?
+  lastSyncTimestamp      DateTime?
+
+  /// Set when token revocation failed during deletion, for admin follow-up.
+  pendingTokenRevocation Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  functions        IntegrationFunction[]
+  token            OAuthToken?
+  fieldMappings    FieldMapping[]
+  discoveredFields DiscoveredField[]
+  customers        Customer[]
+  contacts         Contact[]
+  syncRuns         SyncRun[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+/// The functions one integration serves.
+///
+/// An integration is many-to-one with functions, not one-to-one: a single
+/// HubSpot connection can supply identity data from companies and contacts
+/// *and* support data from tickets. The OAuth scopes requested are the union
+/// across these rows, which is why they must be known before authorization.
+model IntegrationFunction {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Registered function name, e.g. "identity" | "support".
+  functionName String
+
+  addedAt DateTime @default(now())
+
+  @@unique([integrationId, functionName])
+  @@index([functionName])
+}
+
+model OAuthToken {
+  integrationId String      @id
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// AES-256-GCM ciphertext. Never logged, never returned by any API route.
+  accessTokenEnc  String
+  refreshTokenEnc String?
+
+  expiresAt DateTime
+
+  /// Space-joined scopes this token was actually granted.
+  ///
+  /// Adding a function to an existing integration widens the scopes it needs,
+  /// and the stored token predates that widening. Comparing the union required
+  /// now against what was granted is how we detect that re-consent is due,
+  /// rather than discovering it as a 403 mid-sync.
+  grantedScopes String @default("")
+
+  /// Provider-specific extras captured from the token response, as JSON.
+  /// Salesforce stores `instance_url` here — every subsequent Salesforce API
+  /// call needs it, so losing it breaks the integration entirely.
+  providerMetadata String @default("{}")
+
+  updatedAt DateTime @updatedAt
+}
+
+model FieldMapping {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Which function this mapping belongs to. Two functions on one
+  /// integration can both write to the same target object, so the function is
+  /// part of a mapping's identity.
+  functionName String
+
+  /// Target object within that function, e.g. "customer" | "contact".
+  /// Target paths are object-qualified so a contact field can never be mapped
+  /// onto a customer record.
+  targetObject String
+
+  /// Dot-notation path into the provider payload, e.g. "properties.domain".
+  sourceFieldPath String
+
+  /// Unqualified field name within targetObject, e.g. "domain" or
+  /// "customFields.accountTier".
+  targetFieldPath String
+
+  /// FieldTransform: none | trim | lowercase | domainFromUrl | dateOnly
+  transform String @default("none")
+
+  createdAt DateTime @default(now())
+
+  @@unique([integrationId, functionName, targetObject, targetFieldPath])
+  @@index([integrationId])
+  @@index([integrationId, functionName])
+}
+
+/// Cache of fields discovered from a provider's schema API, used to populate the
+/// source-field dropdown in the mapping editor.
+model DiscoveredField {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  functionName String
+  targetObject String
+  path         String
+  label        String
+  type         String
+  fetchedAt    DateTime @default(now())
+
+  @@unique([integrationId, functionName, targetObject, path])
+  @@index([integrationId, functionName, targetObject])
+}
+
+model Customer {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider-assigned id. The upsert key, paired with integrationId.
+  externalSourceId String
+
+  name       String
+  domain     String?
+  industry   String?
+  createDate DateTime?
+
+  /// CustomerType: prospect | customer | partner | vendor
+  type String?
+
+  /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
+  customFields String @default("{}")
+
+  updatedAt DateTime @updatedAt
+  contacts  Contact[]
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+}
+
+model Contact {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  externalSourceId String
+
+  name     String
+  email    String?
+  jobTitle String?
+  phone    String?
+
+  /// Resolved internal customer. Null when the provider gave us a company id we
+  /// could not resolve — the contact is kept and a warning is recorded.
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  /// The provider's own company id, before resolution. Kept so a later sync can
+  /// resolve an association that failed the first time.
+  externalCustomerId String?
+
+  customFields String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  @@index([customerId])
+}
+
+model SyncRun {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// SyncRunStatus: running | success | partial | failed | discarded
+  status String
+
+  trigger String @default("manual")
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  customerCount Int @default(0)
+  contactCount  Int @default(0)
+  attempt       Int @default(1)
+
+  /// JSON array of { sourceRecordId, targetObject, reason, fieldName? }.
+  errorsJson String @default("[]")
+
+  @@index([integrationId, startedAt])
+}

@@ -1,0 +1,131 @@
+/**
+ * Multi-function integrations: one connection serving several functions.
+ *
+ * Exercises the real registered providers rather than generated ones, because
+ * the interesting behaviour is specific to how HubSpot and Salesforce differ.
+ */
+
+import { beforeEach, describe, expect, it } from "vitest";
+import { bootstrap, resetBootstrapForTests } from "@/core/bootstrap";
+import {
+  functionNamesForProvider,
+  missingScopes,
+  providerNamesForFunction,
+  providerNamesForFunctions,
+  resolveScopes,
+  scopesAreCovered,
+} from "@/core/registries/function-registry";
+import {
+  HUBSPOT_IDENTITY_SCOPES,
+  HUBSPOT_SUPPORT_SCOPES,
+} from "@/core/providers/hubspot/provider";
+import { SALESFORCE_IDENTITY_SCOPES } from "@/core/providers/salesforce/provider";
+
+beforeEach(() => {
+  resetBootstrapForTests();
+  bootstrap();
+});
+
+describe("scope union across functions", () => {
+  it("unions HubSpot identity and support scopes into one request", () => {
+    const scopes = resolveScopes(["identity", "support"], "hubspot");
+
+    for (const scope of [...HUBSPOT_IDENTITY_SCOPES, ...HUBSPOT_SUPPORT_SCOPES]) {
+      expect(scopes).toContain(scope);
+    }
+    expect(scopes).toHaveLength(
+      new Set([...HUBSPOT_IDENTITY_SCOPES, ...HUBSPOT_SUPPORT_SCOPES]).size
+    );
+  });
+
+  it("does not request ticket scopes for an identity-only integration", () => {
+    const scopes = resolveScopes(["identity"], "hubspot");
+    for (const scope of HUBSPOT_SUPPORT_SCOPES) {
+      expect(scopes).not.toContain(scope);
+    }
+  });
+
+  // Salesforce's `api` scope already spans Case, so adding support changes
+  // nothing. Holding scopes per (function, provider) is what allows this.
+  it("leaves the Salesforce request unchanged when support is added", () => {
+    expect(resolveScopes(["identity", "support"], "salesforce")).toEqual(
+      resolveScopes(["identity"], "salesforce")
+    );
+    expect(resolveScopes(["identity", "support"], "salesforce")).toEqual(
+      [...SALESFORCE_IDENTITY_SCOPES].sort()
+    );
+  });
+
+  it("deduplicates scopes shared between two functions", () => {
+    const scopes = resolveScopes(["identity", "support"], "mock");
+    expect(new Set(scopes).size).toBe(scopes.length);
+    // Both mock functions declare crm.schemas.read; it must appear once.
+    expect(scopes.filter((s) => s === "crm.schemas.read")).toHaveLength(1);
+  });
+
+  it("is order-independent", () => {
+    expect(resolveScopes(["support", "identity"], "hubspot")).toEqual(
+      resolveScopes(["identity", "support"], "hubspot")
+    );
+  });
+});
+
+describe("provider candidates for a function set", () => {
+  it("offers only providers covering every selected function", () => {
+    const both = providerNamesForFunctions(["identity", "support"]);
+    expect(both).toContain("hubspot");
+    expect(both).toContain("salesforce");
+  });
+
+  it("excludes a provider that covers only part of the set", () => {
+    // Billing is mock-only, so pairing it with identity leaves just the mock.
+    expect(providerNamesForFunctions(["identity", "billing"])).toEqual(["mock"]);
+    // And a function with no providers at all empties the intersection.
+    expect(providerNamesForFunctions(["identity", "usage"])).toEqual([]);
+  });
+
+  it("returns nothing when no function is selected", () => {
+    expect(providerNamesForFunctions([])).toEqual([]);
+  });
+
+  it("reports HubSpot as serving both identity and support", () => {
+    const functions = functionNamesForProvider("hubspot");
+    expect(functions).toContain("identity");
+    expect(functions).toContain("support");
+  });
+
+  it("lists no providers for a function nobody implements", () => {
+    expect(providerNamesForFunction("usage")).toEqual([]);
+  });
+});
+
+describe("re-consent detection when a function is added", () => {
+  it("flags a widened scope requirement on HubSpot", () => {
+    const granted = resolveScopes(["identity"], "hubspot");
+    const required = resolveScopes(["identity", "support"], "hubspot");
+
+    expect(scopesAreCovered(granted, required)).toBe(false);
+    expect(missingScopes(granted, required).sort()).toEqual(
+      [...HUBSPOT_SUPPORT_SCOPES].sort()
+    );
+  });
+
+  it("does not flag Salesforce, whose grant already covers support", () => {
+    const granted = resolveScopes(["identity"], "salesforce");
+    const required = resolveScopes(["identity", "support"], "salesforce");
+
+    expect(scopesAreCovered(granted, required)).toBe(true);
+    expect(missingScopes(granted, required)).toEqual([]);
+  });
+
+  it("treats an unchanged function set as covered", () => {
+    const scopes = resolveScopes(["identity"], "hubspot");
+    expect(scopesAreCovered(scopes, scopes)).toBe(true);
+  });
+
+  it("treats an empty grant as covering nothing", () => {
+    expect(scopesAreCovered([], resolveScopes(["identity"], "hubspot"))).toBe(
+      false
+    );
+  });
+});

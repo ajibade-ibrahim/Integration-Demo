@@ -1,0 +1,272 @@
+/**
+ * Integration persistence, including the set of functions each one serves.
+ */
+
+import { prisma } from "@/lib/prisma";
+import type { IntegrationStatus } from "../types/common";
+
+export interface IntegrationRecord {
+  id: string;
+  userId: string;
+  providerName: string;
+  /** Every function this integration serves, sorted for stable comparison. */
+  functionNames: string[];
+  status: IntegrationStatus;
+  instanceLabel: string;
+  syncIntervalHours: number;
+  authorizationTimestamp: Date | null;
+  lastSyncTimestamp: Date | null;
+  pendingTokenRevocation: boolean;
+  createdAt: Date;
+}
+
+interface RowWithFunctions {
+  id: string;
+  userId: string;
+  providerName: string;
+  status: string;
+  instanceLabel: string;
+  syncIntervalHours: number;
+  authorizationTimestamp: Date | null;
+  lastSyncTimestamp: Date | null;
+  pendingTokenRevocation: boolean;
+  createdAt: Date;
+  functions: Array<{ functionName: string }>;
+}
+
+function toRecord(row: RowWithFunctions): IntegrationRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    providerName: row.providerName,
+    functionNames: row.functions.map((f) => f.functionName).sort(),
+    status: row.status as IntegrationStatus,
+    instanceLabel: row.instanceLabel,
+    syncIntervalHours: row.syncIntervalHours,
+    authorizationTimestamp: row.authorizationTimestamp,
+    lastSyncTimestamp: row.lastSyncTimestamp,
+    pendingTokenRevocation: row.pendingTokenRevocation,
+    createdAt: row.createdAt,
+  };
+}
+
+const withFunctions = { functions: { select: { functionName: true } } } as const;
+
+export interface CreateIntegrationInput {
+  userId: string;
+  providerName: string;
+  functionNames: readonly string[];
+  instanceLabel: string;
+  syncIntervalHours?: number;
+}
+
+/**
+ * Create an integration in `pending_authorization` with its function set.
+ *
+ * @throws If no function is given — an integration with no functions has no
+ *   scopes to request and nothing to sync, so it is never a valid record.
+ */
+export async function createIntegration(
+  input: CreateIntegrationInput
+): Promise<IntegrationRecord> {
+  const functionNames = [...new Set(input.functionNames)].sort();
+  if (functionNames.length === 0) {
+    throw new Error("An integration must serve at least one function");
+  }
+
+  const row = await prisma.integration.create({
+    data: {
+      userId: input.userId,
+      providerName: input.providerName,
+      instanceLabel: input.instanceLabel,
+      status: "pending_authorization" satisfies IntegrationStatus,
+      syncIntervalHours: clampInterval(input.syncIntervalHours ?? 24),
+      functions: { create: functionNames.map((functionName) => ({ functionName })) },
+    },
+    include: withFunctions,
+  });
+
+  return toRecord(row);
+}
+
+/** Sync intervals outside 1..168 hours are meaningless; clamp rather than reject. */
+export function clampInterval(hours: number): number {
+  if (!Number.isFinite(hours)) return 24;
+  return Math.min(168, Math.max(1, Math.round(hours)));
+}
+
+export async function findIntegration(
+  id: string
+): Promise<IntegrationRecord | undefined> {
+  const row = await prisma.integration.findUnique({
+    where: { id },
+    include: withFunctions,
+  });
+  return row === null ? undefined : toRecord(row);
+}
+
+/**
+ * Fetch an integration only if `userId` owns it.
+ *
+ * Separate from {@link findIntegration} rather than replacing it, because the
+ * two callers are genuinely different. Anything serving a request must scope to
+ * the caller; the scheduler must not, since `runScheduledSyncs` sweeps every
+ * user's integrations through `listAllIntegrations` and has no user in scope at
+ * all. Making `userId` mandatory on `findIntegration` would force the
+ * background path to invent one.
+ *
+ * Returns `undefined` for "not yours" as well as "does not exist", so callers
+ * answer 404 to both. A 403 would confirm the id names a real integration,
+ * which is exactly what someone enumerating ids is trying to learn.
+ */
+export async function findIntegrationForUser(
+  id: string,
+  userId: string
+): Promise<IntegrationRecord | undefined> {
+  const row = await prisma.integration.findFirst({
+    where: { id, userId },
+    include: withFunctions,
+  });
+  return row === null ? undefined : toRecord(row);
+}
+
+export async function listIntegrations(
+  userId: string
+): Promise<IntegrationRecord[]> {
+  const rows = await prisma.integration.findMany({
+    where: { userId },
+    include: withFunctions,
+    orderBy: { createdAt: "desc" },
+  });
+  return rows.map(toRecord);
+}
+
+export async function updateStatus(
+  id: string,
+  status: IntegrationStatus
+): Promise<void> {
+  await prisma.integration.update({ where: { id }, data: { status } });
+}
+
+/** Mark an integration authorized and record the timestamp. */
+export async function markAuthorized(id: string, at: Date): Promise<void> {
+  await prisma.integration.update({
+    where: { id },
+    data: {
+      status: "active" satisfies IntegrationStatus,
+      authorizationTimestamp: at,
+    },
+  });
+}
+
+export async function markLastSync(id: string, at: Date): Promise<void> {
+  await prisma.integration.update({
+    where: { id },
+    data: { lastSyncTimestamp: at },
+  });
+}
+
+export async function markPendingRevocation(id: string): Promise<void> {
+  await prisma.integration.update({
+    where: { id },
+    data: { pendingTokenRevocation: true },
+  });
+}
+
+/**
+ * Add functions to an existing integration.
+ *
+ * Does not change status. Whether the widened scope set is still covered by the
+ * stored grant is a separate question, answered by `scopesAreCovered` — see
+ * `needsReauthorization` in the OAuth service.
+ */
+export async function addFunctions(
+  id: string,
+  functionNames: readonly string[]
+): Promise<IntegrationRecord | undefined> {
+  // `createMany({ skipDuplicates })` is unsupported on SQLite, so filter against
+  // what is already there. Re-adding an existing function is a no-op, not an error.
+  const existing = await prisma.integrationFunction.findMany({
+    where: { integrationId: id },
+    select: { functionName: true },
+  });
+  const have = new Set(existing.map((f) => f.functionName));
+  const toAdd = [...new Set(functionNames)].filter((name) => !have.has(name));
+
+  if (toAdd.length > 0) {
+    await prisma.integrationFunction.createMany({
+      data: toAdd.map((functionName) => ({ integrationId: id, functionName })),
+    });
+  }
+  return findIntegration(id);
+}
+
+/**
+ * Remove a function from an integration.
+ *
+ * Its mappings and cached discovery go too — they are meaningless without the
+ * function, and leaving them would resurrect stale rules if it were re-added.
+ * The granted scopes are deliberately left alone: they describe what the user
+ * consented to, which removing a function does not undo.
+ */
+export async function removeFunction(
+  id: string,
+  functionName: string
+): Promise<IntegrationRecord | undefined> {
+  const remaining = await prisma.integrationFunction.count({
+    where: { integrationId: id, functionName: { not: functionName } },
+  });
+  if (remaining === 0) {
+    throw new Error(
+      "Cannot remove the last function from an integration; delete the integration instead"
+    );
+  }
+
+  await prisma.$transaction([
+    prisma.integrationFunction.deleteMany({
+      where: { integrationId: id, functionName },
+    }),
+    prisma.fieldMapping.deleteMany({ where: { integrationId: id, functionName } }),
+    prisma.discoveredField.deleteMany({ where: { integrationId: id, functionName } }),
+  ]);
+
+  return findIntegration(id);
+}
+
+/**
+ * Every integration, across all users.
+ *
+ * For the scheduler, which is not acting on behalf of a signed-in user. UI
+ * paths must keep using `listIntegrations` so one user never sees another's.
+ */
+export async function listAllIntegrations(): Promise<IntegrationRecord[]> {
+  const rows = await prisma.integration.findMany({
+    orderBy: { createdAt: "asc" },
+    include: withFunctions,
+  });
+  return rows.map(toRecord);
+}
+
+/** Integrations stuck awaiting authorization past the cutoff. */
+export async function findStalePendingAuthorizations(
+  olderThan: Date
+): Promise<IntegrationRecord[]> {
+  const rows = await prisma.integration.findMany({
+    where: {
+      status: "pending_authorization" satisfies IntegrationStatus,
+      createdAt: { lt: olderThan },
+    },
+    include: withFunctions,
+  });
+  return rows.map(toRecord);
+}
+
+/**
+ * Delete an integration and everything hanging off it.
+ *
+ * Every child relation cascades at the schema level, so this one delete removes
+ * functions, tokens, mappings, discovery cache, synced records, and sync runs.
+ */
+export async function deleteIntegration(id: string): Promise<void> {
+  await prisma.integration.delete({ where: { id } });
+}
