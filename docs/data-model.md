@@ -2,7 +2,9 @@
 
 Generated from [`prisma/schema.prisma`](../prisma/schema.prisma) and the
 const-union types in [`src/core/types/common.ts`](../src/core/types/common.ts).
-Nine tables, one ownership spine: **everything hangs off `Integration`**.
+Eleven tables. Nine form one ownership spine — **everything hangs off
+`Integration`** — and two hold a connect that has not finished yet, described
+under [Scratch tables](#scratch-tables-for-a-connect-in-progress).
 
 > **Also available as an interactive page** —
 > [`docs/diagrams/data-model.html`](./diagrams/data-model.html): the entity diagram
@@ -16,6 +18,7 @@ Nine tables, one ownership spine: **everything hangs off `Integration`**.
 ```mermaid
 erDiagram
     User ||--o{ Integration : "owns"
+    User ||--o{ IntegrationDraft : "has configured, not yet connected"
 
     Integration ||--o{ IntegrationFunction : "declares"
     Integration ||--o| OAuthToken : "authorized by"
@@ -31,6 +34,24 @@ erDiagram
         string id PK
         string email UK
         string passwordHash "scrypt, nullable — null cannot sign in"
+        datetime createdAt
+    }
+
+    IntegrationDraft {
+        string id PK "unguessable, not a UUID — it is the connect handle"
+        string userId FK
+        string providerName
+        string functionNames "JSON array"
+        string instanceLabel
+        datetime expiresAt "30 minutes"
+        datetime createdAt
+    }
+
+    OAuthState {
+        string state PK "the value handed to the provider"
+        string subjectKind "draft | integration"
+        string subjectId "a draft id or an integration id — no FK, see below"
+        datetime expiresAt "30 minutes"
         datetime createdAt
     }
 
@@ -158,11 +179,41 @@ Two relationships carry the design load:
 
 ---
 
+## Scratch tables for a connect in progress
+
+`IntegrationDraft` and `OAuthState` are the two tables that are not user data.
+Both are written by one request and read by a later one, both carry a 30-minute
+`expiresAt`, and losing either costs the user a retry and nothing else.
+
+- **`IntegrationDraft`** holds a provider and function set the user has chosen
+  but not yet proven a credential for. It exists so that no `Integration` row is
+  created until a credential is accepted — a rejected key leaves nothing behind.
+  Consumed on success only, so a mistyped key can be re-pasted against the same
+  draft.
+- **`OAuthState`** holds an issued `state` value awaiting its callback, the CSRF
+  defence for the authorization flow. Single-use, and the delete *is* the read:
+  two concurrent callbacks bearing one state race on one row and exactly one
+  wins.
+
+Both were `Map`s on `globalThis` until they were not. Being written by `/start`
+and read by `/callback` — or written by the create call and read by the connect
+page — means an in-process store is invisible to every request but the one that
+wrote it as soon as a second instance exists, which is how they failed on a
+serverless host: every callback rejected, every draft "expired" on arrival.
+
+`OAuthState.subjectId` deliberately has no foreign key, because it names a row
+in one of two tables depending on `subjectKind`. Reading it back treats anything
+other than `"draft"` as an integration, which is the branch that fails safely: it
+looks for an integration that will not be found, rather than building one out of
+a draft id.
+
+---
+
 ## Referential actions
 
 | Parent | Child | On parent delete |
 |---|---|---|
-| `User` | `Integration` | `Cascade` |
+| `User` | `Integration`, `IntegrationDraft` | `Cascade` |
 | `Integration` | `IntegrationFunction`, `OAuthToken`, `FieldMapping`, `DiscoveredField`, `Customer`, `Contact`, `SyncRun` | `Cascade` |
 | `Customer` | `Contact` | `SetNull` — the contact survives, unlinked |
 
@@ -188,7 +239,10 @@ scheduler sweep, `FieldMapping(integrationId)` and
 `(integrationId, functionName)`, `Customer(integrationId)`,
 `Contact(integrationId)` and `Contact(customerId)`,
 `SyncRun(integrationId, startedAt)` for run-history ordering, and
-`IntegrationFunction(functionName)`.
+`IntegrationFunction(functionName)`. The scratch tables add
+`IntegrationDraft(userId)`, `OAuthState(subjectKind, subjectId)` for the two
+discard-by-subject paths, and `expiresAt` on both, which is what the sweep on
+each write path scans.
 
 ---
 
@@ -230,6 +284,7 @@ Read and written only through
 | `Contact.customFields` | `{}` | `Record<string, unknown>` |
 | `OAuthToken.providerMetadata` | `{}` | Provider extras from the token response, e.g. Salesforce `instance_url` |
 | `SyncRun.errorsJson` | `[]` | `RecordIssue[]` — `{ sourceRecordId, targetObject, reason, fieldName?, severity }` |
+| `IntegrationDraft.functionNames` | none | `string[]` — the function names chosen, deduped and sorted before storage |
 
 ---
 

@@ -599,6 +599,10 @@ footer.foot a { color: var(--ink-2); }
 .ent.spine { border-width: 2px; border-color: var(--ink-2); }
 .ent.spine .ent-h { background: color-mix(in oklab, var(--ink-2) 8%, var(--surface-1)); }
 
+/* Short-lived tables that sit outside the ownership spine: a dashed border,
+   because the row itself is temporary rather than because the link is weak. */
+.ent.scratch { border-style: dashed; }
+
 .ent-f { list-style: none; margin: 0; padding: 6px 0; }
 .ent-f li {
   display: grid; grid-template-columns: 30px minmax(0, 1fr) auto;

@@ -17,10 +17,10 @@ import {
 
 const VALID_KEY = Buffer.alloc(32, 7).toString("base64");
 
-beforeEach(() => {
+beforeEach(async () => {
   process.env["TOKEN_ENCRYPTION_KEY"] = VALID_KEY;
   resetEncryptionKeyCache();
-  clearStateStore();
+  await clearStateStore();
 });
 
 afterEach(() => {
@@ -139,90 +139,111 @@ describe("generateState", () => {
   });
 });
 
+/*
+ * These cases now touch the database: state moved from a Map on `globalThis`
+ * to a table so that `/start` and `/callback` can be served by different
+ * instances. They stay in `tests/unit` because what they exercise is unchanged
+ * — the single-use and expiry rules of the store, not a repository's mapping —
+ * and the suite already builds a throwaway Postgres schema for every run.
+ */
 describe("state store", () => {
   const forIntegration = (integrationId: string): StateSubject => ({
     kind: "integration",
     integrationId,
   });
 
-  it("accepts the state it issued and reports the subject", () => {
-    const state = issueState(forIntegration("int-1"));
-    expect(consumeState(state)).toEqual({
+  it("accepts the state it issued and reports the subject", async () => {
+    const state = await issueState(forIntegration("int-1"));
+    expect(await consumeState(state)).toEqual({
       ok: true,
       subject: { kind: "integration", integrationId: "int-1" },
     });
   });
 
-  it("rejects a state it never issued", () => {
-    issueState(forIntegration("int-1"));
-    const result = consumeState("fabricated-state");
+  it("rejects a state it never issued", async () => {
+    await issueState(forIntegration("int-1"));
+    const result = await consumeState("fabricated-state");
     expect(result.ok).toBe(false);
     expect(result.subject).toBeUndefined();
   });
 
   // Without single use, a leaked callback URL could be replayed.
-  it("refuses to accept the same state twice", () => {
-    const state = issueState(forIntegration("int-1"));
-    expect(consumeState(state).ok).toBe(true);
-    expect(consumeState(state).ok).toBe(false);
+  it("refuses to accept the same state twice", async () => {
+    const state = await issueState(forIntegration("int-1"));
+    expect((await consumeState(state)).ok).toBe(true);
+    expect((await consumeState(state)).ok).toBe(false);
+  });
+
+  /*
+   * The same property under contention, which is the case the table has to
+   * carry that a Map did not: two callbacks bearing one state, in flight at
+   * once. A read-then-delete would let both through; the delete *is* the read,
+   * so the database decides, and exactly one caller can win the row.
+   */
+  it("admits exactly one of two concurrent callbacks for the same state", async () => {
+    const state = await issueState(forIntegration("int-1"));
+
+    const results = await Promise.all([consumeState(state), consumeState(state)]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
   });
 
   it.each([
     ["null", null],
     ["empty", ""],
-  ])("rejects a %s state", (_label, value) => {
-    expect(consumeState(value).ok).toBe(false);
+  ])("rejects a %s state", async (_label, value) => {
+    expect((await consumeState(value)).ok).toBe(false);
   });
 
-  it("rejects an expired state", () => {
+  it("rejects an expired state", async () => {
     const now = Date.now();
-    const state = issueState(forIntegration("int-1"), now);
+    const state = await issueState(forIntegration("int-1"), now);
     // Just past the 30-minute window.
-    const result = consumeState(state, now + 30 * 60 * 1000 + 1);
+    const result = await consumeState(state, now + 30 * 60 * 1000 + 1);
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/expired|does not match/);
   });
 
-  it("keeps states for different integrations distinct", () => {
-    const a = issueState(forIntegration("int-a"));
-    const b = issueState(forIntegration("int-b"));
-    expect(consumeState(a).subject).toEqual(forIntegration("int-a"));
-    expect(consumeState(b).subject).toEqual(forIntegration("int-b"));
+  it("keeps states for different integrations distinct", async () => {
+    const a = await issueState(forIntegration("int-a"));
+    const b = await issueState(forIntegration("int-b"));
+    expect((await consumeState(a)).subject).toEqual(forIntegration("int-a"));
+    expect((await consumeState(b)).subject).toEqual(forIntegration("int-b"));
   });
 
-  it("discards pending state for a deleted integration", () => {
-    const state = issueState(forIntegration("int-1"));
-    discardStateFor("int-1");
-    expect(consumeState(state).ok).toBe(false);
+  it("discards pending state for a deleted integration", async () => {
+    const state = await issueState(forIntegration("int-1"));
+    await discardStateFor("int-1");
+    expect((await consumeState(state)).ok).toBe(false);
   });
 
   // The callback branches on the subject to decide whether to create a row or
   // update one. Confusing the two would either duplicate an integration or
   // re-key an unrelated one, so the kinds must not be interchangeable even when
   // the id strings collide.
-  it("distinguishes a draft subject from an integration subject", () => {
-    const draftState = issueState({ kind: "draft", draftId: "same-id" });
-    const integrationState = issueState(forIntegration("same-id"));
+  it("distinguishes a draft subject from an integration subject", async () => {
+    const draftState = await issueState({ kind: "draft", draftId: "same-id" });
+    const integrationState = await issueState(forIntegration("same-id"));
 
-    expect(consumeState(draftState).subject).toEqual({
+    expect((await consumeState(draftState)).subject).toEqual({
       kind: "draft",
       draftId: "same-id",
     });
-    expect(consumeState(integrationState).subject).toEqual({
+    expect((await consumeState(integrationState)).subject).toEqual({
       kind: "integration",
       integrationId: "same-id",
     });
   });
 
-  it("discarding an integration's state leaves an identically named draft alone", () => {
-    const draftState = issueState({ kind: "draft", draftId: "same-id" });
-    discardStateFor("same-id");
-    expect(consumeState(draftState).ok).toBe(true);
+  it("discarding an integration's state leaves an identically named draft alone", async () => {
+    const draftState = await issueState({ kind: "draft", draftId: "same-id" });
+    await discardStateFor("same-id");
+    expect((await consumeState(draftState)).ok).toBe(true);
   });
 
-  it("discards pending state for a draft that has been connected", () => {
-    const state = issueState({ kind: "draft", draftId: "draft-1" });
-    discardStateForDraft("draft-1");
-    expect(consumeState(state).ok).toBe(false);
+  it("discards pending state for a draft that has been connected", async () => {
+    const state = await issueState({ kind: "draft", draftId: "draft-1" });
+    await discardStateForDraft("draft-1");
+    expect((await consumeState(state)).ok).toBe(false);
   });
 });

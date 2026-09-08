@@ -123,14 +123,17 @@ describe("credential-kind behaviour", () => {
     expect(canRefresh("nonexistent")).toBe(false);
   });
 
-  it("refuses to build an authorization request for an API-key provider", () => {
-    expect(() =>
+  // `.rejects`, not `.toThrow`: building an authorization request now records
+  // the state value it issues, so the function is async and refuses by
+  // rejecting. The refusal still happens before anything is written.
+  it("refuses to build an authorization request for an API-key provider", async () => {
+    await expect(
       buildAuthorizationRequest({
         subject: { kind: "integration", integrationId: "int-1" },
         providerName: "metrifox",
         functionNames: ["identity"],
       })
-    ).toThrow(/API key, not OAuth/);
+    ).rejects.toThrow(/API key, not OAuth/);
   });
 
   it("requireOAuth narrows or throws", () => {
@@ -173,16 +176,16 @@ describe("Stripe as a second API-key provider", () => {
     expect(credentialHint(stripeProvider)).toMatch(/API key/i);
   });
 
-  it("is not refreshable and has no authorization request to build", () => {
+  it("is not refreshable and has no authorization request to build", async () => {
     expect(canRefresh("stripe")).toBe(false);
     expect(() => requireOAuth(stripeProvider)).toThrow(/not OAuth/);
-    expect(() =>
+    await expect(
       buildAuthorizationRequest({
         subject: { kind: "integration", integrationId: "int-1" },
         providerName: "stripe",
         functionNames: ["identity"],
       })
-    ).toThrow(/API key, not OAuth/);
+    ).rejects.toThrow(/API key, not OAuth/);
   });
 
   it("routes to the paste-a-key connect page, like the other API-key provider", () => {

@@ -412,15 +412,26 @@ providers as a **callback on `HandlerContext`**, which is precisely what lets
 `tests/integration/` exercise real pagination and 401-refresh-retry paths against
 msw with no Prisma client in the process.
 
-### Three singletons on `globalThis`, for one reason
+### Two singletons on `globalThis`, and two tables that used to be singletons
 
-The OAuth state store and the sync in-flight lock hang off `globalThis`, and the
-Prisma client does too outside production. Next compiles route modules
-separately and re-evaluates them on hot reload, so a plain module-level `Map` or
-`Set` would hand `/start` and `/callback` different instances — every state
-validation would fail — and would let two concurrent requests each believe they
-held the sync lock. For Prisma the failure mode is a leaked connection pool per
-reload, which is why production gets a plain instance instead.
+The sync in-flight lock hangs off `globalThis`, and the Prisma client does too
+outside production. Next compiles route modules separately and re-evaluates them
+on hot reload, so a plain module-level `Set` would let two concurrent requests
+each believe they held the sync lock. For Prisma the failure mode is a leaked
+connection pool per reload, which is why production gets a plain instance
+instead.
+
+The OAuth state store and the connect draft store were on `globalThis` for the
+same reason and are now tables (`OAuthState`, `IntegrationDraft`). Hot reload was
+only half the problem: both are written by one request and read by another, so on
+a host that runs more than one instance the second request reaches an instance
+that never saw the write. Every callback fails state validation, and every draft
+is "expired" by the time its connect page renders. A table answers both, and the
+single-use property of state comes out stronger — `consumeState` deletes the row
+it reads, so two concurrent callbacks race on one row and exactly one wins.
+
+What remains genuinely single-instance is the sync lock, which fails safe: the
+worst case is one integration synced twice at once, not a broken connect.
 
 ---
 

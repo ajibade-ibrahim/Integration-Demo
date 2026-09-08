@@ -24,7 +24,7 @@ export default async function ConnectDraftPage({
   bootstrap();
 
   const { draft: draftId } = await searchParams;
-  const draft = findDraft(draftId ?? null);
+  const draft = await findDraft(draftId ?? null);
 
   // Expired or never existed. Both mean the same thing to the user, and the
   // remedy is the same: start again. Drafts are in-process, so a server restart

@@ -685,11 +685,13 @@
 
         </div>
       </div>
-      <p class="fig-note"><strong>Three singletons on <code>globalThis</code>, for one reason.</strong>
-        Next compiles route modules separately and re-evaluates them on hot reload. A plain module-level
-        <code>Map</code> would hand <code>/start</code> and <code>/callback</code> different OAuth state
-        stores — every callback would fail validation — and a plain <code>Set</code> would let two
-        concurrent requests each believe they held the sync lock.</p>
+      <p class="fig-note"><strong>Two singletons on <code>globalThis</code>, and two tables that used to be singletons.</strong>
+        Next compiles route modules separately and re-evaluates them on hot reload, so a plain
+        <code>Set</code> would let two concurrent requests each believe they held the sync lock — which is
+        why that one still hangs off <code>globalThis</code>, alongside the Prisma client. OAuth state and
+        connect drafts were there too and are now tables: hot reload was only half the problem, since each
+        is written by one request and read by another, and on a multi-instance host the reader lands
+        somewhere that never saw the write.</p>
     </figure>
 
   </main>

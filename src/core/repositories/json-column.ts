@@ -1,11 +1,11 @@
 /**
  * Helpers for JSON held in TEXT columns.
  *
- * `customFields`, `providerMetadata` and `errorsJson` are `String` rather
- * than `Json`, a shape inherited from when the tests ran on SQLite, where
- * Prisma has no `Json` type. Postgres does, and promoting these to `jsonb`
- * would retire this module — see the header of prisma/schema.prisma for why
- * that is a separate change.
+ * `customFields`, `providerMetadata`, `errorsJson` and a draft's
+ * `functionNames` are `String` rather than `Json`, a shape inherited from when
+ * the tests ran on SQLite, where Prisma has no `Json` type. Postgres does, and
+ * promoting these to `jsonb` would retire this module — see the header of
+ * prisma/schema.prisma for why that is a separate change.
  *
  * Until then, reads must tolerate anything: a hand-edited row or a value
  * written by an older schema should degrade to a default rather than crash a

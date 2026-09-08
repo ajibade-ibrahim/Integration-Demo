@@ -15,15 +15,20 @@
  * mistyped key without re-picking provider and functions — so it is consumed
  * only on success, and otherwise left to expire.
  *
- * In-process, for the same reason as the state store: this is a single-node
- * demo. Multi-instance would move it to Redis or a table, and the interface is
- * small enough that swapping it is contained. The cost of in-process is worth
- * stating plainly — a server restart drops every open draft, so a user
- * mid-connect gets "this draft has expired" and starts over. That is annoying
- * but safe; the alternative is the row-per-attempt litter this replaces.
+ * Backed by a table rather than a Map on `globalThis`. Three separate requests
+ * touch one draft — the create call, the connect page render, and the credential
+ * submit — and on a multi-instance host each can be served by a different
+ * instance, or by one that has since gone cold. An in-process draft is invisible
+ * to every request but the one that wrote it, which does not fail intermittently
+ * so much as always: the user lands on "this connection attempt expired" holding
+ * a draft id that was valid a second ago. A row is visible to all of them, and
+ * survives a restart into the bargain.
  */
 
 import { randomBytes } from "node:crypto";
+
+import { prisma } from "@/lib/prisma";
+import { readJsonArray, writeJsonArray } from "../repositories/json-column";
 
 /**
  * Matches the OAuth state TTL and the pending-authorization window. A draft
@@ -41,26 +46,36 @@ export interface IntegrationDraft {
   readonly expiresAt: number;
 }
 
+/** Row shape as stored, mapped to the interface the rest of the app uses. */
+function toDraft(row: {
+  id: string;
+  userId: string;
+  providerName: string;
+  functionNames: string;
+  instanceLabel: string;
+  expiresAt: Date;
+}): IntegrationDraft {
+  return {
+    draftId: row.id,
+    userId: row.userId,
+    providerName: row.providerName,
+    functionNames: readJsonArray<string>(row.functionNames),
+    instanceLabel: row.instanceLabel,
+    expiresAt: row.expiresAt.getTime(),
+  };
+}
+
 /**
- * Held on globalThis rather than as a module-level Map, for the reason spelled
- * out in `state-store.ts`: the create route, the connect page, and the callback
- * are separate route modules, and Next re-evaluates modules on hot reload in
- * dev. A plain Map can leave them holding different instances, so a draft
- * written by one is invisible to the others.
+ * Delete drafts that have already expired.
+ *
+ * Called from the write paths only. Reads exclude expired rows in their `where`
+ * clause instead, which is the same answer for one fewer round trip — an expired
+ * draft that lingers a while is invisible, not live.
  */
-const globalForDrafts = globalThis as unknown as {
-  integrationDrafts: Map<string, IntegrationDraft> | undefined;
-};
-
-const drafts: Map<string, IntegrationDraft> =
-  globalForDrafts.integrationDrafts ?? new Map<string, IntegrationDraft>();
-
-globalForDrafts.integrationDrafts = drafts;
-
-function sweep(now: number): void {
-  for (const [key, draft] of drafts) {
-    if (draft.expiresAt <= now) drafts.delete(key);
-  }
+async function sweep(now: number): Promise<void> {
+  await prisma.integrationDraft.deleteMany({
+    where: { expiresAt: { lte: new Date(now) } },
+  });
 }
 
 export interface CreateDraftInput {
@@ -76,31 +91,36 @@ export interface CreateDraftInput {
  * @throws If no function is given. `createIntegration` rejects the same case,
  *   and catching it here means an unusable draft cannot be handed a connect URL
  *   that is certain to fail at the far end.
+ * @throws If `userId` names no user. That is the foreign key, not a check of
+ *   our own, and it is the earliest point at which a session outliving its user
+ *   row is caught — previously such a session got a draft and failed later, at
+ *   the insert that the connect attempt made.
  */
-export function createDraft(
+export async function createDraft(
   input: CreateDraftInput,
   now = Date.now()
-): IntegrationDraft {
-  sweep(now);
+): Promise<IntegrationDraft> {
+  await sweep(now);
 
   const functionNames = [...new Set(input.functionNames)].sort();
   if (functionNames.length === 0) {
     throw new Error("An integration must serve at least one function");
   }
 
-  const draft: IntegrationDraft = {
-    // Unguessable rather than sequential: a draft id is the handle used to
-    // attach a credential, so it should not be enumerable.
-    draftId: randomBytes(24).toString("base64url"),
-    userId: input.userId,
-    providerName: input.providerName,
-    functionNames,
-    instanceLabel: input.instanceLabel,
-    expiresAt: now + DRAFT_TTL_MS,
-  };
+  const row = await prisma.integrationDraft.create({
+    data: {
+      // Unguessable rather than sequential: a draft id is the handle used to
+      // attach a credential, so it should not be enumerable.
+      id: randomBytes(24).toString("base64url"),
+      userId: input.userId,
+      providerName: input.providerName,
+      functionNames: writeJsonArray(functionNames),
+      instanceLabel: input.instanceLabel,
+      expiresAt: new Date(now + DRAFT_TTL_MS),
+    },
+  });
 
-  drafts.set(draft.draftId, draft);
-  return draft;
+  return toDraft(row);
 }
 
 /**
@@ -109,13 +129,17 @@ export function createDraft(
  * Used for rendering the connect page and for every connect attempt, so a
  * rejected credential can be retried against the same draft.
  */
-export function findDraft(
+export async function findDraft(
   draftId: string | null,
   now = Date.now()
-): IntegrationDraft | undefined {
-  sweep(now);
+): Promise<IntegrationDraft | undefined> {
   if (draftId === null || draftId === "") return undefined;
-  return drafts.get(draftId);
+
+  const row = await prisma.integrationDraft.findFirst({
+    where: { id: draftId, expiresAt: { gt: new Date(now) } },
+  });
+
+  return row === null ? undefined : toDraft(row);
 }
 
 /**
@@ -124,18 +148,36 @@ export function findDraft(
  * Separate from {@link findDraft} so the consume happens after the row exists,
  * not before: dropping it first would leave a successful connect with no way to
  * report which integration it produced if the insert then failed.
+ *
+ * `deleteMany` rather than `delete` because a draft already swept for age is a
+ * normal outcome here, not an error worth throwing over.
  */
-export function discardDraft(draftId: string): void {
-  drafts.delete(draftId);
+export async function discardDraft(draftId: string): Promise<void> {
+  await prisma.integrationDraft.deleteMany({ where: { id: draftId } });
 }
 
-/** Test helper. */
-export function clearDraftStore(): void {
-  drafts.clear();
+/**
+ * Test helper — drop drafts, scoped to one user where a userId is given.
+ *
+ * Scopeable rather than a plain truncate, because the store is now shared: test
+ * files run in parallel against a single schema, so clearing everything would
+ * delete drafts another file is in the middle of using.
+ */
+export async function clearDraftStore(userId?: string): Promise<void> {
+  await prisma.integrationDraft.deleteMany({
+    where: userId === undefined ? {} : { userId },
+  });
 }
 
-/** Test helper — how many drafts are currently held. */
-export function draftCount(now = Date.now()): number {
-  sweep(now);
-  return drafts.size;
+/** Test helper — how many drafts are live at `now`, for one user where given. */
+export async function draftCount(
+  now = Date.now(),
+  userId?: string
+): Promise<number> {
+  return prisma.integrationDraft.count({
+    where: {
+      expiresAt: { gt: new Date(now) },
+      ...(userId === undefined ? {} : { userId }),
+    },
+  });
 }

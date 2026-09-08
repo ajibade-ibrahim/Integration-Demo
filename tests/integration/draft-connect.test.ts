@@ -95,7 +95,6 @@ async function newDraft(userId: string) {
 let userId: string;
 
 beforeEach(async () => {
-  clearDraftStore();
   // A user of this file's own, so every count below is isolated from whatever
   // other test files are doing to the shared database at the same time.
   const user = await prisma.user.create({
@@ -103,6 +102,13 @@ beforeEach(async () => {
     select: { id: true },
   });
   userId = user.id;
+});
+
+// Scoped to this file's own user: the draft store is a shared table now, and
+// vitest runs test files in parallel, so a blanket clear would delete drafts
+// another file is relying on.
+afterEach(async () => {
+  await clearDraftStore(userId);
 });
 
 describe("connecting a draft", () => {
@@ -155,7 +161,7 @@ describe("connecting a draft", () => {
     const draft = await newDraft(userId);
 
     await connectDraftWithApiKey({ draftId: draft.draftId, apiKey: "k1" });
-    expect(findDraft(draft.draftId)).toBeUndefined();
+    expect(await findDraft(draft.draftId)).toBeUndefined();
 
     const replay = await connectDraftWithApiKey({
       draftId: draft.draftId,
@@ -201,7 +207,7 @@ describe("connecting a draft", () => {
     const draft = await newDraft(userId);
 
     await connectDraftWithApiKey({ draftId: draft.draftId, apiKey: "wrong" });
-    expect(findDraft(draft.draftId)).toBeDefined();
+    expect(await findDraft(draft.draftId)).toBeDefined();
     expect(await integrationCount()).toBe(0);
 
     keyAccepted();
@@ -227,7 +233,7 @@ describe("connecting a draft", () => {
 
   it("expires drafts on its own, so an abandoned one does not linger", async () => {
     const now = Date.now();
-    createDraft(
+    await createDraft(
       {
         userId,
         providerName: "metrifox",
@@ -237,9 +243,9 @@ describe("connecting a draft", () => {
       now
     );
 
-    expect(draftCount(now)).toBe(1);
+    expect(await draftCount(now, userId)).toBe(1);
     // Just past the 30-minute window.
-    expect(draftCount(now + 30 * 60 * 1000 + 1)).toBe(0);
+    expect(await draftCount(now + 30 * 60 * 1000 + 1, userId)).toBe(0);
     expect(await integrationCount()).toBe(0);
   });
 });

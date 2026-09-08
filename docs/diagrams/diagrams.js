@@ -527,8 +527,10 @@
 
   /* ------------------------------------------------------ cascade explorer
      data-model.html §1. Transcribed from the `onDelete` clauses in
-     prisma/schema.prisma: User→Integration and all seven Integration→child
-     relations are Cascade; Customer→Contact alone is SetNull.
+     prisma/schema.prisma: User→Integration, User→IntegrationDraft and all seven
+     Integration→child relations are Cascade; Customer→Contact alone is SetNull.
+     OAuthState appears in none of them — it has no foreign key, because its
+     `subjectId` names a row in one of two tables depending on `subjectKind`.
   ---------------------------------------------------------------------------*/
 
   var UNDER_INTEGRATION = [
@@ -538,15 +540,16 @@
 
   var CASCADE = {
     user: {
-      gone: ["e-user", "e-integration"].concat(UNDER_INTEGRATION),
+      gone: ["e-user", "e-integration", "e-draft"].concat(UNDER_INTEGRATION),
       note: "<b>Cascade all the way down.</b> <code>User → Integration</code> is " +
             "<code>onDelete: Cascade</code>, and so is every relation beneath it — one " +
             "delete removes that user's integrations and every credential, mapping, " +
-            "synced record and run underneath. Nothing is left orphaned."
+            "synced record and run underneath, plus any half-finished draft. Nothing is " +
+            "left orphaned."
     },
     integration: {
       gone: ["e-integration"].concat(UNDER_INTEGRATION),
-      kept: ["e-user"],
+      kept: ["e-user", "e-draft"],
       note: "<b>The tenancy boundary.</b> Every table below carries " +
             "<code>integrationId</code>, so removing one integration is a clean sweep — " +
             "and the reason no query can leak another integration's data by omission. " +

@@ -83,7 +83,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       ? body.instanceLabel.trim()
       : provider.label;
 
-  const draft = createDraft({
+  const draft = await createDraft({
     userId: await currentUserId(),
     providerName,
     functionNames,

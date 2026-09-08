@@ -40,7 +40,7 @@ export async function GET(
 
   const resolved =
     draftId !== null && draftId !== ""
-      ? resolveDraft(draftId)
+      ? await resolveDraft(draftId)
       : await resolveIntegration(integrationId);
 
   if ("error" in resolved) {
@@ -60,7 +60,7 @@ export async function GET(
   }
 
   try {
-    const { url } = buildAuthorizationRequest({
+    const { url } = await buildAuthorizationRequest({
       subject: resolved.subject,
       providerName: resolved.providerName,
       functionNames: resolved.functionNames,
@@ -93,8 +93,8 @@ interface Unresolved {
   connectUrl?: string;
 }
 
-function resolveDraft(draftId: string): Resolved | Unresolved {
-  const draft = findDraft(draftId);
+async function resolveDraft(draftId: string): Promise<Resolved | Unresolved> {
+  const draft = await findDraft(draftId);
   if (draft === undefined) {
     // 410, not 404: this id was valid and has expired, which is a different
     // thing for the user to be told than "no such thing".

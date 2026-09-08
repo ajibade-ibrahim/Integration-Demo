@@ -97,7 +97,7 @@ export async function createIntegrationFromDraft(args: {
 
   // Only now: the draft has become a real integration, so replaying it would
   // create a duplicate.
-  discardDraft(draft.draftId);
+  await discardDraft(draft.draftId);
 
   return integration;
 }

@@ -44,7 +44,7 @@ export async function DELETE(
 
   // An in-flight authorization for a deleted integration can never complete;
   // dropping its state stops a stale callback from resurrecting anything.
-  discardStateFor(id);
+  await discardStateFor(id);
 
   await deleteIntegration(id);
 

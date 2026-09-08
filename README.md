@@ -464,9 +464,19 @@ runners cannot reach.
 
 The database is the portable part. These are not:
 
+- **Run `npm run db:push` against the deployed database after every schema
+  change.** The build command is `prisma generate && next build`, which builds a
+  client for the schema in the repo but never touches the database — so a new
+  table exists in the generated types and not in Postgres, and the first query
+  against it fails at runtime rather than at build. Point `DATABASE_URL` and
+  `DIRECT_URL` at the deployment and push before the deploy goes live.
 - **Set `AUTH_SECRET`** (`npx auth secret`). Auth.js signs session cookies with
   it and refuses to start without one in production. Changing it invalidates
-  every live session, which is the safe direction.
+  every live session, which is the safe direction — and note the converse, since
+  it bites in development: keeping `AUTH_SECRET` while recreating the database
+  leaves live cookies naming user rows that no longer exist. Sessions stay valid,
+  the integration list comes back empty, and connecting fails on the
+  `Integration.userId` foreign key. Log out and back in after a database reset.
 - **Run `npm run seed` once** with `DEMO_USER_PASSWORD` set, or read the password
   it generates and prints. There is no registration page, so this is the only
   account until you add one.
@@ -482,10 +492,13 @@ The database is the portable part. These are not:
 - **Raise `SYNC_RETRY_DELAY_MS` and `RATE_LIMIT_FALLBACK_MS`.** They are lowered
   in `.env.example` so failures are observable in a demo, not because two
   seconds is a sane retry delay against a real API.
-- **Single instance only.** The OAuth state store, the connect draft store and
-  the sync in-flight lock are all in-process `globalThis` maps. Behind more than
-  one instance, callbacks fail state validation, drafts vanish mid-connect, and
-  two nodes can sync one integration at once.
+- **The sync in-flight lock is still in-process.** OAuth state and connect drafts
+  moved to tables (`OAuthState`, `IntegrationDraft`) precisely so they survive a
+  second instance — each is written by one request and read by another, so
+  in-process they broke the moment the reader landed anywhere else. The lock in
+  `sync-engine.ts` is a `globalThis` `Set` and did not move: behind more than one
+  instance, two nodes can sync one integration at once. That fails safe, so it is
+  a known limit rather than a blocker.
 - **Not serverless without changes.** `POST /api/integrations/[id]/sync` returns
   202 and leaves the sync running after the response, which a platform that
   freezes the function on response will kill mid-run.

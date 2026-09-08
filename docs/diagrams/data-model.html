@@ -45,9 +45,11 @@
 
     <div class="lede">
       <h1>Data model</h1>
-      <p>Nine tables, one ownership spine: <b>everything hangs off <code>Integration</code></b>.
-         Transcribed from <code>prisma/schema.prisma</code> and the const-union types in
-         <code>src/core/types/common.ts</code>.</p>
+      <p>Eleven tables. Nine form one ownership spine — <b>everything hangs off
+         <code>Integration</code></b> — and two are scratch space for a connect that has not
+         finished: a draft nobody has proven a credential for yet, and an OAuth state awaiting
+         its callback. Transcribed from <code>prisma/schema.prisma</code> and the const-union
+         types in <code>src/core/types/common.ts</code>.</p>
       <p>The HTML companion to <code>docs/data-model.md</code>. Hover any table to isolate its
          relationships, and use the control in §1 to watch a delete propagate.</p>
       <div class="legend">
@@ -70,11 +72,18 @@
     <!-- =================================================== 1 · ENTITIES ==== -->
     <figure class="fig" id="fig-er">
       <div class="fig-head">
-        <h2><span class="n">1</span>The nine tables</h2>
+        <h2><span class="n">1</span>The eleven tables</h2>
         <p><code>Integration</code> is the tenancy boundary. Every synced record, mapping rule,
            discovered field and run carries <code>integrationId</code> — which is why deleting one
            integration is a clean sweep, and why no query leaks another integration's data by
            omission.</p>
+        <p>The two marked <i>scratch</i> sit outside that spine. Both expire in 30 minutes and hold
+           a connect in progress rather than anything the user would miss. They are tables at all
+           because each is written by one request and read by a later one — put them in memory and
+           a second instance never sees the write, which is exactly how they failed on a serverless
+           host. <code>OAuthState</code> has no foreign key on purpose: <code>subjectId</code> names
+           a row in <code>IntegrationDraft</code> or <code>Integration</code> depending on
+           <code>subjectKind</code>.</p>
       </div>
 
       <div class="fig-tools">
@@ -99,6 +108,7 @@
       <div class="viewport">
         <div class="canvas dg-er" id="c-er" data-edges='[
           {"from":"e-user","to":"e-integration","fs":"right","ts":"left","label":"owns · 1..n"},
+          {"from":"e-user","to":"e-draft","fs":"bottom","ts":"top","label":"configured, not connected · 0..n"},
           {"from":"e-integration","to":"e-fn","fs":"left","ts":"right","label":"1..n"},
           {"from":"e-integration","to":"e-token","fs":"left","ts":"right","label":"0..1"},
           {"from":"e-integration","to":"e-mapping","fs":"left","ts":"right","label":"1..n"},
@@ -115,6 +125,30 @@
               <ul class="ent-f">
                 <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
                 <li><span class="badge uk">UK</span><span class="fname">email</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">createdAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent scratch" id="e-draft">
+              <div class="ent-h">IntegrationDraft <span class="rel">scratch · 30 min</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String · unguessable</span></li>
+                <li><span class="badge fk">FK</span><span class="fname">userId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">providerName</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">functionNames</span><span class="ftype">JSON</span></li>
+                <li><span class="badge none"></span><span class="fname">instanceLabel</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">expiresAt</span><span class="ftype">DateTime</span></li>
+                <li><span class="badge none"></span><span class="fname">createdAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent scratch" id="e-state">
+              <div class="ent-h">OAuthState <span class="rel">scratch · no FK</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">state</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">subjectKind</span><span class="ftype">draft | integration</span></li>
+                <li><span class="badge none"></span><span class="fname">subjectId</span><span class="ftype">String · either table</span></li>
+                <li><span class="badge none"></span><span class="fname">expiresAt</span><span class="ftype">DateTime</span></li>
                 <li><span class="badge none"></span><span class="fname">createdAt</span><span class="ftype">DateTime</span></li>
               </ul>
             </div>

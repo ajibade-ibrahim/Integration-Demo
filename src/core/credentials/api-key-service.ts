@@ -154,7 +154,7 @@ export async function connectDraftWithApiKey(args: {
   draftId: string;
   apiKey: string;
 }): Promise<ApiKeyConnectResult> {
-  const draft = findDraft(args.draftId);
+  const draft = await findDraft(args.draftId);
   if (draft === undefined) {
     return {
       ok: false,

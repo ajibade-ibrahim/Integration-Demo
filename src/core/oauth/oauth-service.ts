@@ -75,17 +75,17 @@ export interface AuthorizationRequest {
  * connect has no record yet — only a draft. Both carry a provider and a
  * function set, which is all this needs.
  */
-export function buildAuthorizationRequest(args: {
+export async function buildAuthorizationRequest(args: {
   subject: StateSubject;
   providerName: string;
   functionNames: readonly string[];
-}): AuthorizationRequest {
+}): Promise<AuthorizationRequest> {
   const provider = providerRegistry.require(args.providerName);
   const auth = requireOAuth(provider);
   const { clientId } = providerCredentials(provider);
 
   const scopes = resolveScopes(args.functionNames, provider.name);
-  const state = issueState(args.subject);
+  const state = await issueState(args.subject);
 
   const params = auth.buildAuthorizeParams({
     clientId,
@@ -122,7 +122,7 @@ export async function handleCallback(args: {
   state: string | null;
   providerError?: string | null;
 }): Promise<CallbackResult> {
-  const validation = consumeState(args.state);
+  const validation = await consumeState(args.state);
   if (!validation.ok || validation.subject === undefined) {
     return { ok: false, error: validation.reason ?? "Invalid state" };
   }
@@ -145,7 +145,7 @@ async function completeDraftCallback(
   draftId: string,
   args: { providerName: string; code: string | null; providerError?: string | null }
 ): Promise<CallbackResult> {
-  const draft = findDraft(draftId);
+  const draft = await findDraft(draftId);
   if (draft === undefined) {
     return {
       ok: false,
@@ -209,7 +209,7 @@ async function completeDraftCallback(
         }),
     });
 
-    discardStateForDraft(draftId);
+    await discardStateForDraft(draftId);
     return { ok: true, integrationId: integration.id };
   } catch (error) {
     console.error(
