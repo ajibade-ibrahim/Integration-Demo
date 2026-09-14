@@ -63,6 +63,7 @@ function customerRecord(
       object: "customer",
       fields: { name, domain: `${externalSourceId}.example` },
       customFields: {},
+      crossRefs: {},
     },
   };
 }
@@ -146,6 +147,7 @@ describe("Property: upsert identity", () => {
             object: "contact" as const,
             fields: { name: `Person ${id}` },
             customFields: {},
+            crossRefs: {},
           },
         }));
 

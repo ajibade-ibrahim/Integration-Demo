@@ -7,6 +7,8 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { bootstrap, resetBootstrapForTests } from "@/core/bootstrap";
+import { functionRegistry } from "@/core/registries/function-registry";
+import { getSyncHandler } from "@/core/registries/handler-registry";
 import {
   functionNamesForProvider,
   missingScopes,
@@ -16,6 +18,7 @@ import {
   scopesAreCovered,
 } from "@/core/registries/function-registry";
 import {
+  HUBSPOT_AGREEMENT_SCOPES,
   HUBSPOT_IDENTITY_SCOPES,
   HUBSPOT_SUPPORT_SCOPES,
 } from "@/core/providers/hubspot/provider";
@@ -127,5 +130,71 @@ describe("re-consent detection when a function is added", () => {
     expect(scopesAreCovered([], resolveScopes(["identity"], "hubspot"))).toBe(
       false
     );
+  });
+});
+
+describe("the agreement function", () => {
+  it("is served by every connected provider", () => {
+    // Breadth is the claim being made: one agreement model spanning a
+    // sales-led Contract, a self-serve subscription, and both at once.
+    expect(providerNamesForFunction("agreement")).toEqual([
+      "hubspot",
+      "metrifox",
+      "mock",
+      "salesforce",
+      "stripe",
+    ]);
+  });
+
+  it("widens the HubSpot request, because deals are a separate grant", () => {
+    const granted = resolveScopes(["identity"], "hubspot");
+    const required = resolveScopes(["identity", "agreement"], "hubspot");
+
+    expect(scopesAreCovered(granted, required)).toBe(false);
+    expect(missingScopes(granted, required).sort()).toEqual(
+      [...HUBSPOT_AGREEMENT_SCOPES].sort()
+    );
+  });
+
+  it("leaves the Salesforce request unchanged, as support does", () => {
+    expect(resolveScopes(["identity", "agreement"], "salesforce")).toEqual(
+      resolveScopes(["identity"], "salesforce")
+    );
+  });
+
+  it("unions and deduplicates against identity on one connection", () => {
+    const scopes = resolveScopes(["identity", "agreement"], "mock");
+    expect(new Set(scopes).size).toBe(scopes.length);
+    expect(scopes.filter((s) => s === "crm.schemas.read")).toHaveLength(1);
+    expect(scopes).toContain("crm.objects.deals.read");
+  });
+
+  it("does not leak deal access into an identity-only integration", () => {
+    const scopes = resolveScopes(["identity"], "hubspot");
+    for (const scope of HUBSPOT_AGREEMENT_SCOPES) {
+      expect(scopes).not.toContain(scope);
+    }
+  });
+
+  // A subscription is a specialization of agreement, not a sibling of invoice.
+  // Declaring it under billing is what produces a "subscription table" that
+  // order forms and amendments later have to be retrofitted onto, so this pins
+  // the declaration rather than trusting a comment to survive.
+  it("owns subscriptions, and billing does not", () => {
+    expect(functionRegistry.require("agreement").dataModels).toEqual([
+      "agreement",
+    ]);
+    expect(functionRegistry.require("billing").dataModels).not.toContain(
+      "subscription"
+    );
+  });
+
+  // Declared, not built. The picker reads the handler registry separately and
+  // offers the function as visibly unavailable; this pins that state so the
+  // declaration is not mistaken for a working sync.
+  it("has no sync handler yet, on any provider", () => {
+    for (const provider of providerNamesForFunction("agreement")) {
+      expect(getSyncHandler("agreement", provider)).toBeUndefined();
+    }
   });
 });

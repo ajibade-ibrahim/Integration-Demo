@@ -37,9 +37,40 @@ export interface MetrifoxCustomer {
   updated_at: string;
   metadata: Record<string, string>;
   contact_people: MetrifoxContactPerson[];
+
+  /**
+   * This company's id in Stripe — the `payments_stripe_customers` join, as a
+   * field on the customer.
+   *
+   * Optional so that adding it left every existing fixture literally
+   * untouched, and because the real Metrifox API does not serve it: the spec
+   * names the table but documents no field shape, and no endpoint exposes it.
+   * It is here to make the `crossRef.stripe` mapping demonstrable end to end;
+   * the crosswalk import is the route for a tenant whose API does not carry it.
+   *
+   * A Stripe sandbox assigns `cus_...` ids at creation time, so the value below
+   * is a placeholder and cannot be anything else. Set `METRIFOX_FAKE_STRIPE_IDS`
+   * to point it at a sandbox you have actually seeded — see the fake's route.
+   */
+  stripe_customer_id?: string | null;
 }
 
-/** Eight customers, so `per_page=3` spans three pages with a ragged last one. */
+/**
+ * What `stripe_customer_id` says until a real sandbox id replaces it.
+ *
+ * Deliberately not a plausible-looking id. It reaches the resolver as an
+ * `external_ref` key like any other, matches nothing, and joins nothing — which
+ * is the correct behaviour for an unconfigured demo, and visible in the
+ * Accounts tab's key list rather than silent.
+ */
+export const METRIFOX_STRIPE_ID_PLACEHOLDER = "cus_SET_METRIFOX_FAKE_STRIPE_IDS";
+
+/**
+ * Ten customers, so `per_page=3` spans four pages with a ragged last one.
+ *
+ * The first eight are the awkward ones; the last two converge with the mock and
+ * Stripe fixtures so identity resolution has something to join.
+ */
 export const METRIFOX_CUSTOMERS: MetrifoxCustomer[] = [
   {
     id: "3f1a9c2e-0d47-4b81-9a55-1c7e2b4d8f60",
@@ -294,6 +325,78 @@ export const METRIFOX_CUSTOMERS: MetrifoxCustomer[] = [
       },
     ],
   },
+
+  // --- The converging two --------------------------------------------------
+  //
+  // The eight above are their own universe and stay that way; each is pinned by
+  // a test for the branch it exercises. These two also exist in the mock and
+  // Stripe fixtures, so there is something for identity resolution to resolve.
+  {
+    // Reached three ways at once, which is the point of it: Stripe by a shared
+    // **email**, the mock CRM by a shared **domain**, and each source calls the
+    // company something slightly different — so the account also demonstrates
+    // per-field survivorship and the equal-priority `field_conflict`.
+    id: "5b8e0f14-6a72-4c39-9d1b-2e47a0c58d93",
+    customer_key: "RIDGELINE-009",
+    display_name: "Ridgeline Utilities",
+    legal_name: "Ridgeline Utilities Corporation",
+    customer_type: "BUSINESS",
+    primary_email: "billing@ridgeline.example",
+    primary_phone: "+1 503 555 0210",
+    website_url: "https://www.ridgeline.example/about",
+    currency: "USD",
+    timezone: "America/Los_Angeles",
+    country: "US",
+    // Earlier than either other source has it, which is what `createDate`'s
+    // `earliest` conflict policy exists for: the company demonstrably existed
+    // in 2021 whichever system ranks highest.
+    created_at: "2021-10-04T08:30:00.000Z",
+    updated_at: "2026-02-25T13:10:00.000Z",
+    metadata: { arr_band: "enterprise", csm_owner: "d.kimura" },
+    contact_people: [
+      {
+        is_primary: true,
+        first_name: "Nora",
+        last_name: "Ridgeway",
+        email_address: "nora.ridgeway@ridgeline.example",
+        designation: "Head of Procurement",
+        department: "Operations",
+        phone_number: "+1 503 555 0211",
+      },
+    ],
+  },
+  {
+    // The `payments_stripe_customers` case, and the only one that matters for
+    // `crossRef`: its Stripe counterpart is on a different domain under a
+    // different address, so **no email or domain key can reach it**. The
+    // crosswalk id is the entire join.
+    id: "9d3c7a26-1f58-4e02-b86d-4c1907f3e5ba",
+    customer_key: "TESSELLATE-010",
+    display_name: "Tessellate Labs",
+    legal_name: "Tessellate Laboratories Limited",
+    customer_type: "BUSINESS",
+    primary_email: "ap@tessellate.example",
+    primary_phone: "+44 161 555 0220",
+    website_url: "https://tessellate.example",
+    currency: "GBP",
+    timezone: "Europe/London",
+    country: "GB",
+    created_at: "2024-08-30T15:20:00.000Z",
+    updated_at: "2026-02-27T09:05:00.000Z",
+    metadata: { arr_band: "growth" },
+    stripe_customer_id: METRIFOX_STRIPE_ID_PLACEHOLDER,
+    contact_people: [
+      {
+        is_primary: true,
+        first_name: "Wren",
+        last_name: "Kavanagh",
+        email_address: "w.kavanagh@tessellate.example",
+        designation: "Lab Director",
+        department: "Research",
+        phone_number: "+44 161 555 0221",
+      },
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -319,6 +422,9 @@ export const METRIFOX_CUSTOMER_FIELDS: DiscoveredFieldDef[] = [
   { path: "country", label: "Country", type: "string" },
   { path: "created_at", label: "Created at", type: "datetime" },
   { path: "updated_at", label: "Updated at", type: "datetime" },
+  // Offered so the crosswalk mapping is reachable from the editor. Absent from
+  // most records, which maps to no cross-reference rather than to an error.
+  { path: "stripe_customer_id", label: "Stripe customer ID (crosswalk)", type: "string" },
 ];
 
 export const METRIFOX_CONTACT_FIELDS: DiscoveredFieldDef[] = [

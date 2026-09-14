@@ -30,17 +30,20 @@ import {
   hubspotProvider,
   HUBSPOT_IDENTITY_SCOPES,
   HUBSPOT_SUPPORT_SCOPES,
+  HUBSPOT_AGREEMENT_SCOPES,
   HUBSPOT_PROVIDER_NAME,
 } from "./providers/hubspot/provider";
 import {
   salesforceProvider,
   SALESFORCE_IDENTITY_SCOPES,
   SALESFORCE_SUPPORT_SCOPES,
+  SALESFORCE_AGREEMENT_SCOPES,
   SALESFORCE_PROVIDER_NAME,
 } from "./providers/salesforce/provider";
 import {
   isMockEnabled,
   mockProvider,
+  MOCK_AGREEMENT_SCOPES,
   MOCK_BILLING_SCOPES,
   MOCK_IDENTITY_SCOPES,
   MOCK_SUPPORT_SCOPES,
@@ -49,11 +52,13 @@ import {
 import {
   metrifoxProvider,
   METRIFOX_IDENTITY_SCOPES,
+  METRIFOX_AGREEMENT_SCOPES,
   METRIFOX_PROVIDER_NAME,
 } from "./providers/metrifox/provider";
 import {
   stripeProvider,
   STRIPE_IDENTITY_SCOPES,
+  STRIPE_AGREEMENT_SCOPES,
   STRIPE_PROVIDER_NAME,
 } from "./providers/stripe/provider";
 
@@ -96,12 +101,17 @@ export function bootstrap(): void {
   if (isMockEnabled()) registerProvider(mockProvider);
 
   // --- functions ---------------------------------------------------------
-  // Metrifox and Stripe declare identity only. Both have billing APIs too —
-  // Stripe conspicuously so — but adding those here would change what
-  // `providerNamesForFunctions` returns for ["identity","billing"], which
-  // `tests/unit/multi-function.test.ts` pins. Widening it is a deliberate
-  // change, not a drive-by: the billing function has no target schema and no
-  // handlers, so a provider claiming it would be claiming something untrue.
+  // Declaring scopes for a (function, provider) pair claims that the provider
+  // can serve that function and that these are the scopes it would need. It
+  // does not claim we have built the handler — the picker reads the handler
+  // registry separately and marks a function visibly unavailable.
+  //
+  // Billing stays mock-only although Stripe and Metrifox both have invoice
+  // APIs. That is deliberate rather than an oversight: it keeps
+  // `providerNamesForFunctions(["identity","billing"])` a genuine partial
+  // intersection, which is the only place the "a provider must cover the whole
+  // set" rule is observable, and `tests/unit/multi-function.test.ts` pins it.
+  // Agreement is the deliberate widening that comment used to ask for.
   const identityScopes: Array<[string, readonly string[]]> = [
     [HUBSPOT_PROVIDER_NAME, HUBSPOT_IDENTITY_SCOPES],
     [SALESFORCE_PROVIDER_NAME, SALESFORCE_IDENTITY_SCOPES],
@@ -119,6 +129,39 @@ export function bootstrap(): void {
       "Customer accounts and the people associated with them — names, domains, industries, emails, job titles.",
     dataModels: ["customer", "contact"],
     scopesByProvider: scopeMap(identityScopes),
+  });
+
+  // Agreement: the commercial spine, and the first function declared on four
+  // real providers at once. That breadth is the point rather than a bonus —
+  // the canonical model insists one agreement covers both a self-serve
+  // subscription and a sales-led order form, and the scope sets are where that
+  // claim first becomes checkable: Salesforce supplies Contract, Stripe
+  // supplies subscriptions, Metrifox supplies both, HubSpot supplies deals.
+  //
+  // `dataModels` is one thin entry on purpose. The canonical AGREEMENT node is
+  // six fields — id, account, offering, type, status, effective date — and the
+  // twelve-object zoom-in (items, terms, amendments, acceptance, renewals,
+  // concessions) is additive on top of it. What is expensive to retrofit is the
+  // `agreement_type` discriminator and the foreign-key shape, so those are what
+  // "build Agreement generically from day one" actually means here. Modelling
+  // amendments before anything reads them would be the opposite mistake.
+  const agreementScopes: Array<[string, readonly string[]]> = [
+    [HUBSPOT_PROVIDER_NAME, HUBSPOT_AGREEMENT_SCOPES],
+    [SALESFORCE_PROVIDER_NAME, SALESFORCE_AGREEMENT_SCOPES],
+    [METRIFOX_PROVIDER_NAME, METRIFOX_AGREEMENT_SCOPES],
+    [STRIPE_PROVIDER_NAME, STRIPE_AGREEMENT_SCOPES],
+  ];
+  if (isMockEnabled()) {
+    agreementScopes.push([MOCK_PROVIDER_NAME, MOCK_AGREEMENT_SCOPES]);
+  }
+
+  registerFunction({
+    name: "agreement",
+    label: "Agreement",
+    description:
+      "Subscriptions, order forms and contracts — what the customer agreed to, on what terms, and when it changes.",
+    dataModels: ["agreement"],
+    scopesByProvider: scopeMap(agreementScopes),
   });
 
   // Support: declared with real scopes on both CRMs, because one integration
@@ -151,11 +194,18 @@ export function bootstrap(): void {
   // yields an empty provider list and blocks the flow. The mock declares
   // billing scopes only so scope isolation stays observable — authorizing for
   // identity must never request `billing.invoices.read`.
+  // Invoice, charge and payment — not subscription. A subscription is a
+  // *specialization of* agreement in the canonical model, not a sibling of
+  // invoice, and declaring it here is what would eventually produce the
+  // "subscription table" that order forms and amendments then have to be
+  // retrofitted onto. That retrofit is named as the expensive path in the
+  // framework doc, so the fix belongs at the declaration, before anything is
+  // built against it.
   registerFunction({
     name: "billing",
     label: "Billing",
-    description: "Invoices, subscriptions, and payment history.",
-    dataModels: ["invoice", "subscription"],
+    description: "Invoices, charges, and payment history.",
+    dataModels: ["invoice", "charge", "payment"],
     scopesByProvider: scopeMap(
       isMockEnabled() ? [[MOCK_PROVIDER_NAME, MOCK_BILLING_SCOPES]] : []
     ),

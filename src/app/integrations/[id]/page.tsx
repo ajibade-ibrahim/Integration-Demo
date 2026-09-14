@@ -11,6 +11,7 @@ import { StatusBadge } from "@/app/integrations/status-badge";
 import { listRecentRuns } from "@/core/repositories/sync-run-repository";
 import { countMappings } from "@/core/repositories/mapping-repository";
 import { SyncPanel } from "./sync-panel";
+import { IdentityPanel } from "./identity-panel";
 import { DeleteButton } from "./delete-button";
 import { prisma } from "@/lib/prisma";
 
@@ -182,6 +183,20 @@ export default async function IntegrationDetailPage({
           startedAt: run.startedAt.toISOString(),
           completedAt: run.completedAt?.toISOString() ?? null,
         }))}
+      />
+
+      <IdentityPanel
+        integrationId={integration.id}
+        providerName={provider?.label ?? integration.providerName}
+        initialPriority={integration.identityPriority}
+        // Every provider but this one. A crosswalk naming this integration's
+        // own provider would pair its ids with its own ids, which is the
+        // self-key the resolver already emits for free.
+        foreignProviders={providerRegistry
+          .getAll()
+          .filter((candidate) => candidate.name !== integration.providerName)
+          .map((candidate) => ({ name: candidate.name, label: candidate.label }))
+          .sort((a, b) => a.label.localeCompare(b.label))}
       />
 
       <section className="space-y-3">

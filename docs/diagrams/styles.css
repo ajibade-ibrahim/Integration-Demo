@@ -352,12 +352,16 @@ svg.wires path.dim { opacity: 0.18; }
 .gb.c3 { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
 .gb.c4 { grid-template-columns: repeat(4, minmax(140px, 1fr)); }
 .gb.c5 { grid-template-columns: repeat(5, minmax(132px, 1fr)); }
+.gb.c6 { grid-template-columns: repeat(6, minmax(124px, 1fr)); }
 
 /* --------------------------------------------------- diagram 1: system -- */
 
 /* Column 1 is a routing gutter: the one edge that skips a band curves through
    it, and its label needs room to sit clear of the cards in column 2. */
-.dg-system { display: grid; grid-template-columns: 96px minmax(700px, 1fr); row-gap: 46px; column-gap: 0; }
+/* The content column tracks the widest group inside it, which is Orchestration:
+   6 x 124px + 5 x 10px gap = 794. Undersizing it would let that row overflow the
+   canvas the wires are measured against, and every edge would land short. */
+.dg-system { display: grid; grid-template-columns: 96px minmax(800px, 1fr); row-gap: 46px; column-gap: 0; }
 .dg-system > *:not(svg):not(.wire-labels) { grid-column: 2; }
 .dg-system .row-split { display: grid; gap: 18px; }
 .dg-system .split-boot { grid-template-columns: minmax(210px, 0.8fr) minmax(0, 2fr); gap: 74px; align-items: start; }

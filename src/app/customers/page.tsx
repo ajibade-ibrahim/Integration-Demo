@@ -1,7 +1,13 @@
 import Link from "next/link";
 import { bootstrap } from "@/core/bootstrap";
 import { currentUserId } from "@/lib/current-user";
-import { loadSyncedData } from "@/core/repositories/synced-data-repository";
+import {
+  loadAssertionsForDisplay,
+  loadCustomerAccounts,
+  loadSyncedData,
+} from "@/core/repositories/synced-data-repository";
+import { listResolutionRuns } from "@/core/repositories/identity-repository";
+import { AccountsPanel } from "./accounts-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -14,9 +20,26 @@ export default async function SyncedDataPage({
 
   const { tab } = await searchParams;
   const showContacts = tab === "contacts";
+  const showAccounts = tab === "accounts";
 
   const userId = await currentUserId();
   const { customers, contacts, totals } = await loadSyncedData(userId);
+
+  // Only for the tab that renders them. The accounts read pulls members and
+  // keys for every account, which is a lot of rows to fetch for a page showing
+  // the customer table.
+  const [accounts, assertions, runs] = showAccounts
+    ? await Promise.all([
+        loadCustomerAccounts(userId),
+        loadAssertionsForDisplay(userId),
+        listResolutionRuns(userId, 1),
+      ])
+    : [[], [], []];
+
+  // The issues of the most recent pass are the current ones by construction:
+  // resolution recomputes every account, key and field from scratch, so
+  // anything it did not report again has been settled.
+  const latestRun = runs[0];
 
   return (
     <div className="space-y-6">
@@ -40,11 +63,19 @@ export default async function SyncedDataPage({
       ) : (
         <>
           <div className="flex items-center gap-2 border-b border-slate-200">
-            <Tab href="/customers" active={!showContacts}>
+            <Tab href="/customers" active={!showContacts && !showAccounts}>
               Customers ({totals.customers})
             </Tab>
             <Tab href="/customers?tab=contacts" active={showContacts}>
               Contacts ({totals.contacts})
+            </Tab>
+            {/*
+              Listed last but it is the answer the other two raise: the same
+              company appears once per integration in Customers, and this is
+              where those rows become one company.
+            */}
+            <Tab href="/customers?tab=accounts" active={showAccounts}>
+              Accounts
             </Tab>
           </div>
 
@@ -63,7 +94,22 @@ export default async function SyncedDataPage({
             </p>
           )}
 
-          {showContacts ? (
+          {showAccounts ? (
+            <AccountsPanel
+              accounts={accounts.map((account) => ({
+                ...account,
+                // Serialized for the client boundary; a Date does not cross it.
+                createDate: account.createDate?.toISOString() ?? null,
+              }))}
+              issues={latestRun?.issues ?? []}
+              assertions={assertions}
+              lastRunAt={
+                latestRun?.completedAt?.toLocaleString() ??
+                latestRun?.startedAt.toLocaleString() ??
+                null
+              }
+            />
+          ) : showContacts ? (
             <ContactTable rows={contacts} />
           ) : (
             <CustomerTable rows={customers} />
@@ -109,6 +155,7 @@ function CustomerTable({
           <tr>
             <Th>Name</Th>
             <Th>Domain</Th>
+            <Th>Email</Th>
             <Th>Industry</Th>
             <Th>Type</Th>
             <Th>Created</Th>
@@ -122,6 +169,7 @@ function CustomerTable({
             <tr key={row.id}>
               <Td className="font-medium text-slate-900">{row.name}</Td>
               <Td>{row.domain ?? <Empty />}</Td>
+              <Td>{row.email ?? <Empty />}</Td>
               <Td>{row.industry ?? <Empty />}</Td>
               <Td>{row.type ?? <Empty />}</Td>
               <Td>

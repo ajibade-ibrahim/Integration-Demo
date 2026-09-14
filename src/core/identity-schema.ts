@@ -13,6 +13,10 @@
  * this structure exists to prevent.
  */
 
+// The one non-schema dependency here, and it earns its place: the set of valid
+// `crossRef.<provider>` targets genuinely depends on which providers exist, so
+// it is schema in the same sense the field lists are.
+import { providerRegistry } from "./registries/provider-registry";
 import {
   CUSTOMER_TYPES,
   TARGET_OBJECTS,
@@ -25,6 +29,24 @@ import {
 // ---------------------------------------------------------------------------
 
 export type FieldKind = "string" | "email" | "date" | "enum";
+
+/**
+ * How identity resolution picks a value when several sources supply one.
+ *
+ * `highestPriority` — the highest-ranked integration that supplies a non-null
+ * value wins. The default, and the rule the provider hierarchy exists to drive.
+ *
+ * `earliest` — the earliest value across sources wins, regardless of rank.
+ * Only `createDate` uses it: if HubSpot saw the company in 2019 and Stripe in
+ * 2023, it demonstrably existed in 2019, and letting rank decide would report a
+ * date we know to be wrong.
+ *
+ * Declared here, next to the field it governs, rather than as a branch inside
+ * the resolver — this file is already the single source of truth for mapping
+ * validation, the target dropdown and record validation, and survivorship is
+ * the fourth consumer of the same definitions.
+ */
+export type FieldConflictPolicy = "highestPriority" | "earliest";
 
 export interface FieldDefinition {
   /** Unqualified field name, e.g. "domain". */
@@ -44,6 +66,8 @@ export interface FieldDefinition {
    * our internal UUIDs.
    */
   readonly readOnly?: boolean;
+  /** Survivorship rule when several integrations supply this field. */
+  readonly conflictPolicy?: FieldConflictPolicy;
 }
 
 export interface ObjectSchema {
@@ -62,8 +86,19 @@ const CUSTOMER_SCHEMA: ObjectSchema = {
   fields: [
     { name: "name", label: "Name", kind: "string", required: true, maxLength: 255 },
     { name: "domain", label: "Domain", kind: "string", maxLength: 253 },
+    // A first-class field rather than a custom one because identity resolution
+    // matches on it, and `customFields` is a serialized JSON string column —
+    // not queryable, not indexable. Stripe and Metrifox are the two providers
+    // that carry an account-level address; the CRMs carry none, so this is
+    // frequently null and that is expected.
+    { name: "email", label: "Email", kind: "email", maxLength: 254 },
     { name: "industry", label: "Industry", kind: "string", maxLength: 100 },
-    { name: "createDate", label: "Create date", kind: "date" },
+    {
+      name: "createDate",
+      label: "Create date",
+      kind: "date",
+      conflictPolicy: "earliest",
+    },
     {
       name: "type",
       label: "Type",
@@ -111,20 +146,95 @@ export const MAX_CUSTOM_FIELDS = 50;
 export const MAX_CUSTOM_FIELD_VALUE_LENGTH = 1000;
 
 // ---------------------------------------------------------------------------
+// Cross-integration references
+// ---------------------------------------------------------------------------
+
+/**
+ * `crossRef.<provider>` — this record names the same company's id in another
+ * provider.
+ *
+ * The mapping target for the join the governing spec calls for and no API
+ * offers: Metrifox's `payments_stripe_customers` relates a Metrifox customer to
+ * a Stripe customer, but the Metrifox connector cannot fetch it. When the
+ * foreign id happens to ride on a record the connector *already* reads, a
+ * mapping rule is all it takes — so this reuses the mapping editor,
+ * `validateMappings`, the transforms and the source dropdown wholesale, and
+ * adds no UI.
+ *
+ * Deliberately not `customFields.stripe_customer_id`. A custom field is a
+ * serialized JSON string: not queryable, not indexable, and indistinguishable
+ * from any other opaque note the user chose to keep. A cross-reference has to
+ * be found by value, which is the same argument that promoted `email` to a real
+ * column.
+ *
+ * Character class matches provider names, which are lowercase identifiers.
+ */
+export const CROSS_REF_PATTERN = /^crossRef\.([a-z0-9][a-z0-9_-]{0,49})$/;
+
+/**
+ * The provider named by a `crossRef.<provider>` path, whether or not it is
+ * registered.
+ *
+ * Shape only. Kept separate from `resolveTargetField` so a rule naming an
+ * unknown provider can be told apart from a rule naming nothing at all, and
+ * reported as "'nonsense' is not a known provider" instead of the misleading
+ * "not a field on customer".
+ */
+export function crossRefProviderName(fieldPath: string): string | undefined {
+  return CROSS_REF_PATTERN.exec(fieldPath)?.[1];
+}
+
+/**
+ * Objects a cross-reference may be mapped onto.
+ *
+ * Customer only. A cross-reference is a claim that two records are the same
+ * *company*; person-level identity — the spec's `USER` entity — is a separate
+ * problem with its own match rules, and offering the target before those exist
+ * would accept data nothing reads.
+ */
+const CROSS_REF_OBJECTS: readonly TargetObject[] = ["customer"];
+
+// ---------------------------------------------------------------------------
 // Lookups
 // ---------------------------------------------------------------------------
 
 /**
+ * What a target path resolves to.
+ *
+ * A union rather than a boolean so that widening it — as `"crossRef"` did —
+ * makes the compiler name every consumer that has to decide what the new kind
+ * means, the same way `ProviderAuth` does for credentials.
+ */
+export type ResolvedTarget = FieldDefinition | "customField" | "crossRef";
+
+/**
  * Resolve a target field within one object's schema.
  *
+ * The `crossRef` case is the one that is not purely a function of this file:
+ * the provider segment is checked against `providerRegistry`, so
+ * `crossRef.nonsense` cannot be saved. That means **bootstrap must have run**
+ * for a cross-reference path to validate — which is true of the mapping editor
+ * and the sync engine alike, and a test that asserts on one has to call
+ * `bootstrap()` first.
+ *
  * @returns The definition, `"customField"` for a valid `customFields.<key>`
- *   path, or `undefined` if the path names nothing in this object.
+ *   path, `"crossRef"` for a `crossRef.<registered provider>` path on an object
+ *   that accepts one, or `undefined` if the path names nothing usable here.
  */
 export function resolveTargetField(
   object: TargetObject,
   fieldPath: string
-): FieldDefinition | "customField" | undefined {
+): ResolvedTarget | undefined {
   if (CUSTOM_FIELD_PATTERN.test(fieldPath)) return "customField";
+
+  const crossRefProvider = crossRefProviderName(fieldPath);
+  if (crossRefProvider !== undefined) {
+    if (!CROSS_REF_OBJECTS.includes(object)) return undefined;
+    return providerRegistry.get(crossRefProvider) === undefined
+      ? undefined
+      : "crossRef";
+  }
+
   return IDENTITY_SCHEMA[object].fields.find((f) => f.name === fieldPath);
 }
 

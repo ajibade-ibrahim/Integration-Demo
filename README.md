@@ -200,6 +200,69 @@ rejecting it at creation time the rest of the fixture run has already succeeded.
    has been warned instead of getting a silently empty column.
 7. Re-sync and confirm the counts do not move.
 
+### The identity walkthrough — one company out of three rows
+
+The other two walkthroughs each end at "the records landed". This one is about
+what happens *across* them: one real company connected through three systems is
+three unrelated `Customer` rows until something resolves them onto one account.
+
+Connect the mock provider, Metrifox and Stripe, sync each, then open
+**Customers → Accounts**.
+
+| Company | How the three rows find each other |
+| --- | --- |
+| **Ridgeline Utilities** | Metrifox meets Stripe on a shared billing **email**; it meets the CRM on a shared **domain**. Stripe has no website field at all, which is why email is a key kind and not just domain |
+| **Halcyon Foods** | The CRM has no account-level address, so the join runs through one of its **contacts** — the universal route, since all five providers map `contact.email` |
+| **Tessellate Labs** | Different name, different domain, different address in Stripe. **No email or domain key can reach it.** Only the crosswalk can — see below |
+
+Things worth looking at while you are there:
+
+- Each field carries a **provider chip** naming the connection that supplied it.
+  Stripe wins the email, the CRM wins the industry, and neither erases the
+  other: a field is contested only among the sources that actually carry a
+  value, so a null never wins.
+- Ridgeline is named differently by all three at equal priority, so the account
+  reports a **field conflict** rather than presenting an arbitrary pick as a
+  decision. Set a **Source priority** on one integration (its detail page) and
+  the resolved values follow it — while the grouping does not move at all. That
+  separation is the safety property the whole design rests on.
+- Ridgeline's **Created** date is the earliest of the three, not the
+  highest-priority one. If the CRM saw the company in 2021 and Stripe in 2023,
+  it existed in 2021.
+- **“Not this company”** and **“Same company as…”** record a human verdict that
+  every later pass honours. They are the only inputs the resolver will never
+  revise on its own, which is also why each one is listed with an undo.
+
+#### The crosswalk — Tessellate, and `payments_stripe_customers`
+
+The spec calls Metrifox's `payments_stripe_customers` the join that makes one
+`customer_account_id` possible, and **no Metrifox endpoint exposes it**. So
+there are two supply routes, both on the integration's detail page:
+
+```bash
+stripe customers list --limit 20   # find the id of "Tessellate Labs (UK)"
+```
+
+- **Mapped field.** Set `METRIFOX_FAKE_STRIPE_IDS="TESSELLATE-010=cus_…"` and
+  restart. The fake then serves that id on the fixture, the default
+  `stripe_customer_id → crossRef.stripe` mapping picks it up, and the next
+  resolution joins the two. (The value cannot be a fixture: Stripe assigns
+  `cus_…` at creation time.)
+- **Imported crosswalk.** Or paste `TESSELLATE-010,cus_…` into **Import a
+  crosswalk** on the Metrifox integration, which is the honest answer for a
+  table no API serves. Both ends are asked for rather than guessed — a wrong
+  guess would join two unrelated companies using the strongest evidence the
+  matcher has.
+
+Either way the account then shows two members with no address in common, which
+is the whole point of the `external_ref` key kind.
+
+> Already-connected integrations keep the mappings they were seeded with —
+> `seedMappingsIfEmpty` bails when any rule exists — so neither the
+> `crossRef.stripe` default nor the account-email one reaches a connection made
+> before they shipped. `npm run mappings:retarget` is the migration for both;
+> see [Migrating existing connections](#migrating-existing-connections).
+
 ### With real credentials
 
 **HubSpot** — create a developer app, set the redirect URI to
@@ -336,6 +399,8 @@ src/core/                framework-free domain — no Next.js imports
   identity-schema.ts     target field definitions; single source of truth
   registries/            function, provider, and handler registries
   field-mapper/          validate, apply, serialize
+  identity/              cross-integration resolution — evidence, survivorship,
+                         assertions, the pass; all pure but the resolver itself
   oauth/                 service, AES-256-GCM crypto, state store
   integrations/          draft store, and creating a connection from a draft
   sync/                  engine, record writer, scheduler, clock, errors
@@ -367,7 +432,7 @@ number. The one thing it needed that Metrifox did not is a synthesized field:
 Stripe's epoch-seconds `created` has to become an ISO string in the handler,
 because no transform downstream can rescue it.
 
-The nine tables, their cascade behaviour, and the `Integration.status`
+The fifteen tables, their cascade behaviour, and the `Integration.status`
 lifecycle are diagrammed in [`docs/data-model.md`](docs/data-model.md).
 The layering, registries, and request flows are diagrammed in
 [`docs/architecture.md`](docs/architecture.md).
@@ -459,6 +524,45 @@ runners cannot reach.
 > `db:push` uses `prisma db push`, which has no migration history. That is
 > fine for a demo with no data worth protecting; anything real wants
 > `prisma migrate deploy` and a committed `prisma/migrations/`.
+
+### Migrating existing connections
+
+Two mapping defaults changed after connections already existed, and
+`seedMappingsIfEmpty` can deliver neither: it returns early when an integration
+has any rule at all, which is exactly what stops a reconnect from trampling a
+user's edits. So the change has to be pushed rather than pulled.
+
+```bash
+npm run mappings:retarget                 # dry run — prints every change
+npm run mappings:retarget -- --apply
+```
+
+| Change | Was | Is |
+|---|---|---|
+| The account email became a column | `customFields.email` / `customFields.primary_email` | `customer.email` |
+| Metrifox gained the Stripe join | *(nothing)* | `stripe_customer_id → crossRef.stripe` |
+
+It **rewrites** the email rule rather than adding one. `validateMappings` is
+perfectly happy with the old and new targets side by side — they are different
+paths, so the duplicate check never fires — and the result is the same address
+written to two places on every record of every sync, with nothing failing
+loudly to say so.
+
+It also moves the addresses **already synced** into the column. Without that
+the script appears to do nothing: the retargeted rule only takes effect on the
+next sync, and a tenant that has stopped syncing would keep a null column
+indefinitely. Nothing is deleted — a `customFields` key is dropped only once
+the same address is in the column, and one that cannot be moved is left exactly
+where it is and named individually in the output.
+
+That output is also the gate on removing the legacy `customFields` fallback in
+`identity/evidence.ts`: each record the script could not move is a join that
+removal would cost.
+
+Dry run by default, idempotent, and safe to re-run. The decisions are pure and
+live in [`src/core/identity/mapping-retarget.ts`](src/core/identity/mapping-retarget.ts)
+with tests, because a migration is the one kind of code that runs against real
+data once and is then never exercised again.
 
 ### Still required before this is public
 

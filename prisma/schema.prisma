@@ -55,6 +55,9 @@ model User {
   createdAt    DateTime           @default(now())
   integrations Integration[]
   drafts       IntegrationDraft[]
+
+  customerAccounts CustomerAccount[]
+  identityRuns     IdentityResolutionRun[]
 }
 
 model Integration {
@@ -74,6 +77,20 @@ model Integration {
 
   /// Hours between scheduled syncs. Clamped to 1..168 in app code.
   syncIntervalHours Int @default(24)
+
+  /// Rank used to settle *value* conflicts between sources — lower wins.
+  ///
+  /// Never used for matching. Precedence decides what an account says about
+  /// itself; it can never repartition which customers belong together, because
+  /// if it could, changing a rank would silently regroup someone's customer
+  /// list. Clamped to 1..1000 in app code, as syncIntervalHours is clamped.
+  ///
+  /// Per-integration rather than per-provider, so two HubSpot portals can be
+  /// ordered against each other. Defaulting every integration to the same
+  /// value means most conflicts start tied — deliberately: a tie is reported
+  /// as a `field_conflict` rather than resolved by an arbitrary pick dressed
+  /// up as a decision.
+  identityPriority Int @default(100)
 
   authorizationTimestamp DateTime?
   lastSyncTimestamp      DateTime?
@@ -200,8 +217,15 @@ model Customer {
   /// Provider-assigned id. The upsert key, paired with integrationId.
   externalSourceId String
 
-  name       String
-  domain     String?
+  name   String
+  domain String?
+
+  /// Account-level email. A real column rather than a `customFields` key
+  /// because identity resolution matches on it, and customFields is serialized
+  /// JSON — neither queryable nor indexable. Only Stripe and Metrifox supply
+  /// one; both CRMs carry no account-level address, so null is common.
+  email String?
+
   industry   String?
   createDate DateTime?
 
@@ -211,11 +235,56 @@ model Customer {
   /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
   customFields String @default("{}")
 
+  /// JSON object of `<providerName> -> <that provider's id for this company>`,
+  /// written from `crossRef.<provider>` mapping rules.
+  ///
+  /// Kept beside `customFields` rather than written straight to
+  /// `CustomerAccountKey`, because at sync time this row has no account yet —
+  /// resolution is a separate per-user pass, and the whole point of a
+  /// cross-reference is that the record it names may not have been synced.
+  /// Bounded by construction: a target path must name a registered provider and
+  /// mapping targets are unique, so there is one key per provider at most.
+  crossRefs String @default("{}")
+
+  /// The same shape as `crossRefs`, but supplied by a human rather than by a
+  /// mapping rule — pasted or uploaded `<local id>,<foreign id>` pairs, which
+  /// is the honest answer for Metrifox's `payments_stripe_customers` table
+  /// since no API exposes it.
+  ///
+  /// A separate column rather than merged into `crossRefs`, for a reason that
+  /// is not stylistic: the record writer overwrites `crossRefs` wholesale on
+  /// every upsert, so an imported pair stored there would survive exactly until
+  /// the next sync. Keeping them apart also lets a key record
+  /// `imported_crosswalk` as its source rather than claiming a mapping rule it
+  /// never came from.
+  importedCrossRefs String @default("{}")
+
+  /// The canonical company this row resolves to.
+  ///
+  /// Nullable only in the window before the first resolution pass sees the row.
+  /// The pass's own "done when" is that every customer ends up linked — a
+  /// record with no usable match key gets a singleton account rather than being
+  /// left out, so a lasting null means resolution has not run, not that the
+  /// record was unmatchable.
+  ///
+  /// `SetNull` rather than `Cascade`: accounts are created, absorbed and reaped
+  /// by every pass, and a cascade would make deleting an emptied shell delete
+  /// the customers that had just been moved off it.
+  customerAccountId String?
+  customerAccount   CustomerAccount? @relation(fields: [customerAccountId], references: [id], onDelete: SetNull)
+
   updatedAt DateTime  @updatedAt
   contacts  Contact[]
 
+  /// Both sides of every human assertion naming this row. Two relations
+  /// because the pair is canonically ordered by id, so a given customer may be
+  /// on either side depending on who it is paired with.
+  assertionsAsLeft  IdentityAssertion[] @relation("AssertionLeft")
+  assertionsAsRight IdentityAssertion[] @relation("AssertionRight")
+
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
+  @@index([customerAccountId])
 }
 
 model Contact {
@@ -246,6 +315,203 @@ model Contact {
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
   @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------
+// Identity resolution
+//
+// One real company connected through HubSpot, Stripe and Metrifox arrives as
+// three unrelated `Customer` rows — every write and lookup above is scoped by
+// `integrationId`, and `Customer` is keyed `[integrationId, externalSourceId]`.
+// These four tables are what makes those three rows one company.
+//
+// `userId` on every one of them is the load-bearing detail. Two users can hold
+// customers with the same billing address, and an account or key that is not
+// tenant-scoped would merge them. That is the severe failure mode here: not a
+// missed join, which is visible and recoverable, but one customer's data
+// appearing under another's company. Every query in
+// src/core/repositories/identity-repository.ts filters on it, and the uniques
+// below lead with it.
+// ---------------------------------------------------------------------------
+
+/// One real-world company. Many per-integration `Customer` rows resolve onto it.
+model CustomerAccount {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Survivorship result, mirroring CUSTOMER_SCHEMA: each field won by the
+  /// highest-priority member that actually supplies a value — a null is not an
+  /// opinion, so a top-ranked source carrying no industry does not blank it.
+  ///
+  /// Materialized rather than computed on read, so accounts sort and filter in
+  /// SQL the way `Customer` already does. Safe to materialize because it is a
+  /// pure function of (members, precedence) and every pass recomputes it whole,
+  /// so it cannot drift from its inputs.
+  name       String
+  domain     String?
+  email      String?
+  industry   String?
+  createDate DateTime?
+
+  /// CustomerType: prospect | customer | partner | vendor
+  type String?
+
+  /// Union across members, higher priority winning a shared key. JSON via
+  /// src/core/repositories/json-column.ts, bounded by MAX_CUSTOM_FIELDS.
+  customFields String @default("{}")
+
+  /// field name -> the integrationId that won it, as JSON.
+  ///
+  /// Traceability is an explicit requirement of the governing spec, and it is
+  /// what lets the UI show a provider chip beside each field instead of
+  /// presenting a merged record as if it came from nowhere.
+  fieldProvenance String @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members Customer[]
+  keys    CustomerAccountKey[]
+
+  @@index([userId])
+  @@index([userId, name])
+}
+
+/// The identity table: `customer_account_id -> [keys]`, one-to-many.
+///
+/// `@@unique([userId, kind, value])` *is* the join. Within one tenant a key
+/// belongs to at most one account, so a second account claiming the same key is
+/// a detectable conflict rather than a silent overwrite — and the database, not
+/// the resolver, is what guarantees it under concurrent passes.
+///
+/// `userId` is denormalized rather than reached through the account because
+/// Prisma cannot express a unique spanning a relation. `OAuthState` keeps
+/// `subjectKind`/`subjectId` flat for the same reason.
+model CustomerAccountKey {
+  id     String @id @default(uuid())
+  userId String
+
+  customerAccountId String
+  customerAccount   CustomerAccount @relation(fields: [customerAccountId], references: [id], onDelete: Cascade)
+
+  /// IdentityKeyKind: external_ref | email | domain.
+  ///
+  /// The array order in src/core/types/common.ts is the strength ranking, which
+  /// is why it is an ordered const and not a Set: when two accounts both match,
+  /// the stronger kind wins. A foreign system's own id beats an email beats a
+  /// shared domain.
+  kind String
+
+  /// The normalized matching value — lowercased, trimmed, plus-tag stripped for
+  /// emails; a bare host for domains; `<provider>:<scope>:<externalId>` for
+  /// external_ref. Never displayed: show `rawValue`.
+  value String
+
+  /// As the provider gave it, first writer wins. Kept so a user adjudicating a
+  /// conflict sees the address they recognise rather than its normalized form.
+  rawValue String
+
+  /// EmailClass: corporate | role | freemail.
+  ///
+  /// Always "corporate" for a domain key, because a freemail host is refused as
+  /// a domain key outright — that refusal is the whole defence against someone
+  /// mapping an email through `domainFromUrl` and merging every
+  /// consumer-address customer into one account.
+  emailClass String
+
+  /// IdentityEvidenceSource: customer_email | customer_domain |
+  /// customer_custom_field | contact_email | self_reference | mapped_cross_ref |
+  /// imported_crosswalk
+  source              String
+  sourceIntegrationId String
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @updatedAt
+
+  @@unique([userId, kind, value])
+  @@index([customerAccountId])
+}
+
+/// A human's verdict on whether two customers are the same company. Outranks
+/// every inferred key.
+///
+/// Anchored to `Customer` rows, **not** accounts. Account ids are created,
+/// absorbed and reaped by every pass, so they are not stable anchors — an
+/// assertion pinned to one would evaporate the first time its account was
+/// absorbed. A `Customer` row survives re-sync, because the writer upserts it,
+/// and cascades away with its integration. That is exactly the lifetime an
+/// assertion should have.
+///
+/// `distinct` matters as much as `same`. A false merge is any matcher's worst
+/// failure, and without a negative verdict a shared role address on a shared
+/// agency domain would re-merge on every pass with nothing the user could do
+/// about it. Assertions are only ever read by the resolver, never written by
+/// it, which is what makes them stick through a pass that recomputes
+/// everything else.
+model IdentityAssertion {
+  id String @id @default(uuid())
+
+  /// Denormalized for filtering. No `User` relation: these cascade away
+  /// through `Customer` -> `Integration` -> `User`, so a second cascade path
+  /// would add nothing but a way for the two to disagree.
+  userId String
+
+  /// IdentityAssertionKind: same | distinct
+  kind String
+
+  /// Canonically ordered, so `leftCustomerId` < `rightCustomerId`
+  /// lexicographically. Without that ordering (A,B) and (B,A) both insert
+  /// happily and the unique below means nothing.
+  leftCustomerId  String
+  rightCustomerId String
+  left            Customer @relation("AssertionLeft", fields: [leftCustomerId], references: [id], onDelete: Cascade)
+  right           Customer @relation("AssertionRight", fields: [rightCustomerId], references: [id], onDelete: Cascade)
+
+  /// Why, in the user's own words. Shown when explaining a grouping.
+  note String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([leftCustomerId, rightCustomerId])
+  @@index([userId])
+}
+
+/// One execution of the resolution pass.
+///
+/// Per user, not per integration — resolution is cross-integration by nature,
+/// which is also why it is a separate pass rather than a step inside
+/// `sync-engine`. Modelled on `SyncRun` below down to the JSON-in-String issues
+/// column: same lifecycle, and the same policy that a per-record problem is
+/// recorded and never aborts the run. It reuses SyncRunStatus because the five
+/// states mean the same things here, "discarded" included — that is what the
+/// concurrency guard produces.
+model IdentityResolutionRun {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SyncRunStatus: running | success | partial | failed | discarded
+  status String
+
+  /// IdentityRunTrigger: sync | scheduled | manual
+  trigger String @default("sync")
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  accountsCreated  Int @default(0)
+  accountsAbsorbed Int @default(0)
+  accountsReaped   Int @default(0)
+  customersLinked  Int @default(0)
+  keysIndexed      Int @default(0)
+
+  /// JSON array of IdentityIssue, via src/core/repositories/json-column.ts.
+  issuesJson String @default("[]")
+
+  /// `startedAt` is indexed because it is both how runs are listed and the
+  /// watermark the incremental path will filter `Customer.updatedAt` against.
+  @@index([userId, startedAt])
 }
 
 model SyncRun {

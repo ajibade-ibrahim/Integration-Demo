@@ -19,6 +19,7 @@
     "db:studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
     "users:add": "tsx scripts/add-users.mts",
+    "mappings:retarget": "tsx scripts/retarget-account-email-mappings.mts",
     "worker": "tsx scripts/worker.ts"
   },
   "dependencies": {

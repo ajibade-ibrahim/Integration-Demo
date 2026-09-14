@@ -13,6 +13,7 @@ import {
   listAllIntegrations,
   updateStatus,
 } from "../repositories/integration-repository";
+import { resolveAfterSync } from "../identity/resolve-after-sync";
 import { executeSync } from "./sync-engine";
 import { systemClock, type Clock } from "./clock";
 import type { IntegrationRecord } from "../repositories/integration-repository";
@@ -43,11 +44,20 @@ export interface ScheduledRun {
   error?: string;
 }
 
+/** One per distinct owner of the integrations a tick synced, not one per run. */
+export interface ScheduledResolution {
+  userId: string;
+  status: string;
+  accountsCreated: number;
+  customersLinked: number;
+}
+
 export interface SchedulerResult {
   checked: number;
   due: number;
   runs: ScheduledRun[];
   expired: number;
+  resolutions: ScheduledResolution[];
 }
 
 export interface SchedulerOptions {
@@ -92,7 +102,65 @@ export async function runScheduledSyncs(
     });
   }
 
-  return { checked: all.length, due: due.length, runs, expired };
+  return {
+    checked: all.length,
+    due: due.length,
+    runs,
+    expired,
+    resolutions: await resolveTouchedUsers(selected),
+  };
+}
+
+/**
+ * Resolve identities once per distinct owner of the integrations just synced.
+ *
+ * Once per *user* is the point. Resolution is a cross-integration, whole-tenant
+ * pass, so a tick covering three of one user's connections would otherwise run
+ * the same pass three times — and the first two would run against a tenant that
+ * is still half-synced, reaching groupings the third pass then has to revise.
+ * After the loop rather than interleaved with it, for the same reason.
+ *
+ * A user whose sync failed is still resolved. The pass is over every customer
+ * the tenant has, not over what this tick fetched, so there is usually
+ * something to group even when today's fetch got nothing — and skipping it
+ * would mean a provider outage also froze the grouping of every other
+ * integration the user owns.
+ */
+async function resolveTouchedUsers(
+  synced: readonly IntegrationRecord[]
+): Promise<ScheduledResolution[]> {
+  const resolutions: ScheduledResolution[] = [];
+  for (const userId of distinctOwners(synced)) {
+    const outcome = await resolveAfterSync(userId, "scheduled");
+    resolutions.push({
+      userId,
+      // `undefined` means resolution threw and `resolveAfterSync` swallowed it
+      // to protect the syncs. Naming it here keeps the tick's report honest
+      // without failing the tick.
+      status: outcome?.status ?? "failed",
+      accountsCreated: outcome?.counts.accountsCreated ?? 0,
+      customersLinked: outcome?.counts.customersLinked ?? 0,
+    });
+  }
+  return resolutions;
+}
+
+/**
+ * The distinct owners of a set of integrations, sorted.
+ *
+ * Sorted so that a tick's report does not depend on the order integrations were
+ * selected in.
+ *
+ * Exported for its own test rather than tested through a whole tick.
+ * `runScheduledSyncs` sweeps every integration in the database by design, so a
+ * test that drove one would also sync and resolve whatever other tenants
+ * happened to be live at that moment — including ones another test file is
+ * concurrently asserting against.
+ */
+export function distinctOwners(
+  integrations: readonly IntegrationRecord[]
+): string[] {
+  return [...new Set(integrations.map((integration) => integration.userId))].sort();
 }
 
 /**

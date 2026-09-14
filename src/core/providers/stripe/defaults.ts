@@ -34,7 +34,10 @@ export const stripeIdentityDefaults: FieldMappingRule[] = [
   // `created_at` is synthesized by the handler from `created`. Mapping `created`
   // directly stores nothing: epoch seconds do not survive the date parse.
   { sourceFieldPath: "created_at", targetObject: "customer", targetFieldPath: "createDate", transform: "none" },
-  { sourceFieldPath: "email", targetObject: "customer", targetFieldPath: "customFields.email", transform: "lowercase" },
+  // Targets the first-class `email` field, not a custom one: identity
+  // resolution matches on it, and Stripe is one of only two providers that
+  // supplies an account-level address at all.
+  { sourceFieldPath: "email", targetObject: "customer", targetFieldPath: "email", transform: "lowercase" },
   { sourceFieldPath: "description", targetObject: "customer", targetFieldPath: "customFields.description", transform: "trim" },
   { sourceFieldPath: "currency", targetObject: "customer", targetFieldPath: "customFields.currency", transform: "none" },
   // `0` and `false` survive: the mapper drops empty strings and nulls from

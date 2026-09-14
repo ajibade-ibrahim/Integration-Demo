@@ -531,6 +531,12 @@
      Integration→child relations are Cascade; Customer→Contact alone is SetNull.
      OAuthState appears in none of them — it has no foreign key, because its
      `subjectId` names a row in one of two tables depending on `subjectKind`.
+
+     The four identity tables are drawn in §2 rather than §1, so they carry no
+     node here to mark. They are not omitted from the rules, though: deleting a
+     User also takes CustomerAccount and IdentityResolutionRun (Cascade), and
+     CustomerAccountKey with them. Their absence is stated in the notes below
+     rather than left for a reader to assume the other way.
   ---------------------------------------------------------------------------*/
 
   var UNDER_INTEGRATION = [
@@ -545,7 +551,10 @@
             "<code>onDelete: Cascade</code>, and so is every relation beneath it — one " +
             "delete removes that user's integrations and every credential, mapping, " +
             "synced record and run underneath, plus any half-finished draft. Nothing is " +
-            "left orphaned."
+            "left orphaned. <b>The identity layer goes too</b>, though it is drawn in §2 " +
+            "rather than here: <code>CustomerAccount</code> and " +
+            "<code>IdentityResolutionRun</code> hang off <code>User</code> directly, and " +
+            "<code>CustomerAccountKey</code> follows its account."
     },
     integration: {
       gone: ["e-integration"].concat(UNDER_INTEGRATION),
@@ -553,7 +562,10 @@
       note: "<b>The tenancy boundary.</b> Every table below carries " +
             "<code>integrationId</code>, so removing one integration is a clean sweep — " +
             "and the reason no query can leak another integration's data by omission. " +
-            "The owning <code>User</code> is untouched."
+            "The owning <code>User</code> is untouched. So are that user's " +
+            "<code>CustomerAccount</code> rows (§2), which is why the resolution pass " +
+            "begins by reaping the ones a disconnect just emptied: a shell still holding " +
+            "a key claim would block the right account from ever forming."
     },
     customer: {
       gone: ["e-customer"],
@@ -561,7 +573,9 @@
       note: "<b>Deliberately not a cascade.</b> <code>Customer → Contact</code> is " +
             "<code>SetNull</code>: losing a company record must not silently delete the " +
             "people attached to it. Each contact survives with <code>customerId = null</code> " +
-            "and keeps its <code>externalCustomerId</code>, so a later sync can relink it."
+            "and keeps its <code>externalCustomerId</code>, so a later sync can relink it. " +
+            "<code>Customer → IdentityAssertion</code> (§2) is the opposite and Cascades — a " +
+            "human's verdict about a row that no longer exists is not a verdict."
     }
   };
 

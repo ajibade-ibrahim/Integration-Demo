@@ -5,6 +5,7 @@
 import {
   CUSTOM_FIELD_PATTERN,
   MAX_CUSTOM_FIELD_VALUE_LENGTH,
+  crossRefProviderName,
   resolveTargetField,
 } from "../identity-schema";
 import {
@@ -86,8 +87,21 @@ export function validateMappings(
       });
     } else {
       const resolved = resolveTargetField(rule.targetObject, target);
+      const crossRefProvider = crossRefProviderName(target);
 
-      if (resolved === undefined) {
+      if (resolved === undefined && crossRefProvider !== undefined) {
+        // The path is a well-formed cross-reference, so the problem is the
+        // provider or the object — never "not a field", which would send the
+        // user looking for a typo in a path that is shaped correctly.
+        violations.push({
+          index,
+          field: "targetFieldPath",
+          message:
+            rule.targetObject === "customer"
+              ? `'${crossRefProvider}' is not a known provider`
+              : `A cross-reference identifies a company, so it can only be mapped onto a customer`,
+        });
+      } else if (resolved === undefined) {
         // Name the object explicitly: mapping a contact field onto a customer
         // is the most likely mistake and the message should say so.
         violations.push({
@@ -95,7 +109,11 @@ export function validateMappings(
           field: "targetFieldPath",
           message: `'${target}' is not a field on ${rule.targetObject}`,
         });
-      } else if (resolved !== "customField" && resolved.readOnly === true) {
+      } else if (
+        resolved !== "customField" &&
+        resolved !== "crossRef" &&
+        resolved.readOnly === true
+      ) {
         violations.push({
           index,
           field: "targetFieldPath",
@@ -182,6 +200,7 @@ export function applyMappings(
 ): MappedRecord {
   const fields: Record<string, string | null> = {};
   const customFields: Record<string, string> = {};
+  const crossRefs: Record<string, string> = {};
 
   for (const rule of rules) {
     if (rule.targetObject !== object) continue;
@@ -198,10 +217,24 @@ export function applyMappings(
       continue;
     }
 
+    const crossRefProvider = crossRefProviderName(rule.targetFieldPath);
+    if (crossRefProvider !== undefined) {
+      // Absent means "this record names no counterpart", which is ordinary —
+      // most records will not. A null entry would later read as a reference to
+      // nothing and have to be filtered out again by every consumer.
+      if (value !== null && value !== "") {
+        crossRefs[crossRefProvider] = value.slice(
+          0,
+          MAX_CUSTOM_FIELD_VALUE_LENGTH
+        );
+      }
+      continue;
+    }
+
     fields[rule.targetFieldPath] = value;
   }
 
-  return { object, fields, customFields };
+  return { object, fields, customFields, crossRefs };
 }
 
 /** Source paths a handler needs to request, grouped by object. */

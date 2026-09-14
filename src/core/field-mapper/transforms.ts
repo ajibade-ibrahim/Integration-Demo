@@ -8,8 +8,15 @@
 
 import type { FieldTransform } from "../types/mapping";
 
-/** Strip scheme, `www.`, port, path and query, leaving a bare lowercase host. */
-function domainFromUrl(value: string): string | null {
+/**
+ * Strip scheme, `www.`, port, path and query, leaving a bare lowercase host.
+ *
+ * Exported because identity resolution needs the same host extraction when it
+ * turns a `customer.domain` value into a match key. Two implementations of
+ * "the host part of this" would drift, and a drifted matcher silently fails to
+ * join records rather than erroring.
+ */
+export function domainFromUrl(value: string): string | null {
   const trimmed = value.trim();
   if (trimmed === "") return null;
 

@@ -43,6 +43,16 @@ export const STRIPE_PROVIDER_NAME = "stripe";
  */
 export const STRIPE_IDENTITY_SCOPES = ["customers:read"] as const;
 
+/**
+ * Scopes for the agreement function.
+ *
+ * Subscriptions only. Stripe also exposes `quotes`, but a quote is a
+ * pre-agreement offer — the canonical model has it converting *to* an
+ * agreement rather than being one — so reading it is a claim to make when
+ * proposal/quote is modelled, not now.
+ */
+export const STRIPE_AGREEMENT_SCOPES = ["subscriptions:read"] as const;
+
 /** Cap on the connect-time probe, so a hung provider cannot wedge the request. */
 const PROBE_TIMEOUT_MS = 15_000;
 
@@ -131,4 +141,11 @@ export const stripeProvider: ProviderDefinition = {
     "Sync customers from Stripe, with a billing contact derived from each customer's own name and email. Authenticates with an API key — there is no OAuth app to register.",
 
   auth: stripeAuth,
+
+  // `cus_…` ids are unique across all of Stripe, so one names the same customer
+  // no matter which account holds the key that reads it. That is what makes the
+  // Metrifox → Stripe crosswalk work: a Metrifox record can name a Stripe
+  // customer id and the reference resolves without either side agreeing on a
+  // tenant.
+  externalIdScope: "global",
 };

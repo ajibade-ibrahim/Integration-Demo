@@ -21,13 +21,10 @@ import {
 } from "../identity-schema";
 import type { MappedRecord } from "../types/mapping";
 import { writeJsonObject } from "../repositories/json-column";
-
-/**
- * Email shape check: a non-empty local part, an @, and a dotted domain.
- * Deliberately permissive — the goal is catching obvious rubbish, not
- * adjudicating RFC 5322.
- */
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
+// Imported rather than defined here: identity resolution matches on the same
+// addresses this writer validates, and two definitions of "a valid address"
+// would let the writer store something the matcher silently refuses to join on.
+import { EMAIL_PATTERN } from "../identity/normalize";
 
 export interface WriteOutcome {
   written: number;
@@ -124,9 +121,31 @@ export async function writeCustomers(
       }
     }
 
+    // A malformed account email is warned about and nulled, *not* rejected —
+    // the opposite of the contact policy a hundred lines down, and deliberately
+    // so. A contact is rejected because an address is a person's primary
+    // identifier; a customer's identity is `name` + `externalSourceId`, so
+    // discarding an entire company over one bad field is worse than an empty
+    // column. Same treatment `type` gets just above.
+    let email = normalize(
+      mapped.fields["email"] ?? null,
+      maxLengthOf("customer", "email")
+    );
+    if (email !== null && !EMAIL_PATTERN.test(email)) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "customer",
+        reason: `'${email}' is not a valid email address; left unset`,
+        fieldName: "email",
+        severity: "warning",
+      });
+      email = null;
+    }
+
     const data = {
       name,
       domain: normalize(mapped.fields["domain"] ?? null, maxLengthOf("customer", "domain")),
+      email,
       industry: normalize(
         mapped.fields["industry"] ?? null,
         maxLengthOf("customer", "industry")
@@ -134,6 +153,11 @@ export async function writeCustomers(
       createDate: parseDate(mapped.fields["createDate"] ?? null),
       type,
       customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+      // No bound needed: `applyMappings` only fills this from a target path
+      // naming a registered provider, and mapping targets are unique, so the
+      // object has at most one key per provider and each value is already
+      // clamped to MAX_CUSTOM_FIELD_VALUE_LENGTH.
+      crossRefs: writeJsonObject(mapped.crossRefs),
     };
 
     const row = await prisma.customer.upsert({

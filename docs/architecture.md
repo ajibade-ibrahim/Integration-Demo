@@ -2,7 +2,7 @@
 
 A map of the codebase for someone who has never opened it. The
 [README](../README.md) explains *what the platform does* and *why the decisions
-went the way they did*; [`data-model.md`](./data-model.md) covers the nine
+went the way they did*; [`data-model.md`](./data-model.md) covers the fifteen
 tables. This document covers **where the code lives and how a request moves
 through it**.
 
@@ -10,7 +10,7 @@ Read the first two sections and you can find anything. The rest is one section
 per aspect, each answering a single question.
 
 > **The diagrams below also exist as an interactive page** —
-> [`docs/diagrams/index.html`](./diagrams/index.html). Same eight diagrams, but
+> [`docs/diagrams/index.html`](./diagrams/index.html). Same nine diagrams, but
 > zoomable, hover-to-isolate, dark-mode, and with a live `resolveScopes()`
 > matrix in §2. Open it in a browser; it needs no server.
 
@@ -20,7 +20,7 @@ per aspect, each answering a single question.
 
 Four entry points, one framework-free core, one database. The core never
 imports Next.js; the app layer never talks to Prisma directly (with two
-documented exceptions, noted in §8).
+documented exceptions, noted in §9).
 
 ```mermaid
 flowchart TB
@@ -48,6 +48,7 @@ flowchart TB
         ENGINE["sync/sync-engine<br/><i>guard, fetch, map,<br/>write, record</i>"]
         DISCO["sync/discovery-service<br/><i>source fields + cache</i>"]
         SCHED["sync/scheduler<br/><i>what is due</i>"]
+        RESOLVE["identity/identity-resolver<br/><i>per user, after sync —<br/>one company from many rows</i>"]
     end
 
     subgraph pure["Pure logic — no I/O, no database, trivially testable"]
@@ -55,6 +56,7 @@ flowchart TB
         SCHEMA["identity-schema.ts<br/><i>the target contract</i>"]
         MAPPER["field-mapper/<br/><i>validate, apply, serialize</i>"]
         CRYPTO["oauth/crypto.ts<br/><i>AES-256-GCM</i>"]
+        IDENT["identity/<br/><i>normalize · evidence ·<br/>survivorship · assertions</i>"]
     end
 
     subgraph provs["Providers — one directory each, all interchangeable"]
@@ -68,7 +70,7 @@ flowchart TB
     end
 
     REPOS["<b>repositories/</b> — the modules that speak Prisma"]
-    DB[("Postgres via Prisma<br/>9 tables")]
+    DB[("Postgres via Prisma<br/>15 tables")]
 
     entry --> BOOT
     BOOT --> registries
@@ -254,6 +256,24 @@ Two details that surprise people:
   `constructor` or `__proto__` would otherwise reach up the prototype chain.
   ([`field-mapper.ts:142`](../src/core/field-mapper/field-mapper.ts#L142))
 
+**Three kinds of target path, not one.** `resolveTargetField` returns a
+`FieldDefinition`, the sentinel `"customField"`, or the sentinel `"crossRef"` —
+a union rather than a boolean, so adding the third made the compiler point at
+every consumer that had to handle it.
+
+| Pattern | Means | Validated against |
+|---|---|---|
+| `name`, `email`, `domain` | A real column | `identity-schema.ts` |
+| `customFields.<key>` | A single-segment JSON key | the pattern only — the key is whatever the user wants |
+| `crossRef.<provider>` | "this company is *that* id over there" | **`providerRegistry`** — `crossRef.nonsense` cannot be saved |
+
+The last one needed the only UI addition: the target dropdown is built from
+`mappableFields()`, which returns `FieldDefinition[]` and cannot express a
+cross-reference, so a "Same company in…" option is backed by a *provider*
+dropdown rather than the free-text box custom fields get. A custom-field key is
+arbitrary; a cross-reference segment must name a registered provider or it fails
+validation.
+
 ---
 
 ## 5. Sync — the pipeline, and the one ordering that matters
@@ -300,11 +320,129 @@ its own module rather than living inline in the engine.
 **Per-record failures never abort a run.** A `RecordIssue` carries
 `severity: "warning" | "rejected"` — a malformed email rejects the contact
 (a broken primary identifier poisons later matching), an unrecognised customer
-type only warns.
+type only warns. A malformed *account* email is the deliberate opposite: warned
+about and nulled rather than rejected, because a customer's identity is `name` +
+`externalSourceId` and discarding a whole company over one bad field is worse
+than an empty column.
+
+**Then identity resolution runs, outside all of this** — see §6. It is a
+separate per-user pass, wrapped so that it cannot fail the sync that triggered
+it.
 
 ---
 
-## 6. Failing well — two nested retry loops
+## 6. Identity — one company out of three rows
+
+Sync is **per integration**. Identity resolution is **per user**, and that
+difference is the whole reason it is a separate pass rather than a step inside
+`executeSync`: one real company appears as three `Customer` rows in three
+connections, so no single integration can see the group. `sync-engine.ts` gains
+no import from this; the two call sites go through
+[`resolve-after-sync.ts`](../src/core/identity/resolve-after-sync.ts), which
+holds the one policy that matters — **a sync is never reported failed because
+resolution hiccuped**.
+
+```mermaid
+flowchart TB
+    TRIG["after a sync · scheduler tick · POST /api/identity/resolve"] --> GUARD{"pass already<br/>running for this user?"}
+    GUARD -->|yes| DISC["<b>discarded</b><br/><i>runId null, no row written —<br/>a discard is contention,<br/>not an execution</i>"]
+    GUARD -->|no| REAP0["<b>0. reap</b> empty accounts<br/><i>a shell still holding a key claim<br/>permanently blocks the right<br/>account from forming</i>"]
+
+    REAP0 --> EV["<b>1. build evidence</b> — pure<br/>email · domain · contact emails ·<br/>self-reference · cross-refs"]
+    EV --> ASRT["<b>1.5 cluster by <code>same</code> assertions</b><br/><i>union-find over customers,<br/>before any key matching</i>"]
+
+    ASRT --> MATCH{"candidate accounts<br/>for this cluster's keys"}
+    MATCH -->|"0"| NEW["create one, link, insert keys"]
+    MATCH -->|"1"| LINK["link, insert only<br/>keys it lacks"]
+    MATCH -->|"≥2"| CONF["<b>conflict — never merge</b><br/>strongest key kind, then oldest,<br/>then smallest id wins the link;<br/>losing keys stay put, issue raised"]
+
+    NEW --> SURV
+    LINK --> SURV
+    CONF --> SURV["<b>2. survivorship</b> — pure<br/><i>per field, the highest-priority<br/>member that actually supplies a value</i>"]
+    SURV --> REAP1["<b>3. reap again</b><br/><i>shells this pass emptied would<br/>otherwise hold their claims<br/>until the next one</i>"]
+
+    VETO["<code>distinct</code> assertion"] -.->|"vetoes, per candidate account"| MATCH
+
+    style DISC fill:#f7eeee,stroke:#a55a5a
+    style SURV fill:#eef7ee,stroke:#5a8a5a
+    style CONF fill:#f7f1e8,stroke:#a5824a
+```
+
+### The two conflicts, and why only one of them is a hierarchy
+
+This is the distinction the whole design rests on, and conflating them is the
+easiest way to build something dangerous.
+
+| | The question | Resolved by `identityPriority`? |
+|---|---|---|
+| **Key conflict** | "Is this the same company?" — two accounts both claim `billing@acme.example` | **No.** Never auto-merged; the winner is deterministic, losing keys stay put, and a `key_claimed_elsewhere` issue asks a human. |
+| **Value conflict** | "What is this company called?" — HubSpot says `Acme Manufacturing Inc`, Stripe says `Acme Corp` | **Yes.** This is the only thing the rank is for. |
+
+**Priority changes what an account says, never who is in it.** If reordering
+sources could repartition accounts, then nudging a number to fix a displayed
+name would silently regroup someone's customer list — and nobody would connect
+the two events. `identity-surfacing.test.ts` asserts the placements and the key
+rows are *identical* across a priority change, not merely equivalent.
+
+**A null is not an opinion.** Stripe has no `industry`, `domain` or `type` field
+at all; HubSpot has no account-level `email`. So "the top-ranked source's row
+wins wholesale" would be destructive — putting Stripe at priority 1 would blank
+three columns on every account it touches. Each field is contested only among
+the members that actually carry it, which is what lets the hierarchy compose:
+Stripe wins `email`, HubSpot wins `industry`, neither erases the other.
+
+`createDate` is the one declared exception, taking the **earliest** value rather
+than the highest-priority one — if the CRM saw a company in 2019 it existed in
+2019. Declared rather than special-cased, as `conflictPolicy` on the field
+definition in `identity-schema.ts`, so the rule lives next to the field it
+governs.
+
+### Three ways a foreign id arrives
+
+The spec calls Metrifox's `payments_stripe_customers` the join that makes one
+customer account possible, and **no Metrifox endpoint exposes it**. So
+`external_ref` — the strongest key kind — needs supply routes that do not depend
+on a fetch.
+
+| Route | Shape | Where |
+|---|---|---|
+| **Self-reference** | Free. Every customer contributes `<provider>:<scope>:<externalSourceId>` from data already in hand | `evidence.ts` |
+| **Mapped field** | `crossRef.<provider>` target path, parallel to `customFields.<key>` — reuses the mapping editor, validation and transforms wholesale | `identity-schema.ts`, `Customer.crossRefs` |
+| **Imported crosswalk** | Pasted or uploaded `<local id>,<foreign id>` pairs — the honest answer for a table no API serves | `identity/crosswalk.ts`, `Customer.importedCrossRefs` |
+
+**The scope segment is not optional.** HubSpot object ids are portal-scoped, so
+a bare `hubspot:12345` self-key would merge company `12345` in two different
+portals into one company. Every provider declares
+`externalIdScope: "global" | "tenant"`; a tenant-scoped one takes its scope from
+the token's `providerMetadata`, and **if no scope value is available it emits no
+self-key at all**. Failing closed costs a join, which is visible and
+recoverable; guessing costs a false merge, which looks exactly like the matcher
+working well.
+
+That is not hypothetical: HubSpot's token response carries no `hub_id` (it is
+only readable from an endpoint `parseTokenResponse` cannot call), so HubSpot
+contributes no self-key today. Salesforce is scoped by `organizationId` rather
+than `instance_url`, because legacy pod hostnames like `na1.salesforce.com` were
+shared by thousands of unrelated orgs.
+
+### What the resolver will not do
+
+Three refusals, each deliberate, each tested:
+
+- **It never writes an assertion, only reads them.** That is what makes a human
+  verdict sticky across a pass that otherwise recomputes everything.
+- **It merges on evidence and never splits on the absence of it.** Withdrawing
+  an imported crosswalk stops the pair being supplied; it does not take apart
+  the account it already made. Only a `distinct` assertion separates records
+  that are already grouped.
+- **It never auto-merges two multi-member accounts.** A false merge is the worst
+  failure any matcher has and it has no user-facing undo, so two rival accounts
+  contest and raise an issue instead. The human routes — "same company" and "not
+  this company" on the Accounts tab — are how a merge actually happens.
+
+---
+
+## 7. Failing well — two nested retry loops
 
 This is the part most worth understanding before debugging a flaky sync, because
 the two loops are easy to confuse. The inner one lives in
@@ -346,7 +484,7 @@ instantly instead of sitting through them.
 
 ---
 
-## 7. Where do I look for X?
+## 8. Where do I look for X?
 
 | I want to change… | Open |
 |---|---|
@@ -359,6 +497,11 @@ instantly instead of sitting through them.
 | Anything touching the database | `core/repositories/` |
 | The status lifecycle | [`integration-repository.ts`](../src/core/repositories/integration-repository.ts); diagram in [data-model.md](./data-model.md#integrationstatus-lifecycle) |
 | What runs on a schedule | [`sync/scheduler.ts`](../src/core/sync/scheduler.ts), driven by `/api/cron/sync` |
+| What counts as evidence that two records are one company | [`identity/evidence.ts`](../src/core/identity/evidence.ts) — pure; every key the matcher will ever see is emitted here |
+| Which source wins a contested field | [`identity/survivorship.ts`](../src/core/identity/survivorship.ts), ranked by `Integration.identityPriority` |
+| How an email or domain is normalized before matching | [`identity/normalize.ts`](../src/core/identity/normalize.ts) — and `EMAIL_PATTERN` lives here, imported by the record writer, so validating and matching cannot drift |
+| Which domains are refused as match keys | [`identity/free-email-domains.ts`](../src/core/identity/free-email-domains.ts) |
+| Moving existing connections onto a changed default | [`identity/mapping-retarget.ts`](../src/core/identity/mapping-retarget.ts) + `npm run mappings:retarget` |
 
 ### The provider directory, as a template
 
@@ -376,7 +519,7 @@ adding one is filling in a known shape, not designing anything.
 
 ---
 
-## 8. Layering rules — and the two places reality bends
+## 9. Layering rules — and the two places reality bends
 
 ```mermaid
 flowchart TB
@@ -403,8 +546,19 @@ this document is that you can trust it:
    bookkeeping and the record upserts. So "repositories are the *only* layer
    importing the Prisma client" is the intent, with these two as the exception.
 2. **`app/integrations/[id]/page.tsx` imports `prisma`**
-   (`src/app/integrations/[id]/page.tsx:14`) for a read the repositories do not
+   (`src/app/integrations/[id]/page.tsx:16`) for a read the repositories do not
    expose. It is the only app-layer file that does.
+
+The identity pass is the counter-example that shows the rule is affordable:
+`identity-resolver.ts` orchestrates a whole multi-phase write and imports no
+Prisma client at all, going through
+[`identity-repository.ts`](../src/core/repositories/identity-repository.ts) for
+every query. That file exists so **every write and every match query is scoped
+by `userId` in one reviewable place** — a single missing `userId` merges two
+tenants' companies, which is the severe failure in this schema. Account *reads*
+for the Accounts tab deliberately live in `synced-data-repository.ts` instead: a
+read-only projection for a page is not part of the matcher, and putting it in
+the guarded file would only enlarge the surface being guarded.
 
 Everything else holds: no `src/core` file imports from `src/app`, and no
 provider file imports the database or the OAuth service — token refresh reaches
@@ -435,12 +589,12 @@ worst case is one integration synced twice at once, not a broken connect.
 
 ---
 
-## 9. What runs where
+## 10. What runs where
 
 ```mermaid
 flowchart LR
     subgraph browser["Browser"]
-        CC["5 client components<br/><i>new/form - mapping/editor -<br/>sync-panel - key-form - delete-button</i>"]
+        CC["7 client components<br/><i>new/form - mapping/editor -<br/>sync-panel - key-form - delete-button -<br/>accounts-panel - identity-panel</i>"]
     end
 
     subgraph server["Next.js server"]
@@ -472,11 +626,11 @@ credentials at all.
 
 ---
 
-## 10. Adding things — the two recipes
+## 11. Adding things — the two recipes
 
 **A new provider** that shares an existing credential kind:
 
-1. `mkdir src/core/providers/<name>/` and fill in the template from §7.
+1. `mkdir src/core/providers/<name>/` and fill in the template from §8.
 2. Add scope constants and export a `ProviderDefinition`.
 3. In [`bootstrap.ts`](../src/core/bootstrap.ts): `registerProvider`, add the
    provider to the relevant function's `scopesByProvider`, then
@@ -501,16 +655,34 @@ target schema alongside `identity-schema.ts` if it writes new record types.
 
 ---
 
-## 11. How the tests are layered
+## 12. How the tests are layered
 
 The three suites map onto the layers above, which is the fastest way to know
 where a new test belongs.
 
 | Suite | Exercises | Needs |
 |---|---|---|
-| `tests/unit/` | Pure logic — mapper, crypto, SOQL, clock, scheduler policy | nothing |
-| `tests/property/` | The seven invariants that carry weight: scope isolation, provider filtering, mapping round-trip, target validation, absent-source-yields-null, upsert identity, pagination completeness | fast-check |
-| `tests/integration/` | Handlers against mocked provider APIs — pagination, 429 with and without `Retry-After`, 401 then refresh then retry, field discovery | msw, plus a throwaway Postgres schema built by `tests/global-setup.ts` |
+| `tests/unit/` | Pure logic — mapper, crypto, SOQL, clock, scheduler policy, identity normalization, survivorship, assertions, crosswalk parsing, the mapping migration | nothing |
+| `tests/property/` | The invariants that carry weight: scope isolation, provider filtering, mapping round-trip, target validation, absent-source-yields-null, upsert identity, pagination completeness, and identity's own set below | fast-check |
+| `tests/integration/` | Handlers against mocked provider APIs — pagination, 429 with and without `Retry-After`, 401 then refresh then retry, field discovery — plus the resolution pass against a real database | msw, plus a throwaway Postgres schema built by `tests/global-setup.ts` |
+
+`identity-resolution.property.test.ts` carries the properties that would be
+tedious to argue by example: **totality** (every customer ends with an account),
+**idempotence** (a second pass changes no partition *and* no account id),
+**order-independence** (shuffling input rows yields the same partition), and
+that **precedence never repartitions**.
+
+Two things about the suite's shape are deliberate and easy to undo by accident:
+
+- **Vitest runs test files in parallel forks against one shared Postgres
+  schema.** An unscoped `findFirst` in a test is therefore a cross-test hazard,
+  not a style preference. `tests/integration/identity-helpers.ts` builds an
+  isolated tenant per test for exactly this reason.
+- **The scheduler tick is not driven end to end.** `runScheduledSyncs` sweeps
+  every integration in the database by design, so a test tick would sync and
+  resolve tenants another file is mid-assertion on. `distinctOwners` is exported
+  and unit-tested instead, and `resolveAfterSync` is covered against a real
+  database.
 
 `npm test` runs `tsc --noEmit` **first, as a gate**: Vitest transpiles without
 typechecking, so a suite can otherwise pass green over a build that does not

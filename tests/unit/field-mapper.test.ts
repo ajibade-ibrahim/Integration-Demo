@@ -33,9 +33,13 @@ describe("validateMappings", () => {
   });
 
   // The defect this whole qualified-target design exists to prevent.
+  //
+  // `jobTitle` rather than `email`: email is a legitimate target on both
+  // objects now that identity resolution matches on an account-level address,
+  // so it no longer demonstrates anything. A job title is still person-only.
   it("rejects a contact field mapped onto a customer", () => {
     const result = validateMappings([
-      rule({ targetObject: "customer", targetFieldPath: "email" }),
+      rule({ targetObject: "customer", targetFieldPath: "jobTitle" }),
     ]);
     expect(result.valid).toBe(false);
     expect(result.violations[0]?.message).toContain("is not a field on customer");

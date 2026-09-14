@@ -14,6 +14,13 @@ export interface IntegrationRecord {
   status: IntegrationStatus;
   instanceLabel: string;
   syncIntervalHours: number;
+  /**
+   * Rank for field survivorship only, never for matching. Lower wins.
+   *
+   * Per-integration rather than per-provider so two HubSpot portals can be
+   * ordered against each other.
+   */
+  identityPriority: number;
   authorizationTimestamp: Date | null;
   lastSyncTimestamp: Date | null;
   pendingTokenRevocation: boolean;
@@ -27,6 +34,7 @@ interface RowWithFunctions {
   status: string;
   instanceLabel: string;
   syncIntervalHours: number;
+  identityPriority: number;
   authorizationTimestamp: Date | null;
   lastSyncTimestamp: Date | null;
   pendingTokenRevocation: boolean;
@@ -43,6 +51,7 @@ function toRecord(row: RowWithFunctions): IntegrationRecord {
     status: row.status as IntegrationStatus,
     instanceLabel: row.instanceLabel,
     syncIntervalHours: row.syncIntervalHours,
+    identityPriority: row.identityPriority,
     authorizationTimestamp: row.authorizationTimestamp,
     lastSyncTimestamp: row.lastSyncTimestamp,
     pendingTokenRevocation: row.pendingTokenRevocation,
@@ -93,6 +102,48 @@ export async function createIntegration(
 export function clampInterval(hours: number): number {
   if (!Number.isFinite(hours)) return 24;
   return Math.min(168, Math.max(1, Math.round(hours)));
+}
+
+/** The default every integration starts at, so most ranks begin tied. */
+export const DEFAULT_IDENTITY_PRIORITY = 100;
+
+/**
+ * Clamp a survivorship rank to 1..1000, the way {@link clampInterval} does.
+ *
+ * Clamped rather than rejected because there is no wrong answer to reject —
+ * only a total order, so a rank of 5000 means the same thing as 1000. A
+ * validation error would be pedantry about a number whose absolute value never
+ * mattered.
+ *
+ * The default is what a non-number becomes, not 1. Falling back to the
+ * strongest rank would let a malformed request quietly promote an integration
+ * over every other source of the same field.
+ */
+export function clampIdentityPriority(priority: number): number {
+  if (!Number.isFinite(priority)) return DEFAULT_IDENTITY_PRIORITY;
+  return Math.min(1000, Math.max(1, Math.round(priority)));
+}
+
+/**
+ * Set an integration's survivorship rank.
+ *
+ * Scoped by `userId` and reporting whether it matched, so the route answers 404
+ * for someone else's integration rather than silently succeeding.
+ *
+ * Changing this changes what an account *says*, never who is *in* it — matching
+ * never reads the rank. Resolution still has to re-run before the change is
+ * visible, which is what `/api/identity/resolve` is for.
+ */
+export async function updateIdentityPriority(
+  id: string,
+  userId: string,
+  priority: number
+): Promise<boolean> {
+  const result = await prisma.integration.updateMany({
+    where: { id, userId },
+    data: { identityPriority: clampIdentityPriority(priority) },
+  });
+  return result.count === 1;
 }
 
 export async function findIntegration(

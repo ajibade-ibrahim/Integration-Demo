@@ -140,12 +140,62 @@ export interface ApiKeyProviderAuth {
  */
 export type ProviderAuth = OAuthProviderAuth | ApiKeyProviderAuth;
 
+/**
+ * Whether a provider's record ids mean the same thing everywhere.
+ *
+ * `global` — an id identifies one record across the whole provider. A Stripe
+ * `cus_…` is global: whoever holds it, it names the same customer.
+ *
+ * `tenant` — an id is only meaningful inside one account. A HubSpot company
+ * `12345` exists in every portal that has 12345 companies, and they are
+ * unrelated businesses.
+ *
+ * This exists because identity resolution turns provider ids into match keys.
+ * Treating a tenant-scoped id as global would merge two customers' companies on
+ * a numeric collision, which is the worst failure the matcher can produce.
+ */
+export const EXTERNAL_ID_SCOPES = ["global", "tenant"] as const;
+
+export type ExternalIdScope = (typeof EXTERNAL_ID_SCOPES)[number];
+
+export function isExternalIdScope(v: unknown): v is ExternalIdScope {
+  return (
+    typeof v === "string" &&
+    (EXTERNAL_ID_SCOPES as readonly string[]).includes(v)
+  );
+}
+
 export interface ProviderDefinition {
   readonly name: string;
   readonly label: string;
   readonly description: string;
 
   readonly auth: ProviderAuth;
+
+  /**
+   * How widely this provider's record ids are unique.
+   *
+   * Not optional, so adding a provider is a decision about this rather than an
+   * omission that defaults to the unsafe answer.
+   */
+  readonly externalIdScope: ExternalIdScope;
+
+  /**
+   * The connected account's stable id, read from stored token metadata.
+   *
+   * Required for a `tenant`-scoped provider and enforced at registration.
+   * Returning `undefined` means "this credential does not tell us which
+   * account it belongs to", and the caller must then emit **no** identity key
+   * rather than an unscoped one — losing a join is recoverable, a false merge
+   * across two accounts is not.
+   *
+   * Must be stable for the life of the account. An instance host is not: with
+   * Salesforce's legacy pod hostnames, thousands of unrelated orgs shared
+   * `na1.salesforce.com`, so scoping by host would have been no scoping at all.
+   */
+  readonly tenantScopeValue?: (
+    metadata: ProviderMetadata
+  ) => string | undefined;
 }
 
 // ---------------------------------------------------------------------------

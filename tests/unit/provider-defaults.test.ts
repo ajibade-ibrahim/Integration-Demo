@@ -46,7 +46,16 @@ describe("shipped default mappings", () => {
     for (const provider of providerRegistry.getAll()) {
       for (const rule of defaultMappingsFor(IDENTITY_FUNCTION, provider.name)) {
         const field = resolveTargetField(rule.targetObject, rule.targetFieldPath);
-        if (field === undefined || field === "customField") continue;
+        if (
+          field === undefined ||
+          field === "customField" ||
+          field === "crossRef"
+        ) {
+          // Neither is a schema field, so neither appears in `mappableFields`.
+          // `crossRef` is not read-only either — it is a target a user may set,
+          // it just is not a column.
+          continue;
+        }
         expect(
           mappableFields(rule.targetObject).map((f) => f.name),
           `${provider.name} → ${rule.targetObject}.${rule.targetFieldPath}`

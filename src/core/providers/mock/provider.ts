@@ -35,6 +35,17 @@ export const MOCK_SUPPORT_SCOPES = [
 /** Scopes the mock declares for functions we have not built handlers for. */
 export const MOCK_BILLING_SCOPES = ["billing.invoices.read"] as const;
 
+/**
+ * Mirrors HubSpot again, deals included. Shares `crm.schemas.read` with the
+ * identity set on purpose: the union of two functions on one provider has to
+ * deduplicate, and a shared scope is the only thing that makes that
+ * observable.
+ */
+export const MOCK_AGREEMENT_SCOPES = [
+  "crm.objects.deals.read",
+  "crm.schemas.read",
+] as const;
+
 export function appBaseUrl(): string {
   const base = process.env["APP_BASE_URL"];
   return base === undefined || base === "" ? "http://localhost:3000" : base;
@@ -94,4 +105,11 @@ export const mockProvider: ProviderDefinition = {
       };
     },
   },
+
+  // `global`, and it is not a shortcut. The mock serves one fixed fixture
+  // universe from `fixtures.ts`, so company `c-003` is the same company for
+  // every credential that reads it — which is precisely what `global` asserts.
+  // Two mock integrations under one user therefore join their customers on
+  // self-keys, and that is the correct answer as well as the demoable one.
+  externalIdScope: "global",
 };

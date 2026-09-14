@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isDue } from "@/core/sync/scheduler";
+import { distinctOwners, isDue } from "@/core/sync/scheduler";
 import type { IntegrationRecord } from "@/core/repositories/integration-repository";
 import type { IntegrationStatus } from "@/core/types/common";
 
@@ -17,6 +17,7 @@ function integration(
     status: "active" as IntegrationStatus,
     instanceLabel: "Test",
     syncIntervalHours: 24,
+    identityPriority: 100,
     authorizationTimestamp: new Date(NOW - 48 * HOUR),
     lastSyncTimestamp: new Date(NOW - 1 * HOUR),
     pendingTokenRevocation: false,
@@ -70,5 +71,35 @@ describe("isDue", () => {
     expect(
       isDue(integration({ status, lastSyncTimestamp: null }), NOW)
     ).toBe(false);
+  });
+});
+
+describe("distinctOwners", () => {
+  it("collapses several of one user's integrations into one entry", () => {
+    // Resolution is a cross-integration, whole-tenant pass. A tick covering
+    // three of one user's connections must resolve once — running it per
+    // integration would repeat the same work, and the first two runs would
+    // resolve a tenant that is still half-synced.
+    const owners = distinctOwners([
+      integration({ id: "a", userId: "user-1" }),
+      integration({ id: "b", userId: "user-1" }),
+      integration({ id: "c", userId: "user-2" }),
+      integration({ id: "d", userId: "user-1" }),
+    ]);
+
+    expect(owners).toEqual(["user-1", "user-2"]);
+  });
+
+  it("sorts, so a tick's report does not depend on selection order", () => {
+    expect(
+      distinctOwners([
+        integration({ userId: "user-z" }),
+        integration({ userId: "user-a" }),
+      ])
+    ).toEqual(["user-a", "user-z"]);
+  });
+
+  it("has nothing to resolve when nothing was due", () => {
+    expect(distinctOwners([])).toEqual([]);
   });
 });

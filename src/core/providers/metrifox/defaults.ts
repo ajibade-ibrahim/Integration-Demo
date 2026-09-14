@@ -25,9 +25,24 @@ export const metrifoxIdentityDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "customer_key", targetObject: "customer", targetFieldPath: "customFields.customer_key", transform: "none" },
   { sourceFieldPath: "legal_name", targetObject: "customer", targetFieldPath: "customFields.legal_name", transform: "trim" },
   { sourceFieldPath: "customer_type", targetObject: "customer", targetFieldPath: "customFields.customer_type", transform: "none" },
-  { sourceFieldPath: "primary_email", targetObject: "customer", targetFieldPath: "customFields.primary_email", transform: "lowercase" },
+  // Targets the first-class `email` field, not a custom one: identity
+  // resolution matches on it, and Metrifox is one of only two providers that
+  // supplies an account-level address at all. Often a role address
+  // (`billing@`, `accounts@`), which is exactly what the spec says to seed the
+  // identity table from.
+  { sourceFieldPath: "primary_email", targetObject: "customer", targetFieldPath: "email", transform: "lowercase" },
   { sourceFieldPath: "currency", targetObject: "customer", targetFieldPath: "customFields.currency", transform: "none" },
   { sourceFieldPath: "country", targetObject: "customer", targetFieldPath: "customFields.country", transform: "trim" },
+  // The `payments_stripe_customers` join, on by default rather than left as a
+  // manual step. It is the strongest match kind there is — it groups a Metrifox
+  // customer with its Stripe counterpart even when they share no email and no
+  // domain — and a deterministic join nobody switches on is a join that does
+  // not happen.
+  //
+  // Costs nothing where the field is absent: `applyMappings` emits no
+  // cross-reference for a source field that is not there, which is every
+  // Metrifox tenant whose API does not serve one.
+  { sourceFieldPath: "stripe_customer_id", targetObject: "customer", targetFieldPath: "crossRef.stripe", transform: "trim" },
 
   // --- contact ---
   // `full_name` is synthesized by the handler from first + last, which is why

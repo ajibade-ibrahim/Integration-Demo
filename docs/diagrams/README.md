@@ -9,8 +9,8 @@ network — static files that work straight off disk over `file://`. The two pag
 share one stylesheet and one script, and cross-link from the header.
 
 ```
-index.html        8 architecture diagrams
-data-model.html   entity diagram, cascade explorer, status lifecycle
+index.html        9 architecture diagrams
+data-model.html   sync spine, identity layer, cascade explorer, status lifecycle
 styles.css        tokens, components, light + dark themes
 diagrams.js       connector engine, viewport controls, both interactive widgets
 ```
@@ -43,6 +43,13 @@ nullability, defaults, unique constraints and `onDelete` behaviour. The cascade
 explorer's `CASCADE` table in `diagrams.js` encodes those same clauses; keep both
 in step with the schema.
 
+The cascade explorer covers **§1 only**. The four identity tables are drawn in
+§2, so they have no node there to mark, and their `onDelete` behaviour is stated
+in the explorer's prose instead of shown. That is a deliberate limit rather than
+an omission — putting fifteen tables in one canvas made the spine unreadable,
+and a cascade control that silently ignored a third of the schema would be
+worse than one that says which third.
+
 ## How a diagram is built
 
 Boxes are ordinary HTML laid out with CSS grid. Edges are **not** authored as
@@ -60,7 +67,7 @@ measures the real DOM and draws SVG beziers between the elements named:
 |---|---|
 | `from`, `to` | Element ids. Either endpoint may be a `.node`, a `.group`, or a `.lane-head`. |
 | `label` | Optional. `\n` breaks the line. Placed at the curve midpoint. |
-| `kind` | `"dashed"` for a relationship that must not exist (see §7). |
+| `kind` | `"dashed"` for a relationship that must not exist (see §8). |
 | `fs`, `ts` | Force the exit/entry side: `top`/`bottom`/`left`/`right`. |
 | `bow` | Push the control points outward, to route around through a gutter. |
 
