@@ -411,7 +411,7 @@ function AccountCard({
             onChange={(event) => {
               onMergeTargetChange(event.target.value);
             }}
-            className="rounded-lg border border-slate-300 px-2 py-1 text-sm"
+            className="min-w-0 max-w-xs rounded-lg border border-slate-300 px-2 py-1 text-sm"
           >
             <option value="">Choose an account</option>
             {others.map((other) => (
