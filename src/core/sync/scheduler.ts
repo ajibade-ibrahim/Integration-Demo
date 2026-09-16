@@ -14,7 +14,8 @@ import {
   updateStatus,
 } from "../repositories/integration-repository";
 import { resolveAfterSync } from "../identity/resolve-after-sync";
-import { executeSync } from "./sync-engine";
+import { executeSync, totalRecordsWritten } from "./sync-engine";
+import type { TargetObject } from "../types/common";
 import { systemClock, type Clock } from "./clock";
 import type { IntegrationRecord } from "../repositories/integration-repository";
 
@@ -39,8 +40,10 @@ export interface ScheduledRun {
   integrationId: string;
   label: string;
   status: string;
-  customerCount: number;
-  contactCount: number;
+  /** Rows written per target object; objects this run did not touch are absent. */
+  recordCounts: Partial<Record<TargetObject, number>>;
+  /** Total across every object, so a caller can log one number. */
+  recordsWritten: number;
   error?: string;
 }
 
@@ -96,8 +99,8 @@ export async function runScheduledSyncs(
       integrationId: integration.id,
       label: integration.instanceLabel,
       status: result.status,
-      customerCount: result.customerCount,
-      contactCount: result.contactCount,
+      recordCounts: result.recordCounts,
+      recordsWritten: totalRecordsWritten(result.recordCounts),
       ...(result.error === undefined ? {} : { error: result.error }),
     });
   }

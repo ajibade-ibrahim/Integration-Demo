@@ -16,6 +16,7 @@
  */
 
 import type { RawRecord } from "../../types/common";
+import { formatInterval, priceLabel } from "../../price-format";
 import { asArray, asRecord, asString } from "../http";
 
 /** Records per page. Stripe's own default is 10; its documented maximum is 100. */
@@ -101,11 +102,33 @@ export function stripeAuthHeaders(key: string): Record<string, string> {
   };
 }
 
-export function customersUrl(limit: number, startingAfter?: string): string {
+/**
+ * The Stripe list resources this provider reads.
+ *
+ * A union rather than a bare string so a typo cannot reach the wire as a 404,
+ * and so adding a resource is a decision recorded here rather than a literal
+ * buried in a handler.
+ */
+export const STRIPE_RESOURCES = ["customers", "products", "prices"] as const;
+
+export type StripeResource = (typeof STRIPE_RESOURCES)[number];
+
+/**
+ * A `/v1/<resource>` list URL with Stripe's cursor pagination applied.
+ *
+ * One builder for every resource, because Stripe's list endpoints are uniform:
+ * same `limit`, same `starting_after`, same envelope. Three near-identical URL
+ * builders would be three places for the cursor parameter to be misspelled.
+ */
+export function listUrl(
+  resource: StripeResource,
+  limit: number,
+  startingAfter?: string
+): string {
   // Concatenated, not `new URL(path, base)`: a leading-slash path replaces the
   // base's own path entirely, which would silently strip any prefix a mock or
   // proxy is mounted under.
-  const url = new URL(`${stripeApiBase().replace(/\/$/, "")}/v1/customers`);
+  const url = new URL(`${stripeApiBase().replace(/\/$/, "")}/v1/${resource}`);
   url.searchParams.set("limit", String(limit));
   if (startingAfter !== undefined) {
     url.searchParams.set("starting_after", startingAfter);
@@ -113,8 +136,13 @@ export function customersUrl(limit: number, startingAfter?: string): string {
   return url.toString();
 }
 
+/** Back-compat alias for the customers list, which several call sites name. */
+export function customersUrl(limit: number, startingAfter?: string): string {
+  return listUrl("customers", limit, startingAfter);
+}
+
 export interface StripePage {
-  readonly customers: readonly RawRecord[];
+  readonly records: readonly RawRecord[];
   /** Stripe's own end-of-data signal. */
   readonly hasMore: boolean;
   /**
@@ -127,24 +155,28 @@ export interface StripePage {
 }
 
 /**
- * Read one customers response.
+ * Read one list response.
+ *
+ * Resource-agnostic, and always was — every Stripe list endpoint returns the
+ * same `{ object, data, has_more }` envelope, so products and prices page
+ * through exactly this parser rather than copies of it.
  *
  * `object === "list"` is deliberately not required. It is present on every real
  * response, but treating it as a gate means a fixture or proxy that omits it
  * yields zero records and a clean, silent, empty sync — a much worse failure
  * than a parse error. `data` and `has_more` are the only fields that matter.
  */
-export function parseCustomersPage(json: unknown): StripePage {
+export function parseListPage(json: unknown): StripePage {
   const body = asRecord(json);
   const data = asArray(body?.["data"]);
 
-  const customers = data.filter((row): row is RawRecord => asRecord(row) !== undefined);
+  const records = data.filter((row): row is RawRecord => asRecord(row) !== undefined);
 
   // Scanned backwards, because the cursor must be the last row Stripe returned,
   // not the last one we happened to find an id on.
   let lastId: string | undefined;
-  for (let i = customers.length - 1; i >= 0; i -= 1) {
-    const id = asString(customers[i]?.["id"]);
+  for (let i = records.length - 1; i >= 0; i -= 1) {
+    const id = asString(records[i]?.["id"]);
     if (id !== undefined) {
       lastId = id;
       break;
@@ -152,12 +184,15 @@ export function parseCustomersPage(json: unknown): StripePage {
   }
 
   return {
-    customers,
+    records,
     // Strict, because `Boolean("false")` is true and providers do send strings.
     hasMore: body?.["has_more"] === true,
     lastId,
   };
 }
+
+/** Back-compat alias, for call sites that only ever read customers. */
+export const parseCustomersPage = parseListPage;
 
 // ---------------------------------------------------------------------------
 // Synthesized fields
@@ -253,4 +288,98 @@ function localPart(email: string): string {
   // and slicing it would produce the empty name this whole guard exists to
   // avoid.
   return at > 0 ? email.slice(0, at) : email;
+}
+
+// ---------------------------------------------------------------------------
+// Catalog
+// ---------------------------------------------------------------------------
+
+/**
+ * A display name for a price.
+ *
+ * Stripe's `nickname` is optional and in practice usually null, while
+ * `Offering.name` is required — so without this every unnamed price would be
+ * rejected for "Name is required" on every sync, forever. Same class of problem
+ * as `synthesizeContact`'s name fallback, and the same answer: build the best
+ * name available while we still have the parts, because no downstream transform
+ * can reconstruct it.
+ *
+ * Four layers, each a genuine case rather than defensive padding:
+ *   1. the merchant's own nickname, if they set one;
+ *   2. the amount and its recurrence — "$49/month", the thing a person would
+ *      say. Built by the shared `priceLabel` so this name and the price column
+ *      on /catalog cannot disagree about the same offering;
+ *   3. "Custom pricing/month" for tiered and metered prices, which carry no
+ *      `unit_amount` at all. The recurrence is still known, and saying it is
+ *      better than a bare "Custom pricing" on every one of them;
+ *   4. the price id, which always exists, so the result is never empty.
+ */
+export function offeringDisplayName(price: RawRecord): string {
+  const nickname = asString(price["nickname"])?.trim();
+  if (nickname !== undefined && nickname !== "") return nickname;
+
+  const recurring = asRecord(price["recurring"]);
+  const interval = asString(recurring?.["interval"]);
+  const countRaw = recurring?.["interval_count"];
+  const intervalCount = typeof countRaw === "number" ? countRaw : 1;
+
+  const amount = price["unit_amount"];
+  const label = priceLabel({
+    amountMinor: typeof amount === "number" ? amount : null,
+    currency: asString(price["currency"]),
+    interval,
+    intervalCount,
+  });
+  if (label !== undefined) return label;
+
+  // Tiered and metered prices have no single unit amount to show.
+  if (interval !== undefined) {
+    return `Custom pricing${formatInterval(interval, intervalCount)}`;
+  }
+
+  return asString(price["id"]) ?? "Custom pricing";
+}
+
+/**
+ * The fields synthesized onto a price before mapping.
+ *
+ * Three of them exist because the shape Stripe returns cannot survive the trip
+ * through the mapper on its own:
+ *
+ *   `offering_name`  — see `offeringDisplayName`; `name` is required.
+ *   `interval`       — nested under `recurring`, and absent entirely for a
+ *                      one-time price. Flattened so a mapping rule is a single
+ *                      path, and defaulted to `one_time` so "does not recur"
+ *                      arrives as a value rather than a null the writer would
+ *                      read as "not told".
+ *   `product_id`     — `price.product` is a bare id string normally and an
+ *                      expanded object when the caller asked for it. Reading
+ *                      both here means the association does not silently break
+ *                      if expansion is ever turned on.
+ */
+export function flattenPrice(price: RawRecord): RawRecord {
+  const recurring = asRecord(price["recurring"]);
+  const interval = asString(recurring?.["interval"]);
+  const countRaw = recurring?.["interval_count"];
+
+  const createdAt = epochToIso(price["created"]);
+
+  return {
+    offering_name: offeringDisplayName(price),
+    interval: interval ?? "one_time",
+    interval_count: typeof countRaw === "number" ? countRaw : 1,
+    product_id: priceProductId(price),
+    ...(createdAt === undefined ? {} : { created_at: createdAt }),
+  };
+}
+
+/**
+ * The product id a price belongs to.
+ *
+ * Handles both forms Stripe can send: a bare id, or an expanded product object.
+ */
+export function priceProductId(price: RawRecord): string | undefined {
+  const direct = asString(price["product"]);
+  if (direct !== undefined) return direct;
+  return asString(asRecord(price["product"])?.["id"]);
 }

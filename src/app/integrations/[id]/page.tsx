@@ -48,11 +48,18 @@ export default async function IntegrationDetailPage({
   const unmapped = ruleCounts.filter((entry) => entry.count === 0);
 
   // Counted so the delete confirmation can say what is actually at stake
-  // rather than a vague "and all its data".
-  const [customerCount, contactCount] = await Promise.all([
-    prisma.customer.count({ where: { integrationId: integration.id } }),
-    prisma.contact.count({ where: { integrationId: integration.id } }),
-  ]);
+  // rather than a vague "and all its data". Every table that cascades off the
+  // integration belongs in this total — a count that quietly omits the catalog
+  // would understate the damage on exactly the screen that exists to state it.
+  const where = { where: { integrationId: integration.id } };
+  const recordCount = (
+    await Promise.all([
+      prisma.customer.count(where),
+      prisma.contact.count(where),
+      prisma.product.count(where),
+      prisma.offering.count(where),
+    ])
+  ).reduce((sum, n) => sum + n, 0);
 
   let scopes: string[] = [];
   try {
@@ -226,7 +233,7 @@ export default async function IntegrationDetailPage({
         <DeleteButton
           integrationId={integration.id}
           label={integration.instanceLabel}
-          recordCount={customerCount + contactCount}
+          recordCount={recordCount}
         />
       </section>
     </div>

@@ -262,7 +262,7 @@ describe("the plan as a whole", () => {
       "metrifox"
     );
 
-    expect(validateMappings(result.result).violations).toEqual([]);
+    expect(validateMappings("identity", result.result).violations).toEqual([]);
   });
 
   it("finds nothing to do on a second run", () => {

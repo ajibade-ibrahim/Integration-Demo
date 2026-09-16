@@ -142,7 +142,7 @@ describe("Property: upsert identity", () => {
 
         const contacts = ids.map((id) => ({
           externalSourceId: `contact-${id}`,
-          externalCustomerId: id,
+          externalParentId: id,
           mapped: {
             object: "contact" as const,
             fields: { name: `Person ${id}` },

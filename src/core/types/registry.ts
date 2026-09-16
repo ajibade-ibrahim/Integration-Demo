@@ -245,10 +245,18 @@ export interface SourcePage {
 export interface SyncHandler {
   fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage>;
   /**
-   * Provider id of the company a contact belongs to, read from the raw record.
-   * Returns undefined when the provider gave no association.
+   * Provider id of the record this one hangs off — the company for a contact,
+   * the product for an offering — read from the raw record.
+   *
+   * Takes the object because one handler serves several, and what counts as a
+   * parent differs between them. Returns undefined when the record has no
+   * parent or the provider gave no association; the engine treats that as "not
+   * linked" rather than an error, and the writer keeps the row either way.
    */
-  externalCustomerIdOf(contact: RawRecord): string | undefined;
+  externalParentIdOf(
+    record: RawRecord,
+    object: TargetObject
+  ): string | undefined;
   /** Provider id of a record; the upsert key. */
   externalIdOf(record: RawRecord): string | undefined;
 }

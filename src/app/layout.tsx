@@ -34,6 +34,9 @@ export default async function RootLayout({
               <Link href="/customers" className="hover:text-slate-900">
                 Synced data
               </Link>
+              <Link href="/catalog" className="hover:text-slate-900">
+                Catalog
+              </Link>
             </nav>
             {session !== null && (
               <div className="ml-auto flex items-center gap-4 text-sm text-slate-500">

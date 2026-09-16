@@ -6,7 +6,7 @@ import { currentUserId } from "@/lib/current-user";
 import { findMappings } from "@/core/repositories/mapping-repository";
 import { defaultMappingsFor } from "@/core/providers/defaults-registry";
 import { discoverFields } from "@/core/sync/discovery-service";
-import { allObjectSchemas, mappableFields } from "@/core/identity-schema";
+import { mappableFields, schemasForFunction } from "@/core/object-schema";
 import { providerRegistry } from "@/core/registries/provider-registry";
 import { HUBSPOT_PROVIDER_NAME } from "@/core/providers/hubspot/provider";
 import type { TargetObject } from "@/core/types/common";
@@ -70,7 +70,10 @@ export default async function MappingPage({
     .map((candidate) => ({ name: candidate.name, label: candidate.label }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
-  const objects: EditorObject[] = allObjectSchemas().map((schema) => ({
+  // Scoped to the function being edited, not every object that exists. A
+  // catalog rule set must not offer Customer as a target: the rule would save,
+  // validate, and then write nothing on every sync.
+  const objects: EditorObject[] = schemasForFunction(functionName).map((schema) => ({
     object: schema.object,
     label: schema.label,
     sources: discovered[schema.object] ?? [],

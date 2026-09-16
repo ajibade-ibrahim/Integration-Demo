@@ -54,3 +54,48 @@ export const stripeIdentityDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "phone", targetObject: "contact", targetFieldPath: "phone", transform: "trim" },
   { sourceFieldPath: "customer_name", targetObject: "contact", targetFieldPath: "customFields.customer_name", transform: "trim" },
 ];
+
+/**
+ * Suggested starting mappings for the Stripe catalog.
+ *
+ * Four of the offering rules name fields that do not exist in Stripe's
+ * response — `offering_name`, `interval`, `interval_count`, `product_id` are
+ * synthesized by `flattenPrice`. That is the same arrangement `created_at` has
+ * on the identity side, and for the same reason: the raw shape does not survive
+ * the trip through the mapper, so the handler fixes it while it still can.
+ *
+ * Two absences are deliberate.
+ *
+ *   `offering.active`  — mapped, unlike on product. Stripe deactivates a price
+ *                        far more often than a product (a price change is a new
+ *                        price plus a deactivation), so this is the column that
+ *                        tells a live catalog from an archived one.
+ *   `product.url` and  — real fields, deliberately unmapped. Neither is part of
+ *   `unit_label`         our schema, and putting them in `customFields` by
+ *                        default would spend two of a user's fifty custom keys
+ *                        on values most catalogs leave blank.
+ *
+ * No `metadata.*` rules, for the reason the identity defaults give: the keys
+ * are per-account, so any default naming one is blank for everybody else.
+ */
+export const stripeCatalogDefaults: FieldMappingRule[] = [
+  // --- product ---
+  { sourceFieldPath: "name", targetObject: "product", targetFieldPath: "name", transform: "trim" },
+  { sourceFieldPath: "description", targetObject: "product", targetFieldPath: "description", transform: "trim" },
+  { sourceFieldPath: "active", targetObject: "product", targetFieldPath: "active", transform: "none" },
+  // `created_at` is synthesized from `created`; mapping `created` stores
+  // nothing, because epoch seconds do not survive the date parse.
+  { sourceFieldPath: "created_at", targetObject: "product", targetFieldPath: "customFields.created_at", transform: "none" },
+
+  // --- offering ---
+  { sourceFieldPath: "offering_name", targetObject: "offering", targetFieldPath: "name", transform: "trim" },
+  { sourceFieldPath: "unit_amount", targetObject: "offering", targetFieldPath: "amountMinor", transform: "none" },
+  // Lowercased to match the ISO 4217 form the rest of the app compares against;
+  // Stripe returns it lowercase already, so this is belt and braces.
+  { sourceFieldPath: "currency", targetObject: "offering", targetFieldPath: "currency", transform: "lowercase" },
+  { sourceFieldPath: "interval", targetObject: "offering", targetFieldPath: "interval", transform: "none" },
+  { sourceFieldPath: "interval_count", targetObject: "offering", targetFieldPath: "intervalCount", transform: "none" },
+  { sourceFieldPath: "active", targetObject: "offering", targetFieldPath: "active", transform: "none" },
+  { sourceFieldPath: "billing_scheme", targetObject: "offering", targetFieldPath: "customFields.billing_scheme", transform: "none" },
+  { sourceFieldPath: "recurring.usage_type", targetObject: "offering", targetFieldPath: "customFields.usage_type", transform: "none" },
+];

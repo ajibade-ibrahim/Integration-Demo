@@ -171,7 +171,7 @@ describe("Metrifox contact flattening", () => {
     const [contact] = byObject.contact;
     expect(contact?.["full_name"]).toBe("Dana Whitfield");
     expect(contact?.["customer_id"]).toBe("c1");
-    expect(metrifoxIdentityHandler.externalCustomerIdOf(contact!)).toBe("c1");
+    expect(metrifoxIdentityHandler.externalParentIdOf(contact!, "contact")).toBe("c1");
   });
 
   it("emits nothing for a customer with no contact people", async () => {

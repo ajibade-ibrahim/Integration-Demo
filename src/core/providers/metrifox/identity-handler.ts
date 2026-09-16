@@ -22,7 +22,7 @@
  *    it was not requested.
  */
 
-import type { RawRecord } from "../../types/common";
+import type { RawRecord, TargetObject } from "../../types/common";
 import type {
   HandlerContext,
   SourcePage,
@@ -94,7 +94,14 @@ export const metrifoxIdentityHandler: SyncHandler = {
     return asString(record["contact_id"]) ?? asString(record["id"]);
   },
 
-  externalCustomerIdOf(contact: RawRecord): string | undefined {
+  externalParentIdOf(
+    contact: RawRecord,
+    object: TargetObject
+  ): string | undefined {
+    // Only a contact hangs off another record in the identity function; a
+    // customer is a root, so it has no parent id to report.
+    if (object !== "contact") return undefined;
+
     return asString(contact["customer_id"]);
   },
 };

@@ -107,6 +107,8 @@ model Integration {
   discoveredFields DiscoveredField[]
   customers        Customer[]
   contacts         Contact[]
+  products         Product[]
+  offerings        Offering[]
   syncRuns         SyncRun[]
 
   @@index([userId])
@@ -315,6 +317,105 @@ model Contact {
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
   @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------
+// Catalog
+//
+// What a company sells, as the `catalog` function syncs it. Scoped by
+// `Integration` like `Customer` and `Contact`, and for the same reason: these
+// are one connection's view of a catalog, keyed by that provider's own ids.
+//
+// Note what is *not* here. There is no link to a customer, an account, or an
+// agreement. A product exists whether or not anyone has ever bought it, which
+// is why the catalog is its own function rather than a wing of identity — the
+// two share no record and no ordering constraint, and either can be connected
+// without the other.
+// ---------------------------------------------------------------------------
+
+/// A thing the company sells. One per provider product record.
+model Product {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider-assigned id. The upsert key, paired with integrationId.
+  externalSourceId String
+
+  name        String
+  description String?
+
+  /// Whether the provider still offers this.
+  ///
+  /// Nullable, and the null is meaningful: it says the provider told us
+  /// nothing, which is different from `false`. Stripe archives rather than
+  /// deletes and keeps returning archived products from `/v1/products`, so
+  /// without this column a catalog silently accumulates things nobody can buy,
+  /// indistinguishable from things they can.
+  active Boolean?
+
+  /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
+  customFields String @default("{}")
+
+  updatedAt DateTime   @updatedAt
+  offerings Offering[]
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+}
+
+/// A priced, purchasable configuration of a product.
+model Offering {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  externalSourceId String
+
+  /// Required, and frequently synthesized rather than read — most real price
+  /// records carry no name of their own. See `offeringDisplayName` in the
+  /// Stripe catalog handler for what fills it and why a null would be fatal.
+  name String
+
+  /// Resolved internal product. Null when the provider gave us a product id we
+  /// could not resolve — the offering is kept and a warning is recorded.
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  /// The provider's own product id, before resolution. Kept so a later sync can
+  /// resolve an association that failed the first time — the same shape, and
+  /// the same reason, as `Contact.externalCustomerId`.
+  externalProductId String?
+
+  /// Amount in the currency's minor unit — cents, pence, yen.
+  ///
+  /// An integer, and not negotiable: 0.1 + 0.2 is not 0.3 in a double, and a
+  /// catalog that cannot add two prices correctly is worse than one that shows
+  /// none. Every provider worth integrating reports money this way already.
+  amountMinor Int?
+
+  /// ISO 4217, as the provider cased it. Held beside the amount because an
+  /// amount without its currency is not a number that means anything — 4900 is
+  /// $49.00 or ¥4,900 depending entirely on this column.
+  currency String?
+
+  /// BillingInterval: day | week | month | year | one_time.
+  ///
+  /// `one_time` is a value rather than a null for the same reason `active`
+  /// distinguishes the two: "does not recur" is a fact, "we were not told" is
+  /// an absence, and the UI must not render them alike.
+  interval      String?
+  intervalCount Int?
+
+  active Boolean?
+
+  customFields String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  @@index([productId])
 }
 
 // ---------------------------------------------------------------------------
@@ -527,9 +628,20 @@ model SyncRun {
   startedAt   DateTime  @default(now())
   completedAt DateTime?
 
-  customerCount Int @default(0)
-  contactCount  Int @default(0)
-  attempt       Int @default(1)
+  /// Rows written per target object this run, as JSON:
+  /// `{"customer": 12, "contact": 30}`. Read and written through
+  /// src/core/repositories/json-column.ts.
+  ///
+  /// A map rather than the `customerCount`/`contactCount` pair it replaces.
+  /// Those two were fine while identity was the only function with a handler,
+  /// but every new object would have meant another column, another migration
+  /// and another branch in the run report — and a run that wrote no customers
+  /// would still have had to claim a customer count of zero. An absent key says
+  /// "this run did not write that object", which is the honest answer for a
+  /// catalog sync.
+  recordCountsJson String @default("{}")
+
+  attempt Int @default(1)
 
   /// JSON array of { sourceRecordId, targetObject, reason, fieldName? }.
   errorsJson String @default("[]")

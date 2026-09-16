@@ -2,12 +2,14 @@
  * Field mapper — validation, application, and serialization of mapping rules.
  */
 
+import { crossRefProviderName } from "../identity-schema";
 import {
   CUSTOM_FIELD_PATTERN,
   MAX_CUSTOM_FIELD_VALUE_LENGTH,
-  crossRefProviderName,
+  functionOwnsObject,
+  objectsForFunction,
   resolveTargetField,
-} from "../identity-schema";
+} from "../object-schema";
 import {
   isTargetObject,
   type RawRecord,
@@ -33,16 +35,24 @@ const MAX_PATH_LENGTH = 255;
 // ---------------------------------------------------------------------------
 
 /**
- * Validate a rule set against the identity schema.
+ * Validate a rule set against the schema for one function.
  *
  * Every rule is checked and every violation reported — the caller shows the
  * user all their mistakes at once rather than one per save attempt.
+ *
+ * `functionName` is not optional, and that is the point of it. A rule set is
+ * always stored against a function, so a rule targeting an object that function
+ * does not write is meaningless — and before this check existed it validated
+ * cleanly and then silently wrote nothing, which is a worse outcome than a
+ * refusal because there is no symptom to notice.
  */
 export function validateMappings(
+  functionName: string,
   rules: readonly FieldMappingRule[]
 ): ValidationResult {
   const violations: MappingViolation[] = [];
   const seen = new Set<string>();
+  const owned = objectsForFunction(functionName);
 
   rules.forEach((rule, index) => {
     // --- target object ---
@@ -53,6 +63,21 @@ export function validateMappings(
         message: `'${String(rule.targetObject)}' is not a known target object`,
       });
       return; // Everything below depends on a valid object.
+    }
+
+    // A real object, but not one this function writes. Named separately from
+    // the check above so the message can say which objects *are* available
+    // rather than claiming the object does not exist.
+    if (!functionOwnsObject(functionName, rule.targetObject)) {
+      violations.push({
+        index,
+        field: "targetObject",
+        message:
+          owned.length === 0
+            ? `'${functionName}' writes no objects, so it can hold no mappings`
+            : `'${functionName}' does not write '${rule.targetObject}'; it writes ${owned.join(", ")}`,
+      });
+      return;
     }
 
     // --- source path ---

@@ -51,9 +51,14 @@ export async function collect(
   byObject: Record<TargetObject, Record<string, unknown>[]>;
 }> {
   const pages: SourcePage[] = [];
+  // Every object, not just the identity pair: a handler that yields a page for
+  // an object missing from this map would otherwise drop it silently, and the
+  // test would assert against a shape that never arrived.
   const byObject: Record<TargetObject, Record<string, unknown>[]> = {
     customer: [],
     contact: [],
+    product: [],
+    offering: [],
   };
 
   for await (const page of handler.fetchPages(ctx)) {

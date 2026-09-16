@@ -59,12 +59,14 @@ import {
   stripeProvider,
   STRIPE_IDENTITY_SCOPES,
   STRIPE_AGREEMENT_SCOPES,
+  STRIPE_CATALOG_SCOPES,
   STRIPE_PROVIDER_NAME,
 } from "./providers/stripe/provider";
 
 import { metrifoxIdentityHandler } from "./providers/metrifox/identity-handler";
 import { metrifoxFieldDiscovery } from "./providers/metrifox/discovery";
 import { stripeIdentityHandler } from "./providers/stripe/identity-handler";
+import { stripeCatalogHandler } from "./providers/stripe/catalog-handler";
 import { stripeFieldDiscovery } from "./providers/stripe/discovery";
 import { mockIdentityHandler } from "./providers/mock/identity-handler";
 import { mockFieldDiscovery } from "./providers/mock/discovery";
@@ -74,6 +76,7 @@ import { salesforceIdentityHandler } from "./providers/salesforce/identity-handl
 import { salesforceFieldDiscovery } from "./providers/salesforce/discovery";
 
 export const IDENTITY_FUNCTION = "identity";
+export const CATALOG_FUNCTION = "catalog";
 
 let bootstrapped = false;
 
@@ -129,6 +132,32 @@ export function bootstrap(): void {
       "Customer accounts and the people associated with them — names, domains, industries, emails, job titles.",
     dataModels: ["customer", "contact"],
     scopesByProvider: scopeMap(identityScopes),
+  });
+
+  // Catalog: what the company sells, and the second function with a working
+  // handler.
+  //
+  // Stripe only, for now, and honestly so — it is the provider whose API maps
+  // onto this cleanly, a `product` to a Product and a `price` to an Offering.
+  // The CRMs have product objects too (HubSpot line items, Salesforce
+  // Product2/PricebookEntry) and declaring scopes for them here would be a
+  // claim we have not checked.
+  //
+  // Independent of identity by construction: a product exists whether or not
+  // anyone has bought it, and nothing in the catalog references a customer. So
+  // this can be selected on its own, and `providerNamesForFunctions(["identity",
+  // "catalog"])` is a real intersection rather than a formality.
+  const catalogScopes: Array<[string, readonly string[]]> = [
+    [STRIPE_PROVIDER_NAME, STRIPE_CATALOG_SCOPES],
+  ];
+
+  registerFunction({
+    name: CATALOG_FUNCTION,
+    label: "Catalog",
+    description:
+      "Products and the offerings that price them — what is for sale, at what amount, on what billing interval.",
+    dataModels: ["product", "offering"],
+    scopesByProvider: scopeMap(catalogScopes),
   });
 
   // Agreement: the commercial spine, and the first function declared on four
@@ -260,6 +289,12 @@ export function bootstrap(): void {
 
   registerSyncHandler(IDENTITY_FUNCTION, STRIPE_PROVIDER_NAME, stripeIdentityHandler);
   registerFieldDiscovery(IDENTITY_FUNCTION, STRIPE_PROVIDER_NAME, stripeFieldDiscovery);
+
+  // The same discoverer serves both functions: it switches on the target object
+  // rather than the function, so registering it twice is not a duplicate but
+  // the two entries the (function, provider) key requires.
+  registerSyncHandler(CATALOG_FUNCTION, STRIPE_PROVIDER_NAME, stripeCatalogHandler);
+  registerFieldDiscovery(CATALOG_FUNCTION, STRIPE_PROVIDER_NAME, stripeFieldDiscovery);
 
   if (isMockEnabled()) {
     registerSyncHandler(IDENTITY_FUNCTION, MOCK_PROVIDER_NAME, mockIdentityHandler);

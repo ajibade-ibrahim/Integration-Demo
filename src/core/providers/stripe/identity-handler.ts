@@ -26,7 +26,7 @@
  * not requested.
  */
 
-import type { RawRecord } from "../../types/common";
+import type { RawRecord, TargetObject } from "../../types/common";
 import type { HandlerContext, SourcePage, SyncHandler } from "../../types/registry";
 import { asString, createProviderSession } from "../http";
 import {
@@ -62,7 +62,7 @@ export const stripeIdentityHandler: SyncHandler = {
     for (;;) {
       const body = parseCustomersPage(await session.getJson(customersUrl(perPage, cursor)));
 
-      const customers = body.customers.map((customer) => ({
+      const customers = body.records.map((customer: RawRecord) => ({
         ...customer,
         // Spread first, so ours wins if Stripe ever ships a field of this name.
         ...withCreatedAt(customer),
@@ -110,7 +110,14 @@ export const stripeIdentityHandler: SyncHandler = {
     return asString(record["contact_id"]) ?? asString(record["id"]);
   },
 
-  externalCustomerIdOf(contact: RawRecord): string | undefined {
+  externalParentIdOf(
+    contact: RawRecord,
+    object: TargetObject
+  ): string | undefined {
+    // Only a contact hangs off another record in the identity function; a
+    // customer is a root, so it has no parent id to report.
+    if (object !== "contact") return undefined;
+
     return asString(contact["customer_id"]);
   },
 };

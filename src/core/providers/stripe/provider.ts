@@ -53,6 +53,20 @@ export const STRIPE_IDENTITY_SCOPES = ["customers:read"] as const;
  */
 export const STRIPE_AGREEMENT_SCOPES = ["subscriptions:read"] as const;
 
+/**
+ * Scopes for the catalog function.
+ *
+ * Two, because Stripe splits what we model as one catalog across two resources:
+ * a `product` is the thing, a `price` is what it costs. Reading one without the
+ * other is not useful — a product with no price is not sellable and a price
+ * with no product has nothing to name it — so they are always requested
+ * together rather than as separate functions.
+ *
+ * Disjoint from the identity set, which is what makes scope isolation visible
+ * here: authorizing for catalog alone must never ask for `customers:read`.
+ */
+export const STRIPE_CATALOG_SCOPES = ["products:read", "prices:read"] as const;
+
 /** Cap on the connect-time probe, so a hung provider cannot wedge the request. */
 const PROBE_TIMEOUT_MS = 15_000;
 

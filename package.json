@@ -17,6 +17,8 @@
     "test:integration": "vitest run tests/integration",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
+    "db:check": "tsx scripts/db-maintenance.mts",
+    "db:prune": "tsx scripts/db-maintenance.mts --prune",
     "seed": "tsx prisma/seed.ts",
     "users:add": "tsx scripts/add-users.mts",
     "mappings:retarget": "tsx scripts/retarget-account-email-mappings.mts",

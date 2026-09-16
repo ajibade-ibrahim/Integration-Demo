@@ -110,7 +110,7 @@ describe("parseCustomersPage", () => {
       has_more: true,
       data: [{ id: "cus_1" }, { id: "cus_2" }],
     });
-    expect(page.customers).toHaveLength(2);
+    expect(page.records).toHaveLength(2);
     expect(page.hasMore).toBe(true);
     expect(page.lastId).toBe("cus_2");
   });
@@ -119,7 +119,7 @@ describe("parseCustomersPage", () => {
     // Treating it as a gate would turn a fixture that omits it into a clean,
     // silent, empty sync.
     const page = parseCustomersPage({ has_more: false, data: [{ id: "cus_1" }] });
-    expect(page.customers).toHaveLength(1);
+    expect(page.records).toHaveLength(1);
   });
 
   it("treats a non-boolean has_more as false", () => {
@@ -132,7 +132,7 @@ describe("parseCustomersPage", () => {
       has_more: true,
       data: [{ id: "cus_1" }, "nonsense", { name: "no id here" }],
     });
-    expect(page.customers).toHaveLength(2);
+    expect(page.records).toHaveLength(2);
     expect(page.lastId).toBe("cus_1");
   });
 
@@ -143,7 +143,7 @@ describe("parseCustomersPage", () => {
   });
 
   it("tolerates a missing data array", () => {
-    expect(parseCustomersPage({}).customers).toEqual([]);
+    expect(parseCustomersPage({}).records).toEqual([]);
     expect(parseCustomersPage(null).hasMore).toBe(false);
   });
 });

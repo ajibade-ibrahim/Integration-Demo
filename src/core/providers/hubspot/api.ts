@@ -2,6 +2,9 @@
  * HubSpot API surface shared by the sync handler and field discovery.
  */
 
+import { isIdentityObject } from "../../identity-schema";
+import type { TargetObject } from "../../types/common";
+
 /** Overridable so tests can point the client at a local msw server. */
 export function hubspotApiBase(): string {
   const base = process.env["HUBSPOT_API_BASE"];
@@ -23,6 +26,23 @@ export const HUBSPOT_OBJECT_PATH = {
   customer: "companies",
   contact: "contacts",
 } as const;
+
+/**
+ * The HubSpot object name for one of our target objects.
+ *
+ * Throws rather than returning undefined for an object this handler does not
+ * serve. That case is a registration mistake — the sync engine and the
+ * discovery service both iterate the objects the *function* declares, so
+ * `identity` can only ever hand these two down — and a thrown error names it at
+ * once, where a silently undefined path would build a URL ending in
+ * "/undefined" and report a 404 from HubSpot instead.
+ */
+export function hubspotObjectPath(object: TargetObject): string {
+  if (!isIdentityObject(object)) {
+    throw new Error(`HubSpot's identity handler does not serve '${object}'`);
+  }
+  return HUBSPOT_OBJECT_PATH[object];
+}
 
 /**
  * HubSpot property names are lowercase alphanumerics and underscores.

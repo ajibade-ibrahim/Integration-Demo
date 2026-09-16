@@ -310,18 +310,21 @@ describe("Stripe as a second API-key provider", () => {
     expect(connectHrefFor("stripe", "int-1")).toBe("/integrations/int-1/connect");
   });
 
-  it("serves identity and agreement, but not billing", async () => {
+  it("serves identity, catalog and agreement, but not billing", async () => {
     const { functionNamesForProvider, providerNamesForFunction } = await import(
       "@/core/registries/function-registry"
     );
 
     // A declared scope set claims the provider *can* serve the function and
     // names what it would need — not that the handler exists. Stripe genuinely
-    // exposes subscriptions, so agreement is true of the API today.
+    // exposes subscriptions, so agreement is true of the API today; catalog is
+    // true *and* built.
     expect(functionNamesForProvider("stripe")).toEqual([
       "agreement",
+      "catalog",
       "identity",
     ]);
+    expect(providerNamesForFunction("catalog")).toEqual(["stripe"]);
     expect(providerNamesForFunction("identity")).toContain("stripe");
 
     // Stripe has a billing API, conspicuously. Withholding it is a deliberate

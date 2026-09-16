@@ -5,7 +5,7 @@
  * real handlers use, so the sync engine cannot tell the difference.
  */
 
-import type { RawRecord } from "../../types/common";
+import type { RawRecord, TargetObject } from "../../types/common";
 import type {
   HandlerContext,
   SourcePage,
@@ -40,7 +40,14 @@ export const mockIdentityHandler: SyncHandler = {
     return typeof id === "string" ? id : undefined;
   },
 
-  externalCustomerIdOf(contact: RawRecord): string | undefined {
+  externalParentIdOf(
+    contact: RawRecord,
+    object: TargetObject
+  ): string | undefined {
+    // Only a contact hangs off another record in the identity function; a
+    // customer is a root, so it has no parent id to report.
+    if (object !== "contact") return undefined;
+
     const id = contact["companyId"];
     return typeof id === "string" ? id : undefined;
   },

@@ -61,3 +61,78 @@ export const STRIPE_CONTACT_FIELDS: DiscoveredFieldDef[] = [
   { path: "customer_id", label: "Customer ID (association)", type: "string" },
   { path: "customer_name", label: "Customer name", type: "string" },
 ];
+
+export const STRIPE_PRODUCT_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Product ID", type: "string" },
+  { path: "name", label: "Name", type: "string" },
+  { path: "description", label: "Description", type: "string" },
+  { path: "active", label: "Active", type: "boolean" },
+  {
+    path: "created_at",
+    label: "Created at (ISO 8601, synthesized from created)",
+    type: "datetime",
+  },
+  // Offered and labelled rather than hidden, for the reason given on the
+  // customer fields above: a user who maps Stripe's own `created` should be
+  // told why the column comes out empty, not left to discover it.
+  {
+    path: "created",
+    label: "Created (Unix epoch seconds — map created_at instead)",
+    type: "number",
+  },
+  { path: "unit_label", label: "Unit label", type: "string" },
+  { path: "url", label: "Product URL", type: "string" },
+  { path: "statement_descriptor", label: "Statement descriptor", type: "string" },
+];
+
+/**
+ * Price fields, including the four the handler synthesizes.
+ *
+ * `offering_name`, `interval`, `interval_count` and `product_id` do not exist
+ * in Stripe's response — see `flattenPrice`. They are listed first because they
+ * are the ones the default mapping uses and the ones a user wants: the raw
+ * `recurring.interval` below is offered for completeness, but mapping it works
+ * only because `readPath` walks dots, and it is null for one-time prices where
+ * the synthesized field says `one_time`.
+ */
+export const STRIPE_OFFERING_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Price ID", type: "string" },
+  {
+    path: "offering_name",
+    label: "Display name (synthesized from nickname or amount)",
+    type: "string",
+  },
+  {
+    path: "interval",
+    label: "Billing interval (synthesized; one_time when not recurring)",
+    type: "string",
+  },
+  {
+    path: "interval_count",
+    label: "Interval count (synthesized; 1 when not recurring)",
+    type: "number",
+  },
+  { path: "product_id", label: "Product ID (synthesized)", type: "string" },
+  { path: "nickname", label: "Nickname (often empty)", type: "string" },
+  { path: "unit_amount", label: "Unit amount (minor units)", type: "number" },
+  { path: "currency", label: "Currency", type: "string" },
+  { path: "active", label: "Active", type: "boolean" },
+  { path: "type", label: "Type (one_time or recurring)", type: "string" },
+  { path: "billing_scheme", label: "Billing scheme", type: "string" },
+  { path: "recurring.interval", label: "Recurring interval (raw)", type: "string" },
+  {
+    path: "recurring.interval_count",
+    label: "Recurring interval count (raw)",
+    type: "number",
+  },
+  {
+    path: "recurring.usage_type",
+    label: "Usage type (licensed or metered)",
+    type: "string",
+  },
+  {
+    path: "created_at",
+    label: "Created at (ISO 8601, synthesized from created)",
+    type: "datetime",
+  },
+];

@@ -20,8 +20,8 @@ import { bootstrap, resetBootstrapForTests } from "@/core/bootstrap";
 import {
   CROSS_REF_PATTERN,
   crossRefProviderName,
-  resolveTargetField,
 } from "@/core/identity-schema";
+import { resolveTargetField } from "@/core/object-schema";
 import {
   applyMappings,
   validateMappings,
@@ -99,13 +99,13 @@ describe("the path pattern", () => {
 
 describe("validateMappings", () => {
   it("accepts a cross-reference to a registered provider", () => {
-    expect(validateMappings([rule()]).valid).toBe(true);
+    expect(validateMappings("identity", [rule()]).valid).toBe(true);
   });
 
   it("names the unknown provider rather than blaming the field", () => {
     // The message matters: the path *is* a valid field path shape, so "not a
     // field on customer" would send someone hunting a typo in the wrong half.
-    const result = validateMappings([
+    const result = validateMappings("identity", [
       rule({ targetFieldPath: "crossRef.nonsense" }),
     ]);
 
@@ -120,7 +120,7 @@ describe("validateMappings", () => {
   });
 
   it("explains the object restriction on a contact rule", () => {
-    const result = validateMappings([
+    const result = validateMappings("identity", [
       rule({ targetObject: "contact", targetFieldPath: "crossRef.stripe" }),
     ]);
 
@@ -131,7 +131,7 @@ describe("validateMappings", () => {
   it("still catches a duplicated cross-reference target", () => {
     // Two rules writing the same reference is the same mistake as two rules
     // writing the same column, and must be reported the same way.
-    const result = validateMappings([
+    const result = validateMappings("identity", [
       rule(),
       rule({ sourceFieldPath: "legacy_stripe_id" }),
     ]);

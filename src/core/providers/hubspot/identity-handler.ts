@@ -27,8 +27,8 @@ import {
   type ProviderSession,
 } from "../http";
 import {
-  HUBSPOT_OBJECT_PATH,
   hubspotApiBase,
+  hubspotObjectPath,
   hubspotPageSize,
   propertiesParam,
 } from "./api";
@@ -39,7 +39,7 @@ function pageUrl(
   after: string | undefined
 ): string {
   const url = new URL(
-    `/crm/v3/objects/${HUBSPOT_OBJECT_PATH[object]}`,
+    `/crm/v3/objects/${hubspotObjectPath(object)}`,
     hubspotApiBase()
   );
   url.searchParams.set("limit", String(hubspotPageSize()));
@@ -96,7 +96,14 @@ export const hubspotIdentityHandler: SyncHandler = {
     return asString(record["id"]);
   },
 
-  externalCustomerIdOf(contact: RawRecord): string | undefined {
+  externalParentIdOf(
+    contact: RawRecord,
+    object: TargetObject
+  ): string | undefined {
+    // Only a contact hangs off another record in the identity function; a
+    // customer is a root, so it has no parent id to report.
+    if (object !== "contact") return undefined;
+
     // associations.companies.results[] — take the first. HubSpot allows a
     // contact to associate with several companies, but our model holds one, and
     // the first is the primary in practice.

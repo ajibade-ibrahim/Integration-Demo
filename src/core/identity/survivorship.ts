@@ -30,8 +30,8 @@
  * repartition, editing a rank would silently regroup a user's customer list.
  */
 
-import { IDENTITY_SCHEMA, type FieldDefinition } from "../identity-schema";
-import { MAX_CUSTOM_FIELDS } from "../identity-schema";
+import { IDENTITY_SCHEMA } from "../identity-schema";
+import { MAX_CUSTOM_FIELDS, type FieldDefinition } from "../object-schema";
 import type { AccountFields, ResolutionCustomer } from "../repositories/identity-repository";
 import type { CustomerType, IdentityIssue } from "../types/common";
 

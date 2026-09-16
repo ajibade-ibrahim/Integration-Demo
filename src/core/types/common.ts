@@ -53,17 +53,57 @@ export function isCustomerType(v: unknown): v is CustomerType {
 // ---------------------------------------------------------------------------
 
 /**
- * The internal record types the identity function writes to. Field mapping
- * targets are qualified by one of these, so a contact field can never be
- * mapped onto a customer record.
+ * Every internal record type a function can write to. Field mapping targets are
+ * qualified by one of these, so a contact field can never be mapped onto a
+ * customer record.
+ *
+ * Flat and global, while *which* of them a given function may write is not —
+ * that lives in `src/core/object-schema.ts`, keyed by function name. The split
+ * matters: this union is what `FieldMapping.targetObject` is validated against,
+ * and a stored rule has to stay recognisable regardless of which function owns
+ * it. Membership of this list means "a real object"; it does not mean "mappable
+ * from the function you are currently editing".
  */
-export const TARGET_OBJECTS = ["customer", "contact"] as const;
+export const TARGET_OBJECTS = [
+  "customer",
+  "contact",
+  "product",
+  "offering",
+] as const;
 
 export type TargetObject = (typeof TARGET_OBJECTS)[number];
 
 export function isTargetObject(v: unknown): v is TargetObject {
   return (
     typeof v === "string" && (TARGET_OBJECTS as readonly string[]).includes(v)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Billing interval
+// ---------------------------------------------------------------------------
+
+/**
+ * How often an offering recurs.
+ *
+ * `one_time` is a member rather than a null, because "this price does not
+ * recur" is a fact about the offering and not an absence of information. A null
+ * `interval` means the provider told us nothing; `one_time` means it told us
+ * there is no recurrence, and those two must not read alike in the UI.
+ */
+export const BILLING_INTERVALS = [
+  "day",
+  "week",
+  "month",
+  "year",
+  "one_time",
+] as const;
+
+export type BillingInterval = (typeof BILLING_INTERVALS)[number];
+
+export function isBillingInterval(v: unknown): v is BillingInterval {
+  return (
+    typeof v === "string" && (BILLING_INTERVALS as readonly string[]).includes(v)
   );
 }
 

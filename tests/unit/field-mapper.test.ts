@@ -22,11 +22,11 @@ function rule(over: Partial<FieldMappingRule> = {}): FieldMappingRule {
 
 describe("validateMappings", () => {
   it("accepts a well-formed customer rule", () => {
-    expect(validateMappings([rule()]).valid).toBe(true);
+    expect(validateMappings("identity", [rule()]).valid).toBe(true);
   });
 
   it("accepts a custom field target", () => {
-    const result = validateMappings([
+    const result = validateMappings("identity", [
       rule({ targetFieldPath: "customFields.account_tier" }),
     ]);
     expect(result.valid).toBe(true);
@@ -38,7 +38,7 @@ describe("validateMappings", () => {
   // objects now that identity resolution matches on an account-level address,
   // so it no longer demonstrates anything. A job title is still person-only.
   it("rejects a contact field mapped onto a customer", () => {
-    const result = validateMappings([
+    const result = validateMappings("identity", [
       rule({ targetObject: "customer", targetFieldPath: "jobTitle" }),
     ]);
     expect(result.valid).toBe(false);
@@ -46,7 +46,7 @@ describe("validateMappings", () => {
   });
 
   it("rejects a customer field mapped onto a contact", () => {
-    const result = validateMappings([
+    const result = validateMappings("identity", [
       rule({ targetObject: "contact", targetFieldPath: "industry" }),
     ]);
     expect(result.valid).toBe(false);
@@ -54,7 +54,7 @@ describe("validateMappings", () => {
   });
 
   it("rejects the derived associatedCustomerId target", () => {
-    const result = validateMappings([
+    const result = validateMappings("identity", [
       rule({ targetObject: "contact", targetFieldPath: "associatedCustomerId" }),
     ]);
     expect(result.valid).toBe(false);
@@ -62,7 +62,7 @@ describe("validateMappings", () => {
   });
 
   it("rejects a duplicate target within the same object", () => {
-    const result = validateMappings([
+    const result = validateMappings("identity", [
       rule({ sourceFieldPath: "a" }),
       rule({ sourceFieldPath: "b" }),
     ]);
@@ -73,7 +73,7 @@ describe("validateMappings", () => {
   });
 
   it("allows the same target name on different objects", () => {
-    const result = validateMappings([
+    const result = validateMappings("identity", [
       rule({ targetObject: "customer", targetFieldPath: "name" }),
       rule({ targetObject: "contact", targetFieldPath: "name" }),
     ]);
@@ -87,21 +87,21 @@ describe("validateMappings", () => {
       ["256 chars", "a".repeat(256), false],
       ["empty", "", false],
     ])("%s", (_label, path, expected) => {
-      expect(validateMappings([rule({ sourceFieldPath: path })]).valid).toBe(
+      expect(validateMappings("identity", [rule({ sourceFieldPath: path })]).valid).toBe(
         expected
       );
     });
   });
 
   it("rejects a malformed custom field key", () => {
-    const result = validateMappings([
+    const result = validateMappings("identity", [
       rule({ targetFieldPath: "customFields.has-a-dash" }),
     ]);
     expect(result.valid).toBe(false);
   });
 
   it("reports every violation, not just the first", () => {
-    const result = validateMappings([
+    const result = validateMappings("identity", [
       rule({ targetFieldPath: "nope" }),
       rule({ sourceFieldPath: "" }),
     ]);

@@ -140,10 +140,10 @@ describe("HubSpot pagination", () => {
 describe("HubSpot record shape", () => {
   it("reads the association as the contact's company id", () => {
     expect(
-      hubspotIdentityHandler.externalCustomerIdOf(contact("c1", "42"))
+      hubspotIdentityHandler.externalParentIdOf(contact("c1", "42"), "contact")
     ).toBe("42");
     expect(
-      hubspotIdentityHandler.externalCustomerIdOf(contact("c2"))
+      hubspotIdentityHandler.externalParentIdOf(contact("c2"), "contact")
     ).toBeUndefined();
     expect(hubspotIdentityHandler.externalIdOf(company("7", "Acme"))).toBe("7");
   });

@@ -16,7 +16,8 @@ import {
   findDiscoveredFields,
   replaceDiscoveredFields,
 } from "../repositories/discovered-field-repository";
-import { TARGET_OBJECTS, type TargetObject } from "../types/common";
+import { objectsForFunction } from "../object-schema";
+import type { TargetObject } from "../types/common";
 import type { DiscoveredFieldDef } from "../types/registry";
 import { systemClock, type Clock } from "./clock";
 
@@ -51,7 +52,10 @@ export async function discoverFields(
   const discovery = getFieldDiscovery(functionName, integration.providerName);
   const results: DiscoveryResult[] = [];
 
-  for (const object of TARGET_OBJECTS) {
+  // The function's own objects, not every object that exists — otherwise
+  // editing an identity mapping would call the provider's schema API for
+  // products, and cache an empty answer against them.
+  for (const object of objectsForFunction(functionName)) {
     if (options.refresh !== true) {
       const cached = await findDiscoveredFields(integrationId, functionName, object);
       const fresh =

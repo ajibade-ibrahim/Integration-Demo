@@ -2,9 +2,14 @@
  * Sync orchestration: guard, fetch, map, write, record.
  *
  * Provider specifics live in handlers; this module owns the invariants that
- * hold regardless of provider — one run at a time per integration, customers
- * before contacts, per-record failures that do not abort the run, and a
- * durable account of what happened.
+ * hold regardless of provider — one run at a time per integration, parents
+ * before children, per-record failures that do not abort the run, and a durable
+ * account of what happened.
+ *
+ * What it deliberately does *not* own is which objects a function writes, or in
+ * what order. That is `objectsForFunction` in `object-schema.ts` and the switch
+ * in `record-writer.ts`, so adding a function is a change in those two places
+ * rather than another branch in this loop.
  */
 
 import { prisma } from "@/lib/prisma";
@@ -19,9 +24,8 @@ import {
   type IntegrationRecord,
 } from "../repositories/integration-repository";
 import { findMappings } from "../repositories/mapping-repository";
-import { writeJsonArray } from "../repositories/json-column";
+import { writeJsonArray, writeJsonCounts } from "../repositories/json-column";
 import type { RecordIssue, TargetObject } from "../types/common";
-import type { MappedRecord } from "../types/mapping";
 import { syncTiming, systemClock, type Clock } from "./clock";
 import {
   ProviderHttpError,
@@ -36,19 +40,30 @@ export {
   RetryableSyncError,
 } from "./errors";
 import {
-  relinkOrphanedContacts,
-  writeContacts,
-  writeCustomers,
+  relinkOrphansForFunction,
+  writeRecordsForFunction,
+  type CollectedRecord,
 } from "./record-writer";
 
 export interface SyncResult {
   syncRunId: string | null;
   status: "success" | "partial" | "failed" | "discarded";
-  customerCount: number;
-  contactCount: number;
+  /**
+   * Rows written per target object. Objects the run did not touch are absent,
+   * so a catalog sync reports products and offerings without claiming a
+   * customer count of zero.
+   */
+  recordCounts: Partial<Record<TargetObject, number>>;
   issues: RecordIssue[];
   error?: string;
   attempts: number;
+}
+
+/** Total rows written across every object, for callers that want one number. */
+export function totalRecordsWritten(
+  counts: Partial<Record<TargetObject, number>>
+): number {
+  return Object.values(counts).reduce<number>((sum, n) => sum + (n ?? 0), 0);
 }
 
 /**
@@ -137,8 +152,7 @@ async function runWithRetries(
         data: {
           status,
           completedAt: new Date(clock.now()),
-          customerCount: outcome.customerCount,
-          contactCount: outcome.contactCount,
+          recordCountsJson: writeJsonCounts(outcome.recordCounts),
           attempt,
           errorsJson: writeJsonArray(outcome.issues),
         },
@@ -194,8 +208,7 @@ async function runWithRetries(
   return {
     syncRunId,
     status: "failed",
-    customerCount: 0,
-    contactCount: 0,
+    recordCounts: {},
     issues: [],
     error: lastError,
     attempts: timing.maxAttempts,
@@ -203,8 +216,7 @@ async function runWithRetries(
 }
 
 interface RunOutcome {
-  customerCount: number;
-  contactCount: number;
+  recordCounts: Partial<Record<TargetObject, number>>;
   issues: RecordIssue[];
 }
 
@@ -214,8 +226,7 @@ async function runOnce(
 ): Promise<RunOutcome> {
   const token = await getValidToken(integration.id, clock.now());
 
-  let customerCount = 0;
-  let contactCount = 0;
+  const recordCounts: Partial<Record<TargetObject, number>> = {};
   const issues: RecordIssue[] = [];
 
   for (const functionName of integration.functionNames) {
@@ -262,43 +273,34 @@ async function runOnce(
       for (const raw of page.records) {
         bucket.push({
           externalSourceId: handler.externalIdOf(raw),
-          externalCustomerId:
-            page.object === "contact"
-              ? handler.externalCustomerIdOf(raw)
-              : undefined,
+          externalParentId: handler.externalParentIdOf(raw, page.object),
           mapped: applyMappings(rules, page.object, raw),
         });
       }
       collected.set(page.object, bucket);
     }
 
-    // Customers first — contacts resolve their association against the index
-    // this produces.
-    const customers = collected.get("customer") ?? [];
-    const customerResult = await writeCustomers(integration.id, customers);
-    customerCount += customerResult.written;
-    issues.push(...customerResult.issues);
-
-    const contacts = collected.get("contact") ?? [];
-    const contactResult = await writeContacts(
+    // Parents before children, in the order the function declares. Which
+    // writers run, and in what sequence, is the writer module's business —
+    // this loop knows only that a function produced records and that someone
+    // has to persist them.
+    const result = await writeRecordsForFunction(
       integration.id,
-      contacts,
-      customerResult.externalToInternal
+      functionName,
+      collected
     );
-    contactCount += contactResult.written;
-    issues.push(...contactResult.issues);
+
+    for (const [object, count] of Object.entries(result.counts)) {
+      const key = object as TargetObject;
+      recordCounts[key] = (recordCounts[key] ?? 0) + count;
+    }
+    issues.push(...result.issues);
+
+    // Children stranded by earlier runs may now be linkable.
+    await relinkOrphansForFunction(integration.id, functionName);
   }
 
-  // Contacts stranded by earlier runs may now be linkable.
-  await relinkOrphanedContacts(integration.id);
-
-  return { customerCount, contactCount, issues };
-}
-
-interface CollectedRecord {
-  externalSourceId: string | undefined;
-  externalCustomerId: string | undefined;
-  mapped: MappedRecord;
+  return { recordCounts, issues };
 }
 
 function emptyResult(
@@ -308,8 +310,7 @@ function emptyResult(
   return {
     syncRunId: null,
     status,
-    customerCount: 0,
-    contactCount: 0,
+    recordCounts: {},
     issues: [],
     error,
     attempts: 0,
