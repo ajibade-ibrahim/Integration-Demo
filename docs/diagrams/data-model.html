@@ -45,11 +45,13 @@
 
     <div class="lede">
       <h1>Data model</h1>
-      <p>Eleven tables. Nine form one ownership spine — <b>everything hangs off
-         <code>Integration</code></b> — and two are scratch space for a connect that has not
-         finished: a draft nobody has proven a credential for yet, and an OAuth state awaiting
-         its callback. Transcribed from <code>prisma/schema.prisma</code> and the const-union
-         types in <code>src/core/types/common.ts</code>.</p>
+      <p>Fifteen tables in three groups. <b>The sync spine</b> — seven tables hanging off
+         <code>Integration</code>, plus the two scratch tables holding a connect that has not
+         finished — is §1. <b>The identity layer</b> is §2: four tables scoped to
+         <code>User</code> instead, because resolving one company across three connections is by
+         definition not something any one <code>Integration</code> owns. Transcribed from
+         <code>prisma/schema.prisma</code> and the const-union types in
+         <code>src/core/types/common.ts</code>.</p>
       <p>The HTML companion to <code>docs/data-model.md</code>. Hover any table to isolate its
          relationships, and use the control in §1 to watch a delete propagate.</p>
       <div class="legend">
@@ -65,18 +67,18 @@
       columns are modelled as <code>String</code> and constrained in application code — a shape
       inherited from when the tests ran on SQLite, which has neither <code>enum</code> nor
       <code>Json</code> through Prisma. Everything now runs Postgres, so promoting them to native
-      <code>enum</code> / <code>jsonb</code> is available but not yet done. See §3.
+      <code>enum</code> / <code>jsonb</code> is available but not yet done. See §4.
     </div>
 
 
     <!-- =================================================== 1 · ENTITIES ==== -->
     <figure class="fig" id="fig-er">
       <div class="fig-head">
-        <h2><span class="n">1</span>The eleven tables</h2>
+        <h2><span class="n">1</span>The sync spine</h2>
         <p><code>Integration</code> is the tenancy boundary. Every synced record, mapping rule,
            discovered field and run carries <code>integrationId</code> — which is why deleting one
            integration is a clean sweep, and why no query leaks another integration's data by
-           omission.</p>
+           omission. The four identity tables are the exception, and they are in §2.</p>
         <p>The two marked <i>scratch</i> sit outside that spine. Both expire in 30 minutes and hold
            a connect in progress rather than anything the user would miss. They are tables at all
            because each is written by one request and read by a later one — put them in memory and
@@ -212,9 +214,10 @@
                 <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
                 <li><span class="badge fk">FK</span><span class="fname">userId</span><span class="ftype">String</span></li>
                 <li><span class="badge none"></span><span class="fname">providerName</span><span class="ftype">String</span></li>
-                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §5</span></li>
                 <li><span class="badge none"></span><span class="fname">instanceLabel</span><span class="ftype">String</span></li>
                 <li><span class="badge none"></span><span class="fname">syncIntervalHours</span><span class="ftype">Int = 24</span></li>
+                <li><span class="badge none"></span><span class="fname">identityPriority</span><span class="ftype">Int = 100 · §2</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">authorizationTimestamp</span><span class="ftype">DateTime</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">lastSyncTimestamp</span><span class="ftype">DateTime</span></li>
                 <li><span class="badge none"></span><span class="fname">pendingTokenRevocation</span><span class="ftype">Bool = false</span></li>
@@ -233,10 +236,14 @@
                 <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
                 <li><span class="badge none"></span><span class="fname">name</span><span class="ftype">String</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">domain</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">email</span><span class="ftype">String · §2</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">industry</span><span class="ftype">String</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">createDate</span><span class="ftype">DateTime</span></li>
-                <li class="opt"><span class="badge none"></span><span class="fname">type</span><span class="ftype">String · §3</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">type</span><span class="ftype">String · §4</span></li>
                 <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">crossRefs</span><span class="ftype">JSON = {} · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">importedCrossRefs</span><span class="ftype">JSON = {} · §4</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">customerAccountId</span><span class="ftype">SetNull · §2</span></li>
                 <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
               </ul>
             </div>
@@ -263,7 +270,7 @@
               <ul class="ent-f">
                 <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
                 <li><span class="badge fk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
-                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §3</span></li>
+                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §4</span></li>
                 <li><span class="badge none"></span><span class="fname">trigger</span><span class="ftype">String = manual</span></li>
                 <li><span class="badge none"></span><span class="fname">startedAt</span><span class="ftype">DateTime</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">completedAt</span><span class="ftype">DateTime</span></li>
@@ -291,10 +298,162 @@
     </figure>
 
 
-    <!-- ================================================= 2 · UNIQUENESS ==== -->
+    <!-- =============================================== 2 · IDENTITY LAYER == -->
+    <figure class="fig" id="fig-accounts">
+      <div class="fig-head">
+        <h2><span class="n">2</span>The identity layer</h2>
+        <p>Everything in §1 is scoped by <code>Integration</code>. These four are not, and that is
+           the whole point of them: one real company appears as three <code>Customer</code> rows in
+           three connections, so the thing that says <em>these are one company</em> cannot belong to
+           any of the three. They hang off <code>User</code> instead.</p>
+        <p><b><code>userId</code> is on every one of them, and the uniques lead with it.</b> This is
+           the severe failure mode in the whole schema — not a missed join, which is visible and
+           recoverable, but one tenant's customers appearing under another's company. A single
+           <code>where</code> clause missing <code>userId</code> does that silently.</p>
+      </div>
+
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+
+      <div class="viewport">
+        <div class="canvas dg-er" id="c-acct" data-edges='[
+          {"from":"a-customer","to":"a-account","fs":"right","ts":"left","label":"resolves to · 0..1\nSetNull, because accounts are reaped"},
+          {"from":"a-account","to":"a-key","fs":"right","ts":"left","label":"matched by · 1..n\nCascade"},
+          {"from":"a-customer","to":"a-assertion","fs":"bottom","ts":"left","label":"asserted about\ntwice per row · Cascade"},
+          {"from":"a-run","to":"a-account","fs":"top","ts":"bottom","kind":"dashed","label":"recomputes every field,\nevery pass"}
+        ]'>
+
+          <div class="col">
+            <div class="node ent" id="a-customer">
+              <div class="ent-h">Customer <span class="rel">from §1</span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">email</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">domain</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">crossRefs</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">importedCrossRefs</span><span class="ftype">JSON = {}</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">customerAccountId</span><span class="ftype">SetNull</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="a-assertion">
+              <div class="ent-h">IdentityAssertion <span class="rel">a human's verdict</span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">userId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">kind</span><span class="ftype">same | distinct</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">leftCustomerId</span><span class="ftype">Cascade</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">rightCustomerId</span><span class="ftype">Cascade</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">note</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">createdAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="col col-mid">
+            <div class="node ent spine" id="a-account">
+              <div class="ent-h">CustomerAccount <span class="rel">one company</span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk">FK</span><span class="fname">userId</span><span class="ftype">Cascade</span></li>
+                <li><span class="badge none"></span><span class="fname">name</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">domain</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">email</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">industry</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">createDate</span><span class="ftype">earliest wins</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">type</span><span class="ftype">String · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">fieldProvenance</span><span class="ftype">JSON = {} · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">createdAt</span><span class="ftype">DateTime</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="a-run">
+              <div class="ent-h">IdentityResolutionRun <span class="rel">per user, not per integration</span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk">FK</span><span class="fname">userId</span><span class="ftype">Cascade</span></li>
+                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">SyncRunStatus · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">trigger</span><span class="ftype">String = sync · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">startedAt</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">completedAt</span><span class="ftype">DateTime</span></li>
+                <li><span class="badge none"></span><span class="fname">accountsCreated</span><span class="ftype">Int = 0</span></li>
+                <li><span class="badge none"></span><span class="fname">accountsAbsorbed</span><span class="ftype">Int = 0</span></li>
+                <li><span class="badge none"></span><span class="fname">accountsReaped</span><span class="ftype">Int = 0</span></li>
+                <li><span class="badge none"></span><span class="fname">customersLinked</span><span class="ftype">Int = 0</span></li>
+                <li><span class="badge none"></span><span class="fname">keysIndexed</span><span class="ftype">Int = 0</span></li>
+                <li><span class="badge none"></span><span class="fname">issuesJson</span><span class="ftype">JSON = [] · §4</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="node ent" id="a-key">
+              <div class="ent-h">CustomerAccountKey <span class="rel">the join</span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">userId</span><span class="ftype">denormalized</span></li>
+                <li><span class="badge fk">FK</span><span class="fname">customerAccountId</span><span class="ftype">Cascade</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">kind</span><span class="ftype">ranked · §4</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">value</span><span class="ftype">normalized</span></li>
+                <li><span class="badge none"></span><span class="fname">rawValue</span><span class="ftype">as given</span></li>
+                <li><span class="badge none"></span><span class="fname">emailClass</span><span class="ftype">String · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">source</span><span class="ftype">String · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">sourceIntegrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">firstSeenAt</span><span class="ftype">DateTime</span></li>
+                <li><span class="badge none"></span><span class="fname">lastSeenAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <p class="fig-note"><strong>The key table is a table, not a column.</strong> The identity
+        table is <code>account → [keys]</code>, one-to-many, and <code>kind</code> is polymorphic —
+        which is what lets a Stripe customer id, an email address and a domain all be the same sort
+        of evidence at different strengths. <code>IDENTITY_KEY_KINDS</code> array order <em>is</em>
+        the ranking (<code>external_ref</code> &gt; <code>email</code> &gt; <code>domain</code>),
+        which is why it is an ordered const and not a set.</p>
+
+      <p class="fig-note"><strong>Every field on <code>CustomerAccount</code> is derived, never
+        authored.</strong> Each one is a pure function of (members,
+        <code>Integration.identityPriority</code>), recomputed whole on every pass, so it cannot
+        drift from its members. Per field, the winner is the highest-priority member that
+        <em>actually supplies a value</em> — a null is not an opinion, which matters because Stripe
+        carries no industry, domain or type at all and would otherwise blank three columns by being
+        ranked first. <code>fieldProvenance</code> records which integration won each field, and is
+        what makes the per-field provider chip on the Accounts tab renderable.</p>
+
+      <p class="fig-note"><strong>Assertions anchor to <code>Customer</code>, not to
+        <code>CustomerAccount</code>.</strong> Account ids are created, absorbed and reaped by every
+        pass, so they are not stable anchors; a <code>Customer</code> row survives re-sync because
+        the writer upserts it, and cascades away with its integration — exactly the lifetime a
+        human's verdict should have. The pair is stored canonically ordered
+        (<code>left &lt; right</code>) because otherwise <code>(A,B)</code> and <code>(B,A)</code>
+        both insert and the unique means nothing.</p>
+
+      <p class="fig-note"><strong><code>crossRefs</code> and <code>importedCrossRefs</code> hold the
+        same shape and are deliberately separate.</strong> The record writer overwrites
+        <code>crossRefs</code> wholesale on every upsert, because it is the output of the mapping
+        rules and nothing else. A human-supplied pair kept there would survive exactly until the
+        next sync, taking its grouping with it.</p>
+    </figure>
+
+
+    <!-- ================================================= 3 · UNIQUENESS ==== -->
     <figure class="fig" id="fig-identity">
       <div class="fig-head">
-        <h2><span class="n">2</span>Where identity actually lives</h2>
+        <h2><span class="n">3</span>Where identity actually lives</h2>
         <p>The constraints that decide whether a re-run updates a row or duplicates it.</p>
       </div>
       <div class="viewport">
@@ -310,6 +469,8 @@
             <tr><th scope="row">FieldMapping</th><td><span class="chip">integrationId</span><span class="chip">functionName</span><span class="chip">targetObject</span><span class="chip">targetFieldPath</span></td><td>One rule per target field. Function and target object are part of the identity, because two functions on one integration can write to the same object.</td></tr>
             <tr><th scope="row">DiscoveredField</th><td><span class="chip">integrationId</span><span class="chip">functionName</span><span class="chip">targetObject</span><span class="chip">path</span></td><td>The cache key.</td></tr>
             <tr><th scope="row">OAuthToken</th><td><span class="chip">integrationId</span> <span class="ftype">as the primary key</span></td><td>Structurally at most one live credential per integration — not a rule enforced in code.</td></tr>
+            <tr><th scope="row">CustomerAccountKey</th><td><span class="chip">userId</span><span class="chip">kind</span><span class="chip">value</span></td><td><b>This one <em>is</em> the join.</b> Within a tenant a key belongs to at most one account, so a second claim is a detectable conflict rather than a silent overwrite — and it is the concurrency backstop two passes race on. <code>userId</code> is denormalized into the row because Prisma cannot express a unique spanning a relation, the same reason <code>OAuthState</code> keeps <code>subjectKind</code>/<code>subjectId</code> flat.</td></tr>
+            <tr><th scope="row">IdentityAssertion</th><td><span class="chip">leftCustomerId</span><span class="chip">rightCustomerId</span></td><td>One verdict per pair — and only meaningful because the pair is stored canonically ordered. Without that, asserting <code>(B,A)</code> after <code>(A,B)</code> inserts a second row instead of conflicting, and the constraint means nothing.</td></tr>
           </tbody>
         </table>
       </div>
@@ -318,16 +479,21 @@
         <code>IntegrationFunction(functionName)</code>;
         <code>FieldMapping(integrationId)</code> and <code>(integrationId, functionName)</code>;
         <code>DiscoveredField(integrationId, functionName, targetObject)</code>;
-        <code>Customer(integrationId)</code>;
+        <code>Customer(integrationId)</code> and <code>Customer(customerAccountId)</code>;
         <code>Contact(integrationId)</code> and <code>Contact(customerId)</code>;
-        <code>SyncRun(integrationId, startedAt)</code> for run-history ordering.</p>
+        <code>SyncRun(integrationId, startedAt)</code> for run-history ordering;
+        <code>CustomerAccount(userId)</code> and <code>(userId, name)</code> for the Accounts tab's
+        <code>name asc, id asc</code> ordering;
+        <code>CustomerAccountKey(customerAccountId)</code>;
+        <code>IdentityAssertion(userId)</code>;
+        <code>IdentityResolutionRun(userId, startedAt)</code>.</p>
     </figure>
 
 
-    <!-- ==================================================== 3 · STRINGS ==== -->
+    <!-- ==================================================== 4 · STRINGS ==== -->
     <figure class="fig" id="fig-strings">
       <div class="fig-head">
-        <h2><span class="n">3</span>Columns that are strings but are not really strings</h2>
+        <h2><span class="n">4</span>Columns that are strings but are not really strings</h2>
         <p>Each union lives beside its runtime guard in
            <code>src/core/types/common.ts</code>, so the type and its check cannot drift.</p>
       </div>
@@ -343,7 +509,7 @@
               <td><code>isIntegrationStatus</code></td>
             </tr>
             <tr>
-              <th scope="row">Customer.type</th>
+              <th scope="row">Customer.type<br><span class="ftype">CustomerAccount.type</span></th>
               <td><span class="chip">prospect</span><span class="chip">customer</span><span class="chip">partner</span><span class="chip">vendor</span><span class="chip">null</span></td>
               <td><code>isCustomerType</code></td>
             </tr>
@@ -353,9 +519,9 @@
               <td><code>isTargetObject</code></td>
             </tr>
             <tr>
-              <th scope="row">SyncRun.status</th>
+              <th scope="row">SyncRun.status<br><span class="ftype">IdentityResolutionRun.status</span></th>
               <td><span class="chip">running</span><span class="chip">success</span><span class="chip">partial</span><span class="chip">failed</span><span class="chip">discarded</span></td>
-              <td><code>isSyncRunStatus</code></td>
+              <td><code>isSyncRunStatus</code> — reused verbatim, because the five states mean the same things down to <code>discarded</code> being what the concurrency guard produces</td>
             </tr>
             <tr>
               <th scope="row">FieldMapping.transform</th>
@@ -367,6 +533,31 @@
               <td><span class="chip">manual</span><span class="chip">scheduled</span></td>
               <td class="none">none — narrowed by the caller's type, not checked at runtime</td>
             </tr>
+            <tr>
+              <th scope="row">CustomerAccountKey.kind</th>
+              <td><span class="chip">external_ref</span><span class="chip">email</span><span class="chip">domain</span></td>
+              <td><code>isIdentityKeyKind</code> — <b>the array order is the strength ranking</b>, which is why it is an ordered const and not a set</td>
+            </tr>
+            <tr>
+              <th scope="row">CustomerAccountKey.emailClass</th>
+              <td><span class="chip">corporate</span><span class="chip">role</span><span class="chip">freemail</span></td>
+              <td><code>isEmailClass</code> — stored to <em>explain</em> a key, never to filter one. <code>billing@</code> and <code>accounts@</code> are still keys; the spec's own seeds are billing addresses</td>
+            </tr>
+            <tr>
+              <th scope="row">CustomerAccountKey.source</th>
+              <td><span class="chip">customer_email</span><span class="chip">customer_domain</span><span class="chip">customer_custom_field</span><span class="chip">contact_email</span><span class="chip">self_reference</span><span class="chip">mapped_cross_ref</span><span class="chip">imported_crosswalk</span></td>
+              <td><code>isIdentityEvidenceSource</code></td>
+            </tr>
+            <tr>
+              <th scope="row">IdentityAssertion.kind</th>
+              <td><span class="chip">same</span><span class="chip">distinct</span></td>
+              <td><code>isIdentityAssertionKind</code></td>
+            </tr>
+            <tr>
+              <th scope="row">IdentityResolutionRun.trigger</th>
+              <td><span class="chip">sync</span><span class="chip">scheduled</span><span class="chip">manual</span></td>
+              <td><code>isIdentityRunTrigger</code></td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -375,16 +566,32 @@
         <code>Customer.customFields</code> and <code>Contact.customFields</code> hold
         <code>Record&lt;string, string&gt;</code> (customers are capped at 50 keys in app code);
         <code>OAuthToken.providerMetadata</code> holds provider extras from the token response —
-        Salesforce's <code>instance_url</code>, and <code>authKind</code>/<code>keyPrefix</code> for
-        an API key; <code>SyncRun.errorsJson</code> holds <code>RecordIssue[]</code>, each
+        Salesforce's <code>instance_url</code> and <code>organizationId</code>, and
+        <code>authKind</code>/<code>keyPrefix</code> for an API key;
+        <code>SyncRun.errorsJson</code> holds <code>RecordIssue[]</code>, each
         <code>{ sourceRecordId, targetObject, reason, fieldName?, severity }</code>.</p>
+      <p class="fig-note">The identity layer adds five more.
+        <code>Customer.crossRefs</code> and <code>Customer.importedCrossRefs</code> are both
+        <code>Record&lt;provider, foreignId&gt;</code>, separate because the first is overwritten
+        wholesale on every upsert (see §2). <code>CustomerAccount.customFields</code> unions across
+        members with higher priority winning a shared key;
+        <code>CustomerAccount.fieldProvenance</code> is
+        <code>Record&lt;fieldName, integrationId&gt;</code>.
+        <code>IdentityResolutionRun.issuesJson</code> holds <code>IdentityIssue[]</code> — a
+        <b>discriminated union</b> on <code>kind</code>, not one shape with eight optional fields,
+        so a renderer cannot read <code>fieldName</code> off a key conflict. The four kinds are
+        <code>key_claimed_elsewhere</code> (two accounts claim one key; never auto-merged, a human
+        decides), <code>blocked_by_assertion</code> (a <code>distinct</code> verdict refused a
+        grouping some key would have made), <code>field_conflict</code> (equal-priority sources
+        disagree on a value) and <code>key_race_lost</code> (a concurrent pass inserted the same key
+        first).</p>
     </figure>
 
 
-    <!-- ================================================== 4 · LIFECYCLE ==== -->
+    <!-- ================================================== 5 · LIFECYCLE ==== -->
     <figure class="fig" id="fig-lifecycle">
       <div class="fig-head">
-        <h2><span class="n">4</span>The <code>Integration.status</code> lifecycle</h2>
+        <h2><span class="n">5</span>The <code>Integration.status</code> lifecycle</h2>
         <p>The one column with real behaviour behind it. Every write goes through
            <code>updateStatus</code> or <code>markAuthorized</code> in
            <code>integration-repository.ts</code>.</p>

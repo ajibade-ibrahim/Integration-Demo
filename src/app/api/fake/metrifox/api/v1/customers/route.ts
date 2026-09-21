@@ -52,7 +52,10 @@ export async function GET(request: Request): Promise<NextResponse> {
   const total = METRIFOX_CUSTOMERS.length;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const start = (page - 1) * perPage;
-  const data: MetrifoxCustomer[] = METRIFOX_CUSTOMERS.slice(start, start + perPage);
+  const data: MetrifoxCustomer[] = METRIFOX_CUSTOMERS.slice(
+    start,
+    start + perPage
+  ).map(withConfiguredStripeId);
 
   return NextResponse.json({
     statusCode: 200,
@@ -73,4 +76,42 @@ function positiveInt(raw: string | null): number | undefined {
   if (raw === null) return undefined;
   const parsed = Number.parseInt(raw, 10);
   return Number.isNaN(parsed) || parsed < 1 ? undefined : parsed;
+}
+
+/**
+ * Point a fixture's `stripe_customer_id` at a Stripe sandbox you have seeded.
+ *
+ * Needed because the id cannot be a fixture. `stripe fixtures` creates
+ * customers in a live sandbox and Stripe assigns each a `cus_...` id at
+ * creation time — there is no way to choose one in advance, so a hardcoded
+ * value in `fixtures.ts` would name a customer that does not exist and the
+ * crosswalk join would be a demo of nothing.
+ *
+ * Set it as `<customer_key>=<stripe id>` pairs:
+ *
+ *   METRIFOX_FAKE_STRIPE_IDS="TESSELLATE-010=cus_QxAbc123"
+ *
+ * Substituted here rather than in `fixtures.ts` because this is the boundary
+ * where the demo environment already lives — the fixtures stay static data that
+ * the tests can rely on.
+ */
+function withConfiguredStripeId(customer: MetrifoxCustomer): MetrifoxCustomer {
+  const configured = stripeIdsByCustomerKey().get(customer.customer_key);
+  if (configured === undefined) return customer;
+  return { ...customer, stripe_customer_id: configured };
+}
+
+function stripeIdsByCustomerKey(): Map<string, string> {
+  const raw = process.env["METRIFOX_FAKE_STRIPE_IDS"] ?? "";
+  const pairs = new Map<string, string>();
+
+  for (const entry of raw.split(",")) {
+    const separator = entry.indexOf("=");
+    if (separator < 1) continue;
+    const key = entry.slice(0, separator).trim();
+    const value = entry.slice(separator + 1).trim();
+    if (key !== "" && value !== "") pairs.set(key, value);
+  }
+
+  return pairs;
 }

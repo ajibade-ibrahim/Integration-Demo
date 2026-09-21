@@ -40,6 +40,19 @@ export const METRIFOX_IDENTITY_SCOPES = [
   "contacts:read",
 ] as const;
 
+/**
+ * Scopes for the agreement function, named after the API paths the way the
+ * identity set is.
+ *
+ * Metrifox is the provider that carries both shapes — `orders` for the
+ * committed, order-form side and `subscriptions` for the recurring one —
+ * which is the case the single agreement model has to absorb without forking.
+ */
+export const METRIFOX_AGREEMENT_SCOPES = [
+  "orders:read",
+  "subscriptions:read",
+] as const;
+
 /** Cap on the connect-time probe, so a hung provider cannot wedge the request. */
 const PROBE_TIMEOUT_MS = 15_000;
 
@@ -109,4 +122,29 @@ export const metrifoxProvider: ProviderDefinition = {
     "Sync customers and their contact people from Metrifox. Authenticates with an API key — there is no OAuth app to register.",
 
   auth: metrifoxAuth,
+
+  // Ids like `MF-ACME` are chosen inside one Metrifox account, so two accounts
+  // can each have their own `MF-ACME`.
+  externalIdScope: "tenant",
+
+  /**
+   * Always undefined today, deliberately.
+   *
+   * The Metrifox API exposes no endpoint naming the account a key belongs to —
+   * `probeCredential` can only report how many customers are visible. So no
+   * Metrifox customer contributes its own id as an identity key, and Metrifox
+   * joins on email and domain alone.
+   *
+   * Not scoped by `integrationId` instead, which would be available: a
+   * `Customer` row already belongs to exactly one integration, so a key scoped
+   * that way could only ever match the single record that emitted it. It would
+   * add rows and no joins.
+   *
+   * The key it *supplies* is unaffected — a Metrifox record mapping
+   * `crossRef.stripe` names a globally unique Stripe id, and that is the join
+   * the spec actually asks for.
+   */
+  tenantScopeValue(metadata) {
+    return metadata["accountId"];
+  },
 };

@@ -17,8 +17,13 @@
     "test:integration": "vitest run tests/integration",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
+    "db:check": "tsx scripts/db-maintenance.mts",
+    "db:prune": "tsx scripts/db-maintenance.mts --prune",
     "seed": "tsx prisma/seed.ts",
+    "fixtures:gen": "node scripts/gen-agreement-fixtures.mjs",
+    "fixtures:verify": "tsx scripts/verify-stripe-fixtures.mts",
     "users:add": "tsx scripts/add-users.mts",
+    "mappings:retarget": "tsx scripts/retarget-account-email-mappings.mts",
     "worker": "tsx scripts/worker.ts"
   },
   "dependencies": {

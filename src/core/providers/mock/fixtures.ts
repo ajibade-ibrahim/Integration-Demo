@@ -11,6 +11,13 @@
  *   - `p-018` has a malformed email      → per-record rejection, run continues
  *   - `p-019` references a missing company → association fallback, kept with a warning
  *   - `p-020` has no company at all       → null association, no warning
+ *
+ * `c-009` to `c-011` are a second group with a different job: they are the same
+ * three companies the Stripe and Metrifox fixtures carry, so cross-integration
+ * identity resolution has something to resolve. Everything before them is a
+ * separate universe by design — mock Acme is `acme-mfg.com` where Metrifox Acme
+ * is `acme.example` — and that is left alone rather than retuned, because each
+ * of those records is pinned by a test for the branch it exercises.
  */
 
 export interface MockCompany {
@@ -112,6 +119,62 @@ export const MOCK_COMPANIES: MockCompany[] = [
       account_tier: "silver",
     },
   },
+
+  // --- The converging three ------------------------------------------------
+  //
+  // Everything above is its own universe: mock Acme is `acme-mfg.com` while
+  // Metrifox Acme is `acme.example`, so nothing cross-matches and identity
+  // resolution has nothing to demonstrate. These three appear in the Stripe and
+  // Metrifox fixtures as well, each arriving by a different route, so the
+  // Accounts tab shows one company where the Customers tab shows three rows.
+  //
+  // Added rather than edited in. The existing entries are pinned by the handler
+  // tests and each one exercises a branch; retuning them to converge would cost
+  // that coverage to buy this.
+  {
+    // Joins Metrifox on `ridgeline.example` — a **domain** match, the weaker
+    // kind, and the one Stripe can never make because it has no website field.
+    // Its name also differs from both others at equal priority, which is what
+    // raises the `field_conflict` the Accounts tab explains.
+    id: "c-009",
+    properties: {
+      name: "Ridgeline Utilities Group",
+      website: "https://www.ridgeline.example/about",
+      industry: "Utilities",
+      createdate: "2023-04-12T09:00:00.000Z",
+      lifecyclestage: "customer",
+      account_tier: "gold",
+    },
+  },
+  {
+    // Joins Metrifox on `tessellate.example`. Stripe holds this company too,
+    // under a different name on a different domain, and reaches it only
+    // through the crosswalk — see `stripe_customer_id` in the Metrifox
+    // fixtures.
+    id: "c-010",
+    properties: {
+      name: "Tessellate Laboratories",
+      website: "https://tessellate.example",
+      industry: "Research",
+      createdate: "2024-08-30T15:20:00.000Z",
+      lifecyclestage: "customer",
+      account_tier: "silver",
+    },
+  },
+  {
+    // Not in Metrifox at all. Joins Stripe through a **contact's** address
+    // (`p-021` below), which is the universal route: all five providers map
+    // `contact.email`, while only two carry an account-level one.
+    id: "c-011",
+    properties: {
+      name: "Halcyon Foods Ltd",
+      website: "https://halcyonfoods.example",
+      industry: "Food & Beverage",
+      createdate: "2025-01-09T11:45:00.000Z",
+      lifecyclestage: "customer",
+      account_tier: "bronze",
+    },
+  },
 ];
 
 export const MOCK_PEOPLE: MockPerson[] = [
@@ -148,6 +211,13 @@ export const MOCK_PEOPLE: MockPerson[] = [
     id: "p-020",
     properties: { firstname: "Independent", lastname: "Contractor", email: "solo@freelance.dev", jobtitle: "Freelancer", phone: "" },
   },
+
+  // People at the converging three. `p-021` is the load-bearing one: mock has
+  // no account-level email, so this contact's address is the only thing that
+  // can join Halcyon to the Stripe customer of the same name.
+  { id: "p-021", companyId: "c-011", properties: { firstname: "Bea", lastname: "Halloran", email: "ap@halcyonfoods.example", jobtitle: "Accounts Payable", phone: "+1-206-555-0211" } },
+  { id: "p-022", companyId: "c-009", properties: { firstname: "Idris", lastname: "Mwangi", email: "i.mwangi@ridgeline.example", jobtitle: "Grid Operations Manager", phone: "+1-503-555-0212" } },
+  { id: "p-023", companyId: "c-010", properties: { firstname: "Wren", lastname: "Kavanagh", email: "w.kavanagh@tessellate.example", jobtitle: "Lab Director", phone: "+44 161 555 0213" } },
 ];
 
 /** Field definitions the mock exposes through its discovery endpoint. */

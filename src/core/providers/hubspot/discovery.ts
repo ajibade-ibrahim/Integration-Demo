@@ -14,7 +14,7 @@ import type {
   HandlerContext,
 } from "../../types/registry";
 import { asArray, asRecord, asString, createProviderSession } from "../http";
-import { HUBSPOT_OBJECT_PATH, hubspotApiBase } from "./api";
+import { hubspotApiBase, hubspotObjectPath } from "./api";
 
 export const hubspotFieldDiscovery: FieldDiscovery = {
   async discover(
@@ -23,7 +23,7 @@ export const hubspotFieldDiscovery: FieldDiscovery = {
   ): Promise<readonly DiscoveredFieldDef[]> {
     const session = createProviderSession(ctx, "HubSpot");
     const url = new URL(
-      `/crm/v3/properties/${HUBSPOT_OBJECT_PATH[object]}`,
+      `/crm/v3/properties/${hubspotObjectPath(object)}`,
       hubspotApiBase()
     );
 

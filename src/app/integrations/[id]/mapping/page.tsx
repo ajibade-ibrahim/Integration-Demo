@@ -6,7 +6,7 @@ import { currentUserId } from "@/lib/current-user";
 import { findMappings } from "@/core/repositories/mapping-repository";
 import { defaultMappingsFor } from "@/core/providers/defaults-registry";
 import { discoverFields } from "@/core/sync/discovery-service";
-import { allObjectSchemas, mappableFields } from "@/core/identity-schema";
+import { mappableFields, schemasForFunction } from "@/core/object-schema";
 import { providerRegistry } from "@/core/registries/provider-registry";
 import { HUBSPOT_PROVIDER_NAME } from "@/core/providers/hubspot/provider";
 import type { TargetObject } from "@/core/types/common";
@@ -56,10 +56,28 @@ export default async function MappingPage({
     discoveryError = `integration is ${integration.status}`;
   }
 
-  const objects: EditorObject[] = allObjectSchemas().map((schema) => ({
+  /**
+   * Providers a customer here can hold a cross-reference to.
+   *
+   * This integration's own provider is excluded: every customer already
+   * contributes its own id automatically, so mapping it again would be a rule
+   * that adds nothing. Contacts get none — a cross-reference is a claim about
+   * two records being the same company.
+   */
+  const crossRefProviders = providerRegistry
+    .getAll()
+    .filter((candidate) => candidate.name !== integration.providerName)
+    .map((candidate) => ({ name: candidate.name, label: candidate.label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  // Scoped to the function being edited, not every object that exists. A
+  // catalog rule set must not offer Customer as a target: the rule would save,
+  // validate, and then write nothing on every sync.
+  const objects: EditorObject[] = schemasForFunction(functionName).map((schema) => ({
     object: schema.object,
     label: schema.label,
     sources: discovered[schema.object] ?? [],
+    crossRefProviders: schema.object === "customer" ? crossRefProviders : [],
     targets: mappableFields(schema.object).map((field) => ({
       name: field.name,
       label: field.label,

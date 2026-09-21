@@ -1,56 +1,21 @@
 /**
- * The internal identity schema: the target fields a mapping rule may write to.
+ * The identity schema: the target fields an `identity` mapping rule may write
+ * to, plus the cross-reference targets that only make sense on a customer.
  *
- * This object is the single source of truth for three consumers:
- *   1. mapping validation (`src/core/field-mapper`),
- *   2. the target dropdown in the mapping editor UI,
- *   3. record validation in the sync engine.
- * They read the same definitions, so they cannot drift apart.
+ * One of two schema files — `catalog-schema.ts` is the other — composed into a
+ * single registry by `object-schema.ts`, which is what mapping validation, the
+ * target dropdown, the sync engine and survivorship all read. Lookups live
+ * there rather than here, so a consumer does not have to know which file a
+ * given object was declared in.
  *
  * Target paths are **object-qualified** — `customer.name`, `contact.email`.
  * A flat namespace shared between the two objects would let `contact.email` be
  * mapped onto a customer record and validate cleanly, which is exactly the bug
- * this structure exists to prevent.
+ * that structure exists to prevent.
  */
 
-import {
-  CUSTOMER_TYPES,
-  TARGET_OBJECTS,
-  type CustomerType,
-  type TargetObject,
-} from "./types/common";
-
-// ---------------------------------------------------------------------------
-// Field definitions
-// ---------------------------------------------------------------------------
-
-export type FieldKind = "string" | "email" | "date" | "enum";
-
-export interface FieldDefinition {
-  /** Unqualified field name, e.g. "domain". */
-  readonly name: string;
-  /** Human label for the mapping UI. */
-  readonly label: string;
-  readonly kind: FieldKind;
-  /** Rejecting the record when absent or empty. */
-  readonly required?: boolean;
-  readonly maxLength?: number;
-  /** Permitted values when `kind` is "enum". */
-  readonly enumValues?: readonly string[];
-  /**
-   * Derived by the sync engine, not user-mappable. `associatedCustomerId` is
-   * resolved from the provider's external company id — offering it as a
-   * mapping target would invite users to map a foreign id into a field holding
-   * our internal UUIDs.
-   */
-  readonly readOnly?: boolean;
-}
-
-export interface ObjectSchema {
-  readonly object: TargetObject;
-  readonly label: string;
-  readonly fields: readonly FieldDefinition[];
-}
+import type { ObjectSchema } from "./object-schema";
+import { CUSTOMER_TYPES, type CustomerType, type TargetObject } from "./types/common";
 
 // ---------------------------------------------------------------------------
 // Customer
@@ -62,8 +27,19 @@ const CUSTOMER_SCHEMA: ObjectSchema = {
   fields: [
     { name: "name", label: "Name", kind: "string", required: true, maxLength: 255 },
     { name: "domain", label: "Domain", kind: "string", maxLength: 253 },
+    // A first-class field rather than a custom one because identity resolution
+    // matches on it, and `customFields` is a serialized JSON string column —
+    // not queryable, not indexable. Stripe and Metrifox are the two providers
+    // that carry an account-level address; the CRMs carry none, so this is
+    // frequently null and that is expected.
+    { name: "email", label: "Email", kind: "email", maxLength: 254 },
     { name: "industry", label: "Industry", kind: "string", maxLength: 100 },
-    { name: "createDate", label: "Create date", kind: "date" },
+    {
+      name: "createDate",
+      label: "Create date",
+      kind: "date",
+      conflictPolicy: "earliest",
+    },
     {
       name: "type",
       label: "Type",
@@ -95,47 +71,73 @@ const CONTACT_SCHEMA: ObjectSchema = {
   ],
 };
 
-export const IDENTITY_SCHEMA: Readonly<Record<TargetObject, ObjectSchema>> = {
+export const IDENTITY_SCHEMA = {
   customer: CUSTOMER_SCHEMA,
   contact: CONTACT_SCHEMA,
-};
+} as const;
+
+/**
+ * The objects the identity function writes.
+ *
+ * Narrower than `TargetObject`, and worth naming separately: the identity
+ * handlers hold per-object lookup tables — HubSpot object paths, Salesforce
+ * sObject names, required field lists — that cover these two and nothing else.
+ * Typing those against the full union would force a meaningless entry for every
+ * object some other function happens to own.
+ */
+export type IdentityObject = keyof typeof IDENTITY_SCHEMA;
+
+export function isIdentityObject(v: TargetObject): v is IdentityObject {
+  return v === "customer" || v === "contact";
+}
 
 // ---------------------------------------------------------------------------
-// Custom fields
-// ---------------------------------------------------------------------------
-
-/** `customFields.<key>` — up to 100 alphanumeric/underscore characters. */
-export const CUSTOM_FIELD_PATTERN = /^customFields\.[a-zA-Z0-9_]{1,100}$/;
-
-export const MAX_CUSTOM_FIELDS = 50;
-export const MAX_CUSTOM_FIELD_VALUE_LENGTH = 1000;
-
-// ---------------------------------------------------------------------------
-// Lookups
+// Cross-integration references
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve a target field within one object's schema.
+ * `crossRef.<provider>` — this record names the same company's id in another
+ * provider.
  *
- * @returns The definition, `"customField"` for a valid `customFields.<key>`
- *   path, or `undefined` if the path names nothing in this object.
+ * The mapping target for the join the governing spec calls for and no API
+ * offers: Metrifox's `payments_stripe_customers` relates a Metrifox customer to
+ * a Stripe customer, but the Metrifox connector cannot fetch it. When the
+ * foreign id happens to ride on a record the connector *already* reads, a
+ * mapping rule is all it takes — so this reuses the mapping editor,
+ * `validateMappings`, the transforms and the source dropdown wholesale, and
+ * adds no UI.
+ *
+ * Deliberately not `customFields.stripe_customer_id`. A custom field is a
+ * serialized JSON string: not queryable, not indexable, and indistinguishable
+ * from any other opaque note the user chose to keep. A cross-reference has to
+ * be found by value, which is the same argument that promoted `email` to a real
+ * column.
+ *
+ * Character class matches provider names, which are lowercase identifiers.
  */
-export function resolveTargetField(
-  object: TargetObject,
-  fieldPath: string
-): FieldDefinition | "customField" | undefined {
-  if (CUSTOM_FIELD_PATTERN.test(fieldPath)) return "customField";
-  return IDENTITY_SCHEMA[object].fields.find((f) => f.name === fieldPath);
+export const CROSS_REF_PATTERN = /^crossRef\.([a-z0-9][a-z0-9_-]{0,49})$/;
+
+/**
+ * The provider named by a `crossRef.<provider>` path, whether or not it is
+ * registered.
+ *
+ * Shape only. Kept separate from `resolveTargetField` so a rule naming an
+ * unknown provider can be told apart from a rule naming nothing at all, and
+ * reported as "'nonsense' is not a known provider" instead of the misleading
+ * "not a field on customer".
+ */
+export function crossRefProviderName(fieldPath: string): string | undefined {
+  return CROSS_REF_PATTERN.exec(fieldPath)?.[1];
 }
 
-/** Target fields a user may map to — everything except read-only fields. */
-export function mappableFields(object: TargetObject): readonly FieldDefinition[] {
-  return IDENTITY_SCHEMA[object].fields.filter((f) => f.readOnly !== true);
-}
-
-/** Every object schema, for UI iteration. */
-export function allObjectSchemas(): readonly ObjectSchema[] {
-  return TARGET_OBJECTS.map((o) => IDENTITY_SCHEMA[o]);
-}
+/**
+ * Objects a cross-reference may be mapped onto.
+ *
+ * Customer only. A cross-reference is a claim that two records are the same
+ * *company*; person-level identity — the spec's `USER` entity — is a separate
+ * problem with its own match rules, and offering the target before those exist
+ * would accept data nothing reads.
+ */
+export const CROSS_REF_OBJECTS: readonly TargetObject[] = ["customer"];
 
 export type { CustomerType, TargetObject };

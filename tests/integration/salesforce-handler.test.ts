@@ -188,13 +188,13 @@ describe("Salesforce pagination", () => {
 describe("Salesforce record shape", () => {
   it("reads AccountId as the association, treating null as no claim", () => {
     expect(
-      salesforceIdentityHandler.externalCustomerIdOf(sfContact("c1", "a1"))
-    ).toBe("a1");
+      salesforceIdentityHandler.externalRefsOf(sfContact("c1", "a1"), "contact")
+    ).toEqual({ customer: "a1" });
     // Salesforce nulls the field rather than omitting it; that must read as
     // "no company", not as a company whose id is the string "null".
     expect(
-      salesforceIdentityHandler.externalCustomerIdOf(sfContact("c2", null))
-    ).toBeUndefined();
+      salesforceIdentityHandler.externalRefsOf(sfContact("c2", null), "contact")
+    ).toEqual({ customer: undefined });
     expect(salesforceIdentityHandler.externalIdOf(account("a9", "Acme"))).toBe(
       "a9"
     );

@@ -7,6 +7,8 @@
  * back into a URL.
  */
 
+import { isIdentityObject } from "../../identity-schema";
+import type { TargetObject } from "../../types/common";
 import type { ProviderMetadata } from "../../types/registry";
 import { salesforceApiVersion } from "./provider";
 
@@ -58,3 +60,18 @@ export const SALESFORCE_OBJECT = {
   customer: "Account",
   contact: "Contact",
 } as const;
+
+/**
+ * The sObject name for one of our target objects.
+ *
+ * Throws for an object this handler does not serve — see the note on
+ * `hubspotObjectPath`. An undefined sObject would reach Salesforce as
+ * `FROM undefined`, which comes back as a SOQL parse error rather than
+ * anything that names the real mistake.
+ */
+export function salesforceObject(object: TargetObject): string {
+  if (!isIdentityObject(object)) {
+    throw new Error(`Salesforce's identity handler does not serve '${object}'`);
+  }
+  return SALESFORCE_OBJECT[object];
+}

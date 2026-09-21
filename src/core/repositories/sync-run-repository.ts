@@ -3,7 +3,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { readJsonArray } from "./json-column";
+import { readJsonArray, readJsonCounts } from "./json-column";
 import type { RecordIssue, SyncRunStatus } from "../types/common";
 
 export interface SyncRunRecord {
@@ -12,8 +12,14 @@ export interface SyncRunRecord {
   trigger: string;
   startedAt: Date;
   completedAt: Date | null;
-  customerCount: number;
-  contactCount: number;
+  /**
+   * Rows written per target object, e.g. `{ product: 4, offering: 9 }`.
+   *
+   * A map rather than a column per object. An absent key means this run did
+   * not write that object at all, which is what the report should say for a
+   * catalog sync rather than "0 customers".
+   */
+  recordCounts: Record<string, number>;
   attempt: number;
   issues: RecordIssue[];
 }
@@ -34,8 +40,7 @@ export async function listRecentRuns(
     trigger: run.trigger,
     startedAt: run.startedAt,
     completedAt: run.completedAt,
-    customerCount: run.customerCount,
-    contactCount: run.contactCount,
+    recordCounts: readJsonCounts(run.recordCountsJson),
     attempt: run.attempt,
     issues: readJsonArray<RecordIssue>(run.errorsJson),
   }));

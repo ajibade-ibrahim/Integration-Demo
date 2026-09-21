@@ -22,8 +22,9 @@
  *    it was not requested.
  */
 
-import type { RawRecord } from "../../types/common";
+import type { RawRecord, TargetObject } from "../../types/common";
 import type {
+  ExternalRefs,
   HandlerContext,
   SourcePage,
   SyncHandler,
@@ -94,7 +95,11 @@ export const metrifoxIdentityHandler: SyncHandler = {
     return asString(record["contact_id"]) ?? asString(record["id"]);
   },
 
-  externalCustomerIdOf(contact: RawRecord): string | undefined {
-    return asString(contact["customer_id"]);
+  externalRefsOf(contact: RawRecord, object: TargetObject): ExternalRefs {
+    // Only a contact hangs off another record in the identity function; a
+    // customer is a root, so it claims no references at all.
+    if (object !== "contact") return {};
+
+    return { customer: asString(contact["customer_id"]) };
   },
 };

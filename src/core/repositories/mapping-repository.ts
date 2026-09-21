@@ -38,7 +38,7 @@ export async function saveMappings(
   functionName: string,
   rules: readonly FieldMappingRule[]
 ): Promise<void> {
-  const result = validateMappings(rules);
+  const result = validateMappings(functionName, rules);
   if (!result.valid) {
     const detail = result.violations
       .map((v) => `rule ${v.index} (${v.field}): ${v.message}`)

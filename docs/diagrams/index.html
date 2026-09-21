@@ -47,7 +47,7 @@
 
     <div class="lede">
       <h1>Architecture diagrams</h1>
-      <p>The same eight diagrams as <code>docs/architecture.md</code>, rendered as HTML so they
+      <p>The same nine diagrams as <code>docs/architecture.md</code>, rendered as HTML so they
          are actually legible: zoom, drag to pan, full screen, and hover any box to isolate
          what it connects to. The scope matrix in §2 is live — tick functions and watch
          <code>resolveScopes()</code> recompute.</p>
@@ -125,12 +125,13 @@
 
           <section class="group" id="s1-svc">
             <h3 class="gh">Orchestration<span class="gh-note">provider-agnostic policy</span></h3>
-            <div class="gb c5">
+            <div class="gb c6">
               <div class="node" id="s1-oauth"><span class="t">oauth-service</span><span class="n">authorize · callback · refresh · revoke</span></div>
               <div class="node" id="s1-key"><span class="t">api-key-service</span><span class="n">validate · probe · store</span></div>
               <div class="node" id="s1-engine"><span class="t">sync-engine</span><span class="n">guard · fetch · map · write · record</span></div>
               <div class="node" id="s1-disco"><span class="t">discovery-service</span><span class="n">source fields, cached 1 h</span></div>
               <div class="node" id="s1-sched"><span class="t">scheduler</span><span class="n">what is due, what expired</span></div>
+              <div class="node" id="s1-resolve"><span class="t">identity-resolver</span><span class="n">Per <em>user</em>, not per integration — see §6</span></div>
             </div>
           </section>
 
@@ -141,6 +142,7 @@
                 <div class="node" data-k="a3" id="s1-schema"><span class="t">identity-schema.ts</span><span class="n">The target contract — one source of truth for three readers</span></div>
                 <div class="node" data-k="a3" id="s1-mapper"><span class="t">field-mapper/</span><span class="n">validate · apply · serialize</span></div>
                 <div class="node" data-k="a3" id="s1-crypto"><span class="t">oauth/crypto.ts</span><span class="n">AES-256-GCM, no fallback key</span></div>
+                <div class="node" data-k="a3" id="s1-ident"><span class="t">identity/</span><span class="n">normalize · evidence · survivorship · assertions · crosswalk</span></div>
               </div>
             </section>
 
@@ -160,7 +162,7 @@
 
             <div class="stack">
               <div class="node" data-k="store" id="s1-repo"><span class="t">repositories/</span><span class="n">The modules that speak Prisma</span></div>
-              <div class="node" data-k="store" id="s1-db"><span class="t">Postgres via Prisma</span><span class="n">9 tables, one ownership spine</span></div>
+              <div class="node" data-k="store" id="s1-db"><span class="t">Postgres via Prisma</span><span class="n">15 tables — a sync spine and an identity layer</span></div>
             </div>
           </div>
 
@@ -212,7 +214,21 @@
                 <td><span class="chip">crm.objects.tickets.read</span><span class="chip">crm.schemas.read</span></td>
               </tr>
               <tr>
-                <th scope="row">Billing<span class="sub">invoice · subscription</span></th>
+                <th scope="row">Catalog<span class="sub">product · offering</span></th>
+                <td class="none">—</td><td class="none">—</td>
+                <td><span class="chip">products:read</span><span class="chip">prices:read</span></td>
+                <td class="none">—</td><td class="none">—</td>
+              </tr>
+              <tr>
+                <th scope="row">Agreement<span class="sub">agreement · subscription</span></th>
+                <td><span class="chip">crm.objects.deals.read</span><span class="chip">crm.schemas.deals.read</span></td>
+                <td><span class="chip">api</span><span class="chip">refresh_token</span></td>
+                <td><span class="chip">subscriptions:read</span></td>
+                <td><span class="chip">orders:read</span><span class="chip">subscriptions:read</span></td>
+                <td><span class="chip">crm.objects.deals.read</span><span class="chip">crm.schemas.read</span></td>
+              </tr>
+              <tr>
+                <th scope="row">Billing<span class="sub">invoice · charge · payment</span></th>
                 <td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td>
                 <td><span class="chip">billing.invoices.read</span></td>
               </tr>
@@ -235,6 +251,8 @@
             </div>
             <div class="fn-picker">
               <label><input type="checkbox" value="identity" checked> Identity</label>
+              <label><input type="checkbox" value="catalog"> Catalog</label>
+              <label><input type="checkbox" value="agreement"> Agreement</label>
               <label><input type="checkbox" value="support"> Support</label>
               <label><input type="checkbox" value="billing"> Billing</label>
               <label><input type="checkbox" value="usage"> Usage</label>
@@ -397,7 +415,7 @@
 
             <div class="node" id="m-tf"><span class="t">transform</span><span class="s">none · trim · lowercase<br>domainFromUrl · dateOnly</span><span class="n"><code>domainFromUrl</code> is load-bearing: Salesforce gives a full URL, our target is a bare domain</span></div>
 
-            <div class="node" data-k="store" id="m-out"><span class="t">MappedRecord</span><span class="s">fields + customFields</span><span class="n">A mapped-but-absent source field yields <code>null</code>, never a missing key — output shape follows the rule set, not the record</span></div>
+            <div class="node" data-k="store" id="m-out"><span class="t">MappedRecord</span><span class="s">fields + customFields + crossRefs</span><span class="n">A mapped-but-absent source field yields <code>null</code>, never a missing key — output shape follows the rule set, not the record</span></div>
           </div>
 
           <div class="contract">
@@ -418,6 +436,18 @@
       <p class="fig-note"><strong>The subtle one:</strong> <code>readPath</code> walks own properties
         only. Source paths come from user-editable mappings, so a path like <code>constructor</code> or
         <code>__proto__</code> would otherwise reach up the prototype chain and pull back a function.</p>
+      <p class="fig-note"><strong>Three kinds of target path, not one.</strong>
+        <code>resolveTargetField</code> returns a <code>FieldDefinition</code>, the sentinel
+        <code>"customField"</code>, or the sentinel <code>"crossRef"</code> — a union rather than a
+        boolean, so adding the third made the compiler point at every consumer that had to handle it.
+        <code>name</code> is a real column; <code>customFields.&lt;key&gt;</code> is a single JSON key
+        and the key is whatever the user wants; <code>crossRef.&lt;provider&gt;</code> says "this company
+        is <em>that</em> id over there" and its segment is validated against the
+        <strong>provider registry</strong>, so <code>crossRef.nonsense</code> cannot be saved.
+        That last one needed the only UI addition here: the dropdown is built from
+        <code>mappableFields()</code>, which returns <code>FieldDefinition[]</code> and cannot express a
+        cross-reference, so "Same company in…" is backed by a <em>provider</em> dropdown rather than the
+        free-text box custom fields get. See §6 for what the resulting key does.</p>
     </figure>
 
 
@@ -492,14 +522,120 @@
         <code>externalCustomerId</code> retained so a later run links it.</p>
       <p class="fig-note"><strong>Severity decides.</strong> A malformed email <em>rejects</em> a contact —
         a broken primary identifier poisons later matching. An unrecognised customer type only
-        <em>warns</em> — an org-specific picklist value shouldn't cost the whole record.</p>
+        <em>warns</em> — an org-specific picklist value shouldn't cost the whole record. A malformed
+        <em>account</em> email is the deliberate opposite: warned about and nulled, because a customer's
+        identity is <code>name</code> + <code>externalSourceId</code> and discarding a whole company over
+        one bad field is worse than an empty column.</p>
+      <p class="fig-note"><strong>Then identity resolution runs, outside all of this</strong> — see §6.
+        It is a separate <em>per-user</em> pass, wrapped so that it cannot fail the sync that triggered
+        it.</p>
     </figure>
 
 
-    <!-- ==================================================== 6 · RETRY ===== -->
+    <!-- ================================================= 6 · IDENTITY ===== -->
+    <figure class="fig" id="fig-identity">
+      <div class="fig-head">
+        <h2><span class="n">6</span>Identity — one company out of three rows</h2>
+        <p>Sync is <strong>per integration</strong>. Resolution is <strong>per user</strong>, and that
+           difference is the whole reason it is a separate pass rather than a step inside
+           <code>executeSync</code>: one real company appears as three <code>Customer</code> rows in three
+           connections, so no single integration can see the group. <code>sync-engine.ts</code> gains no
+           import from any of this.</p>
+      </div>
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+      <div class="viewport">
+        <div class="canvas dg-sync" id="c-identity" data-edges='[
+          {"from":"i-trig","to":"i-guard"},
+          {"from":"i-guard","to":"i-disc","label":"yes"},
+          {"from":"i-guard","to":"i-reap0","label":"no"},
+          {"from":"i-reap0","to":"i-ev"},
+          {"from":"i-ev","to":"i-clust"},
+          {"from":"i-clust","to":"i-match"},
+          {"from":"i-match","to":"i-new","label":"0"},
+          {"from":"i-match","to":"i-link","label":"1"},
+          {"from":"i-match","to":"i-conf","label":"2 or more"},
+          {"from":"i-veto","to":"i-match","kind":"dashed","fs":"left","ts":"right","label":"vetoes, per\ncandidate account"},
+          {"from":"i-new","to":"i-surv"},
+          {"from":"i-link","to":"i-surv"},
+          {"from":"i-conf","to":"i-surv"},
+          {"from":"i-surv","to":"i-reap1"},
+          {"from":"i-reap1","to":"i-done"}
+        ]'>
+          <div class="node" id="i-trig" style="grid-row:1;grid-column:1"><span class="t">after a sync · scheduler tick · POST /api/identity/resolve</span><span class="n">All three go through <code>resolve-after-sync.ts</code>, which holds the one policy that matters: <strong>a sync is never reported failed because resolution hiccuped</strong></span></div>
+
+          <div class="node dec" id="i-guard" style="grid-row:2;grid-column:1"><span class="t">a pass already running for this user?</span></div>
+          <div class="node" data-k="warn" id="i-disc" style="grid-row:2;grid-column:3"><span class="t">discarded</span><span class="n"><code>runId: null</code>, no row written. A discard is contention, not an execution — a row per overlapping caller would fill the history with records of nothing happening.</span></div>
+
+          <div class="node" data-k="store" id="i-reap0" style="grid-row:3;grid-column:1"><span class="t">0 · reap empty accounts</span><span class="n">Required, not housekeeping. A shell still holding a key claim permanently blocks the correct account from forming, because the unique means that key can belong to only one.</span></div>
+
+          <div class="node" data-k="a3" id="i-ev" style="grid-row:4;grid-column:1"><span class="t">1 · build evidence — pure</span><span class="n">Account email · domain · emails harvested from <em>linked</em> contacts · the free <code>external_ref</code> self-key · mapped and imported cross-references. Emitted in a fixed order, so the first claimant of a key is not decided by Postgres row order.</span></div>
+          <div class="node" data-k="a3" id="i-clust" style="grid-row:5;grid-column:1"><span class="t">1.5 · cluster by <code>same</code> assertions</span><span class="n">A union-find over customers, <em>before</em> any key matching. The cluster pools its evidence and gets one home — placing members individually would make the group's destination depend on which was handled first.</span></div>
+
+          <div class="node dec" id="i-match" style="grid-row:6;grid-column:1"><span class="t">candidate accounts for this cluster's keys</span><span class="n">Accounts the cluster already owns entirely are dropped before the contest — a customer's own self-key is a tautology, evidence for <em>other</em> records naming that id and never for where this one belongs. Without that, every record would be pinned in place by itself forever.</span></div>
+
+          <div class="node" id="i-new" style="grid-row:6;grid-column:3"><span class="t">create one, link, insert every key</span></div>
+          <div class="node" id="i-link" style="grid-row:7;grid-column:3"><span class="t">link, insert only the keys it lacks</span></div>
+          <div class="node" data-k="warn" id="i-conf" style="grid-row:8;grid-column:3"><span class="t">conflict — never merge</span><span class="n">Strongest matching key kind, then oldest <code>createdAt</code>, then smallest id wins the link. Losing keys <em>stay put</em> and a <code>key_claimed_elsewhere</code> issue asks a human. An automatic merge of two populated accounts has no undo.</span></div>
+          <div class="node" data-k="crit" id="i-veto" style="grid-row:9;grid-column:3"><span class="t">a <code>distinct</code> assertion</span><span class="n">Outranks every inferred key. The key is demoted to non-joining for that group and a <code>blocked_by_assertion</code> issue is recorded — erring toward <em>not</em> merging, which is the recoverable direction, since a <code>same</code> assertion can always put things back together.</span></div>
+
+          <div class="node" data-k="a3" id="i-surv" style="grid-row:10;grid-column:1"><span class="t">2 · survivorship — pure</span><span class="n">Per field, the highest-priority member that <strong>actually supplies a value</strong>. A null is not an opinion. <code>createDate</code> is the one declared exception and takes the earliest.</span></div>
+
+          <div class="node" data-k="store" id="i-reap1" style="grid-row:11;grid-column:1"><span class="t">3 · reap again</span><span class="n">The pass reaps twice. Without the second, shells this run emptied keep their key claims until the next pass — blocking the very account the user is waiting to see.</span></div>
+
+          <div class="node" data-k="good" id="i-done" style="grid-row:12;grid-column:1"><span class="t">every customer has an account</span><span class="n">Totality: a customer with no usable key still gets a fresh singleton, so <code>customerAccountId</code> ends non-null on every row</span></div>
+        </div>
+      </div>
+
+      <p class="fig-note"><strong>Two different conflicts, and only one is a hierarchy.</strong>
+        A <em>key</em> conflict asks "is this the same company?" — two accounts both claiming
+        <code>billing@acme.example</code>. That is never resolved by rank: the winner is deterministic,
+        losing keys stay put, and a human is asked. A <em>value</em> conflict asks "what is this company
+        called?" — and that is the only thing <code>Integration.identityPriority</code> is for.
+        <strong>Priority changes what an account says, never who is in it.</strong> If reordering sources
+        could repartition accounts, then nudging a number to fix a displayed name would silently regroup
+        someone's customer list, and nobody would connect the two events.</p>
+
+      <p class="fig-note"><strong>A null is not an opinion.</strong> Stripe has no
+        <code>industry</code>, <code>domain</code> or <code>type</code> field at all; HubSpot has no
+        account-level <code>email</code>. So "the top-ranked source's row wins wholesale" would be
+        destructive — putting Stripe at priority 1 would blank three columns on every account it touches.
+        Each field is contested only among the members that carry it, which is what lets the hierarchy
+        compose: Stripe wins <code>email</code>, HubSpot wins <code>industry</code>, neither erases the
+        other.</p>
+
+      <p class="fig-note"><strong>The scope segment on a self-key is not optional.</strong> HubSpot object
+        ids are portal-scoped, so a bare <code>hubspot:12345</code> would merge company
+        <code>12345</code> in two different portals into one company. Every provider declares
+        <code>externalIdScope</code>, and <strong>a provider with no scope value available emits no
+        self-key at all</strong>. Failing closed costs a join, which is visible and recoverable; guessing
+        costs a false merge, which looks exactly like the matcher working well. HubSpot is that case
+        today — its token response carries no <code>hub_id</code>. Salesforce is scoped by
+        <code>organizationId</code> rather than <code>instance_url</code>, because legacy pod hostnames
+        like <code>na1.salesforce.com</code> were shared by thousands of unrelated orgs.</p>
+
+      <p class="fig-note"><strong>What the resolver will not do.</strong> It never <em>writes</em> an
+        assertion, only reads them — that is what makes a human verdict sticky across a pass that
+        otherwise recomputes everything. It merges on evidence and <em>never splits on the absence of
+        it</em>: withdrawing an imported crosswalk stops the pair being supplied but does not take apart
+        the account it already made, because a withdrawn file is not the same statement as "these are two
+        companies". And it never auto-merges two multi-member accounts. Those last two are what the
+        Accounts tab's "same company" and "not this company" actions exist for.</p>
+    </figure>
+
+
+    <!-- ==================================================== 7 · RETRY ===== -->
     <figure class="fig" id="fig-retry">
       <div class="fig-head">
-        <h2><span class="n">6</span>Failing well — two nested retry loops</h2>
+        <h2><span class="n">7</span>Failing well — two nested retry loops</h2>
         <p>The part most worth understanding before debugging a flaky sync, because the two loops are
            easy to confuse. The inner one retries <em>one request</em>; the outer one retries
            <em>the whole run</em>.</p>
@@ -582,10 +718,10 @@
     </figure>
 
 
-    <!-- ================================================= 7 · LAYERING ===== -->
+    <!-- ================================================= 8 · LAYERING ===== -->
     <figure class="fig" id="fig-layering">
       <div class="fig-head">
-        <h2><span class="n">7</span>Layering rules — and where reality bends</h2>
+        <h2><span class="n">8</span>Layering rules — and where reality bends</h2>
         <p>Enforced by convention, not by tooling. Dashed arrows are the edges that must never exist.</p>
       </div>
       <div class="fig-tools">
@@ -629,13 +765,21 @@
       <p class="fig-note"><strong>Everything else holds</strong>, and it buys something concrete: because
         no provider file imports the database or the OAuth service, <code>tests/integration/</code>
         exercises real pagination and 401→refresh→retry against msw with no Prisma client in the process.</p>
+      <p class="fig-note"><strong>The identity pass is the counter-example that shows the rule is
+        affordable.</strong> <code>identity-resolver.ts</code> orchestrates a whole multi-phase write and
+        imports no Prisma client at all. Its repository exists so that <em>every write and every match
+        query is scoped by <code>userId</code> in one reviewable place</em> — a single missing
+        <code>userId</code> merges two tenants' companies, which is the severe failure in this schema.
+        Account <em>reads</em> for the Accounts tab deliberately live in
+        <code>synced-data-repository.ts</code> instead: a read-only projection for a page is not part of
+        the matcher, and putting it in the guarded file would only enlarge the surface being guarded.</p>
     </figure>
 
 
-    <!-- ================================================== 8 · RUNTIME ===== -->
+    <!-- ================================================== 9 · RUNTIME ===== -->
     <figure class="fig" id="fig-runtime">
       <div class="fig-head">
-        <h2><span class="n">8</span>What runs where</h2>
+        <h2><span class="n">9</span>What runs where</h2>
         <p>Pages read state; route handlers change it. The fakes are served over real HTTP from routes
            inside this app, so the real clients run completely unchanged.</p>
       </div>
@@ -660,7 +804,7 @@
           <section class="group" id="g-browser" data-k="a1" style="grid-row:1;grid-column:1">
             <h3 class="gh">Browser</h3>
             <div class="gb">
-              <div class="node" data-k="a1" id="r8-cc"><span class="t">5 client components</span><span class="s">new/form · mapping/editor<br>sync-panel · key-form · delete-button</span><span class="n">Everything else renders on the server</span></div>
+              <div class="node" data-k="a1" id="r8-cc"><span class="t">7 client components</span><span class="s">new/form · mapping/editor<br>sync-panel · key-form · delete-button<br>accounts-panel · identity-panel</span><span class="n">Everything else renders on the server</span></div>
             </div>
           </section>
 

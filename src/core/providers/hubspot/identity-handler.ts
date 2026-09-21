@@ -15,6 +15,7 @@
 
 import type { RawRecord, TargetObject } from "../../types/common";
 import type {
+  ExternalRefs,
   HandlerContext,
   SourcePage,
   SyncHandler,
@@ -27,8 +28,8 @@ import {
   type ProviderSession,
 } from "../http";
 import {
-  HUBSPOT_OBJECT_PATH,
   hubspotApiBase,
+  hubspotObjectPath,
   hubspotPageSize,
   propertiesParam,
 } from "./api";
@@ -39,7 +40,7 @@ function pageUrl(
   after: string | undefined
 ): string {
   const url = new URL(
-    `/crm/v3/objects/${HUBSPOT_OBJECT_PATH[object]}`,
+    `/crm/v3/objects/${hubspotObjectPath(object)}`,
     hubspotApiBase()
   );
   url.searchParams.set("limit", String(hubspotPageSize()));
@@ -96,13 +97,17 @@ export const hubspotIdentityHandler: SyncHandler = {
     return asString(record["id"]);
   },
 
-  externalCustomerIdOf(contact: RawRecord): string | undefined {
+  externalRefsOf(contact: RawRecord, object: TargetObject): ExternalRefs {
+    // Only a contact hangs off another record in the identity function; a
+    // customer is a root, so it claims no references at all.
+    if (object !== "contact") return {};
+
     // associations.companies.results[] — take the first. HubSpot allows a
     // contact to associate with several companies, but our model holds one, and
     // the first is the primary in practice.
     const associations = asRecord(contact["associations"]);
     const companies = asRecord(associations?.["companies"]);
     const first = asRecord(asArray(companies?.["results"])[0]);
-    return asString(first?.["id"]);
+    return { customer: asString(first?.["id"]) };
   },
 };

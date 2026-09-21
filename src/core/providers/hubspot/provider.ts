@@ -37,6 +37,20 @@ export const HUBSPOT_SUPPORT_SCOPES = [
   "crm.schemas.tickets.read",
 ] as const;
 
+/**
+ * Scopes for the agreement function. HubSpot models a commercial agreement as
+ * a deal, so this is the deals object plus its schema — the same pairing
+ * identity needs, and for the same reason: without the schema scope the
+ * mapping editor has nothing to offer as a source field.
+ *
+ * Granular like support, so adding agreement to a live HubSpot integration
+ * genuinely widens the request and triggers re-consent.
+ */
+export const HUBSPOT_AGREEMENT_SCOPES = [
+  "crm.objects.deals.read",
+  "crm.schemas.deals.read",
+] as const;
+
 export const hubspotProvider: ProviderDefinition = {
   name: HUBSPOT_PROVIDER_NAME,
   label: "HubSpot",
@@ -80,5 +94,26 @@ export const hubspotProvider: ProviderDefinition = {
         metadata: {},
       };
     },
+  },
+
+  // Object ids are per-portal integers. Company `12345` exists in most portals
+  // and they are unrelated businesses, so an unscoped `hubspot:12345` key would
+  // merge them.
+  externalIdScope: "tenant",
+
+  /**
+   * Undefined until the portal id is captured, and that is the safe state.
+   *
+   * HubSpot's token response carries no `hub_id`; it is only available by
+   * calling `/oauth/v1/access-tokens/{token}` after the exchange, which
+   * `parseTokenResponse` cannot do — it is handed a parsed body, not a client.
+   * Adding that call belongs with the change that needs it.
+   *
+   * Until then no HubSpot company contributes its own id as an identity key.
+   * HubSpot still joins on domain, which it supplies for nearly every company,
+   * and on its contacts' emails.
+   */
+  tenantScopeValue(metadata) {
+    return metadata["hubId"];
   },
 };

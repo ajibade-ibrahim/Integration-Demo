@@ -3,6 +3,10 @@
  *
  * Returns 202 immediately and runs in the background: a full sync can outlast a
  * request, and the caller polls the sync-run record for progress.
+ *
+ * Identity resolution follows the sync, because new records are not grouped
+ * until the pass runs and this is the moment there is something new to group.
+ * It cannot fail the sync — see `resolveAfterSync`.
  */
 
 import { NextResponse } from "next/server";
@@ -10,6 +14,7 @@ import { bootstrap } from "@/core/bootstrap";
 import { findIntegrationForUser } from "@/core/repositories/integration-repository";
 import { currentUserId } from "@/lib/current-user";
 import { executeSync } from "@/core/sync/sync-engine";
+import { resolveAfterSync } from "@/core/identity/resolve-after-sync";
 
 export async function POST(
   request: Request,
@@ -32,17 +37,27 @@ export async function POST(
 
   const wait = new URL(request.url).searchParams.get("wait") === "1";
 
-  // `?wait=1` runs it inline, which is what scripts and tests want.
+  // `?wait=1` runs it inline, which is what scripts and tests want. Resolution
+  // is inside the wait, so a caller that waited sees grouped accounts rather
+  // than records that are about to be grouped.
   if (wait) {
-    return NextResponse.json(await executeSync(id, { trigger: "manual" }));
+    const result = await executeSync(id, { trigger: "manual" });
+    await resolveAfterSync(integration.userId, "sync");
+    return NextResponse.json(result);
   }
 
-  void executeSync(id, { trigger: "manual" }).catch((error: unknown) => {
-    console.error(
-      `[sync] Background sync for ${id} threw:`,
-      error instanceof Error ? error.message : error
-    );
-  });
+  void executeSync(id, { trigger: "manual" })
+    .catch((error: unknown) => {
+      console.error(
+        `[sync] Background sync for ${id} threw:`,
+        error instanceof Error ? error.message : error
+      );
+    })
+    // Resolve either way, and after the catch rather than in it: a sync that
+    // threw may still have written records before it did, and the pass covers
+    // the whole tenant rather than this one run. `resolveAfterSync` never
+    // rejects, so nothing escapes this chain unhandled.
+    .then(() => resolveAfterSync(integration.userId, "sync"));
 
   return NextResponse.json({ status: "started" }, { status: 202 });
 }

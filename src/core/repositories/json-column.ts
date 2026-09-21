@@ -57,3 +57,37 @@ export function readScopeList(raw: string | null | undefined): string[] {
 export function writeScopeList(scopes: readonly string[]): string {
   return [...scopes].sort().join(" ");
 }
+
+/**
+ * A JSON object of counts, as stored on `SyncRun.recordCountsJson`.
+ *
+ * Separate from `readJsonObject` rather than a cast over it: that one coerces
+ * every value to a string, which is right for `customFields` and wrong here.
+ * A non-numeric or negative value is dropped rather than coerced to zero — a
+ * count we cannot read is not a count of nothing, and the run report renders an
+ * absent key as "not synced" rather than as "synced none".
+ */
+export function readJsonCounts(
+  raw: string | null | undefined
+): Record<string, number> {
+  if (raw === null || raw === undefined || raw === "") return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+        out[key] = value;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function writeJsonCounts(value: Record<string, number>): string {
+  return JSON.stringify(value);
+}

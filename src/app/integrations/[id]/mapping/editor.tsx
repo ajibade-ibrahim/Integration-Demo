@@ -37,6 +37,17 @@ export interface EditorObject {
   label: string;
   sources: EditorField[];
   targets: EditorTarget[];
+  /**
+   * Providers this object may hold a cross-reference to — empty when the object
+   * accepts none, which is what keeps the option off the contact rows.
+   *
+   * A dropdown rather than the free-text input custom fields get, because the
+   * two constraints are opposite: a custom field key is whatever the user
+   * wants, while a cross-reference segment must name a registered provider or
+   * it fails validation on save. Offering text here would only let someone type
+   * something that cannot work.
+   */
+  crossRefProviders: { name: string; label: string }[];
 }
 
 export interface EditorRule {
@@ -47,6 +58,10 @@ export interface EditorRule {
 }
 
 const CUSTOM_FIELD_OPTION = "__custom__";
+const CROSS_REF_OPTION = "__crossRef__";
+
+/** Mirrors `CROSS_REF_PATTERN`'s prefix; the server validates the whole path. */
+const CROSS_REF_PREFIX = "crossRef.";
 
 const TRANSFORM_LABELS: Record<FieldTransform, string> = {
   none: "None",
@@ -55,6 +70,23 @@ const TRANSFORM_LABELS: Record<FieldTransform, string> = {
   domainFromUrl: "Domain from URL",
   dateOnly: "Date only",
 };
+
+/**
+ * Translate a target-dropdown selection into a target path.
+ *
+ * The cross-reference case pre-selects the first candidate provider rather than
+ * leaving a bare `crossRef.`, so the row is never in a state that would be
+ * rejected on save with a message about a field that does not exist. The
+ * provider dropdown underneath shows what was chosen and is one click to
+ * change.
+ */
+function nextTargetPath(selection: string, object: EditorObject): string {
+  if (selection === CUSTOM_FIELD_OPTION) return "customFields.";
+  if (selection === CROSS_REF_OPTION) {
+    return `${CROSS_REF_PREFIX}${object.crossRefProviders[0]?.name ?? ""}`;
+  }
+  return selection;
+}
 
 /** Rows carry a stable key so React does not reorder inputs as rules change. */
 interface Row extends EditorRule {
@@ -272,6 +304,7 @@ function RuleRow({
   onRemove: (key: string) => void;
 }) {
   const isCustom = row.targetFieldPath.startsWith("customFields.");
+  const isCrossRef = row.targetFieldPath.startsWith(CROSS_REF_PREFIX);
 
   // A source the provider did not report is still legitimate — a stale cache or
   // a permission gap should not make an existing rule uneditable.
@@ -310,13 +343,16 @@ function RuleRow({
 
       <div className="space-y-1">
         <select
-          value={isCustom ? CUSTOM_FIELD_OPTION : row.targetFieldPath}
+          value={
+            isCustom
+              ? CUSTOM_FIELD_OPTION
+              : isCrossRef
+                ? CROSS_REF_OPTION
+                : row.targetFieldPath
+          }
           onChange={(event) => {
             onUpdate(row.key, {
-              targetFieldPath:
-                event.target.value === CUSTOM_FIELD_OPTION
-                  ? "customFields."
-                  : event.target.value,
+              targetFieldPath: nextTargetPath(event.target.value, object),
             });
           }}
           className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
@@ -329,6 +365,9 @@ function RuleRow({
             </option>
           ))}
           <option value={CUSTOM_FIELD_OPTION}>Custom field…</option>
+          {object.crossRefProviders.length > 0 && (
+            <option value={CROSS_REF_OPTION}>Same company in…</option>
+          )}
         </select>
 
         {isCustom && (
@@ -342,6 +381,31 @@ function RuleRow({
             placeholder="account_tier"
             className="w-full rounded-lg border border-slate-200 px-2 py-1.5 font-mono text-[13px]"
           />
+        )}
+
+        {isCrossRef && (
+          <>
+            <select
+              value={row.targetFieldPath.slice(CROSS_REF_PREFIX.length)}
+              onChange={(event) => {
+                onUpdate(row.key, {
+                  targetFieldPath: `${CROSS_REF_PREFIX}${event.target.value}`,
+                });
+              }}
+              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+            >
+              <option value="">Select a provider…</option>
+              {object.crossRefProviders.map((candidate) => (
+                <option key={candidate.name} value={candidate.name}>
+                  {candidate.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-slate-500">
+              Maps that provider&apos;s own id for this company, joining the two
+              records even when they share no email or domain.
+            </p>
+          </>
         )}
       </div>
 

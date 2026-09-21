@@ -30,17 +30,20 @@ import {
   hubspotProvider,
   HUBSPOT_IDENTITY_SCOPES,
   HUBSPOT_SUPPORT_SCOPES,
+  HUBSPOT_AGREEMENT_SCOPES,
   HUBSPOT_PROVIDER_NAME,
 } from "./providers/hubspot/provider";
 import {
   salesforceProvider,
   SALESFORCE_IDENTITY_SCOPES,
   SALESFORCE_SUPPORT_SCOPES,
+  SALESFORCE_AGREEMENT_SCOPES,
   SALESFORCE_PROVIDER_NAME,
 } from "./providers/salesforce/provider";
 import {
   isMockEnabled,
   mockProvider,
+  MOCK_AGREEMENT_SCOPES,
   MOCK_BILLING_SCOPES,
   MOCK_IDENTITY_SCOPES,
   MOCK_SUPPORT_SCOPES,
@@ -49,17 +52,22 @@ import {
 import {
   metrifoxProvider,
   METRIFOX_IDENTITY_SCOPES,
+  METRIFOX_AGREEMENT_SCOPES,
   METRIFOX_PROVIDER_NAME,
 } from "./providers/metrifox/provider";
 import {
   stripeProvider,
   STRIPE_IDENTITY_SCOPES,
+  STRIPE_AGREEMENT_SCOPES,
+  STRIPE_CATALOG_SCOPES,
   STRIPE_PROVIDER_NAME,
 } from "./providers/stripe/provider";
 
 import { metrifoxIdentityHandler } from "./providers/metrifox/identity-handler";
 import { metrifoxFieldDiscovery } from "./providers/metrifox/discovery";
 import { stripeIdentityHandler } from "./providers/stripe/identity-handler";
+import { stripeAgreementHandler } from "./providers/stripe/agreement-handler";
+import { stripeCatalogHandler } from "./providers/stripe/catalog-handler";
 import { stripeFieldDiscovery } from "./providers/stripe/discovery";
 import { mockIdentityHandler } from "./providers/mock/identity-handler";
 import { mockFieldDiscovery } from "./providers/mock/discovery";
@@ -69,6 +77,8 @@ import { salesforceIdentityHandler } from "./providers/salesforce/identity-handl
 import { salesforceFieldDiscovery } from "./providers/salesforce/discovery";
 
 export const IDENTITY_FUNCTION = "identity";
+export const CATALOG_FUNCTION = "catalog";
+export const AGREEMENT_FUNCTION = "agreement";
 
 let bootstrapped = false;
 
@@ -96,12 +106,17 @@ export function bootstrap(): void {
   if (isMockEnabled()) registerProvider(mockProvider);
 
   // --- functions ---------------------------------------------------------
-  // Metrifox and Stripe declare identity only. Both have billing APIs too —
-  // Stripe conspicuously so — but adding those here would change what
-  // `providerNamesForFunctions` returns for ["identity","billing"], which
-  // `tests/unit/multi-function.test.ts` pins. Widening it is a deliberate
-  // change, not a drive-by: the billing function has no target schema and no
-  // handlers, so a provider claiming it would be claiming something untrue.
+  // Declaring scopes for a (function, provider) pair claims that the provider
+  // can serve that function and that these are the scopes it would need. It
+  // does not claim we have built the handler — the picker reads the handler
+  // registry separately and marks a function visibly unavailable.
+  //
+  // Billing stays mock-only although Stripe and Metrifox both have invoice
+  // APIs. That is deliberate rather than an oversight: it keeps
+  // `providerNamesForFunctions(["identity","billing"])` a genuine partial
+  // intersection, which is the only place the "a provider must cover the whole
+  // set" rule is observable, and `tests/unit/multi-function.test.ts` pins it.
+  // Agreement is the deliberate widening that comment used to ask for.
   const identityScopes: Array<[string, readonly string[]]> = [
     [HUBSPOT_PROVIDER_NAME, HUBSPOT_IDENTITY_SCOPES],
     [SALESFORCE_PROVIDER_NAME, SALESFORCE_IDENTITY_SCOPES],
@@ -119,6 +134,77 @@ export function bootstrap(): void {
       "Customer accounts and the people associated with them — names, domains, industries, emails, job titles.",
     dataModels: ["customer", "contact"],
     scopesByProvider: scopeMap(identityScopes),
+  });
+
+  // Catalog: what the company sells, and the second function with a working
+  // handler.
+  //
+  // Stripe only, for now, and honestly so — it is the provider whose API maps
+  // onto this cleanly, a `product` to a Product and a `price` to an Offering.
+  // The CRMs have product objects too (HubSpot line items, Salesforce
+  // Product2/PricebookEntry) and declaring scopes for them here would be a
+  // claim we have not checked.
+  //
+  // Independent of identity by construction: a product exists whether or not
+  // anyone has bought it, and nothing in the catalog references a customer. So
+  // this can be selected on its own, and `providerNamesForFunctions(["identity",
+  // "catalog"])` is a real intersection rather than a formality.
+  const catalogScopes: Array<[string, readonly string[]]> = [
+    [STRIPE_PROVIDER_NAME, STRIPE_CATALOG_SCOPES],
+  ];
+
+  registerFunction({
+    name: CATALOG_FUNCTION,
+    label: "Catalog",
+    description:
+      "Products and the offerings that price them — what is for sale, at what amount, on what billing interval.",
+    dataModels: ["product", "offering"],
+    scopesByProvider: scopeMap(catalogScopes),
+  });
+
+  // Agreement: the commercial spine, and the first function declared on four
+  // real providers at once. That breadth is the point rather than a bonus —
+  // the canonical model insists one agreement covers both a self-serve
+  // subscription and a sales-led order form, and the scope sets are where that
+  // claim first becomes checkable: Salesforce supplies Contract, Stripe
+  // supplies subscriptions, Metrifox supplies both, HubSpot supplies deals.
+  //
+  // `dataModels` names two objects, and the pair is the whole design. The
+  // canonical AGREEMENT node is six fields — id, account, offering, type,
+  // status, effective date — and `agreement` is exactly that. `subscription`
+  // holds what is true of subscriptions alone: the period, the trial, the
+  // cancellation intent.
+  //
+  // Splitting them rather than widening one table is what keeps the promise
+  // this comment used to make in the abstract. On a shared table no
+  // type-specific column can be NOT NULL, because every column must tolerate
+  // the types that lack it — `Subscription` can require a period, an
+  // `Agreement` with a period column never could. The fourth type is then a
+  // new table rather than an ALTER against every row already stored.
+  //
+  // What was expensive to retrofit is unchanged and is now built: the
+  // `agreement_type` discriminator and the foreign-key shape. The twelve-object
+  // zoom-in (items, terms, amendments, acceptance, renewals, concessions) is
+  // still additive and still unbuilt — modelling amendments before anything
+  // reads them would be the opposite mistake. `Subscription.itemCount` is the
+  // marker for where `agreement_item` goes when something needs it.
+  const agreementScopes: Array<[string, readonly string[]]> = [
+    [HUBSPOT_PROVIDER_NAME, HUBSPOT_AGREEMENT_SCOPES],
+    [SALESFORCE_PROVIDER_NAME, SALESFORCE_AGREEMENT_SCOPES],
+    [METRIFOX_PROVIDER_NAME, METRIFOX_AGREEMENT_SCOPES],
+    [STRIPE_PROVIDER_NAME, STRIPE_AGREEMENT_SCOPES],
+  ];
+  if (isMockEnabled()) {
+    agreementScopes.push([MOCK_PROVIDER_NAME, MOCK_AGREEMENT_SCOPES]);
+  }
+
+  registerFunction({
+    name: AGREEMENT_FUNCTION,
+    label: "Agreement",
+    description:
+      "Subscriptions, order forms and contracts — what the customer agreed to, on what terms, and when it changes.",
+    dataModels: ["agreement", "subscription"],
+    scopesByProvider: scopeMap(agreementScopes),
   });
 
   // Support: declared with real scopes on both CRMs, because one integration
@@ -151,11 +237,18 @@ export function bootstrap(): void {
   // yields an empty provider list and blocks the flow. The mock declares
   // billing scopes only so scope isolation stays observable — authorizing for
   // identity must never request `billing.invoices.read`.
+  // Invoice, charge and payment — not subscription. A subscription is a
+  // *specialization of* agreement in the canonical model, not a sibling of
+  // invoice, and declaring it here is what would eventually produce the
+  // "subscription table" that order forms and amendments then have to be
+  // retrofitted onto. That retrofit is named as the expensive path in the
+  // framework doc, so the fix belongs at the declaration, before anything is
+  // built against it.
   registerFunction({
     name: "billing",
     label: "Billing",
-    description: "Invoices, subscriptions, and payment history.",
-    dataModels: ["invoice", "subscription"],
+    description: "Invoices, charges, and payment history.",
+    dataModels: ["invoice", "charge", "payment"],
     scopesByProvider: scopeMap(
       isMockEnabled() ? [[MOCK_PROVIDER_NAME, MOCK_BILLING_SCOPES]] : []
     ),
@@ -210,6 +303,26 @@ export function bootstrap(): void {
 
   registerSyncHandler(IDENTITY_FUNCTION, STRIPE_PROVIDER_NAME, stripeIdentityHandler);
   registerFieldDiscovery(IDENTITY_FUNCTION, STRIPE_PROVIDER_NAME, stripeFieldDiscovery);
+
+  // The same discoverer serves all three functions: it switches on the target
+  // object rather than the function, so registering it repeatedly is not a
+  // duplicate but the entries the (function, provider) key requires.
+  registerSyncHandler(CATALOG_FUNCTION, STRIPE_PROVIDER_NAME, stripeCatalogHandler);
+  registerFieldDiscovery(CATALOG_FUNCTION, STRIPE_PROVIDER_NAME, stripeFieldDiscovery);
+
+  // Stripe is the first provider to make `agreement` real. Its scopes were
+  // declared long before this handler existed, so nothing about the picker,
+  // the consent screen or the scope union changes here.
+  registerSyncHandler(
+    AGREEMENT_FUNCTION,
+    STRIPE_PROVIDER_NAME,
+    stripeAgreementHandler
+  );
+  registerFieldDiscovery(
+    AGREEMENT_FUNCTION,
+    STRIPE_PROVIDER_NAME,
+    stripeFieldDiscovery
+  );
 
   if (isMockEnabled()) {
     registerSyncHandler(IDENTITY_FUNCTION, MOCK_PROVIDER_NAME, mockIdentityHandler);

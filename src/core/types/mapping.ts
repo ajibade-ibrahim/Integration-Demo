@@ -57,4 +57,19 @@ export interface MappedRecord {
   /** Standard fields. A mapped-but-absent source field yields null. */
   fields: Record<string, string | null>;
   customFields: Record<string, string>;
+  /**
+   * `crossRef.<provider>` rules: provider name → that provider's own id for
+   * this same company.
+   *
+   * A separate bucket rather than a key in `fields`, because these are not
+   * columns on the record — they are identity evidence about it, and the
+   * record writer would silently drop an unrecognised `fields` key.
+   *
+   * **Not yet persisted.** Identity resolution reads these when
+   * `CustomerAccountKey` exists; until then a mapped cross-reference is parsed,
+   * carried this far, and discarded. Held here anyway so the mapping rule and
+   * its target validation ship as one reviewable change, and so nothing lands
+   * in `fields` where it would be mistaken for a column.
+   */
+  crossRefs: Record<string, string>;
 }

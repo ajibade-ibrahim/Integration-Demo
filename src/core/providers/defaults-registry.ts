@@ -12,7 +12,11 @@ import { hubspotIdentityDefaults } from "./hubspot/defaults";
 import { salesforceIdentityDefaults } from "./salesforce/defaults";
 import { mockIdentityDefaults } from "./mock/defaults";
 import { metrifoxIdentityDefaults } from "./metrifox/defaults";
-import { stripeIdentityDefaults } from "./stripe/defaults";
+import {
+  stripeAgreementDefaults,
+  stripeCatalogDefaults,
+  stripeIdentityDefaults,
+} from "./stripe/defaults";
 import { HUBSPOT_PROVIDER_NAME } from "./hubspot/provider";
 import { SALESFORCE_PROVIDER_NAME } from "./salesforce/provider";
 import { MOCK_PROVIDER_NAME } from "./mock/provider";
@@ -25,6 +29,8 @@ const DEFAULTS: Record<string, FieldMappingRule[]> = {
   [`identity:${MOCK_PROVIDER_NAME}`]: mockIdentityDefaults,
   [`identity:${METRIFOX_PROVIDER_NAME}`]: metrifoxIdentityDefaults,
   [`identity:${STRIPE_PROVIDER_NAME}`]: stripeIdentityDefaults,
+  [`catalog:${STRIPE_PROVIDER_NAME}`]: stripeCatalogDefaults,
+  [`agreement:${STRIPE_PROVIDER_NAME}`]: stripeAgreementDefaults,
 };
 
 export function defaultMappingsFor(

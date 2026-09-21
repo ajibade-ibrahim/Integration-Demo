@@ -2,9 +2,16 @@
 
 Generated from [`prisma/schema.prisma`](../prisma/schema.prisma) and the
 const-union types in [`src/core/types/common.ts`](../src/core/types/common.ts).
-Eleven tables. Nine form one ownership spine — **everything hangs off
-`Integration`** — and two hold a connect that has not finished yet, described
-under [Scratch tables](#scratch-tables-for-a-connect-in-progress).
+Fifteen tables in three groups:
+
+- **The sync spine** — seven tables hanging off `Integration`, which is the
+  tenancy boundary for everything a connector fetches.
+- **The identity layer** — four tables scoped to `User` instead, because
+  resolving one company across three connections is by definition not something
+  any one `Integration` owns. Described under
+  [The identity layer](#the-identity-layer-and-why-it-hangs-off-user).
+- **Two scratch tables** holding a connect that has not finished yet, described
+  under [Scratch tables](#scratch-tables-for-a-connect-in-progress).
 
 > **Also available as an interactive page** —
 > [`docs/diagrams/data-model.html`](./diagrams/data-model.html): the entity diagram
@@ -19,6 +26,8 @@ under [Scratch tables](#scratch-tables-for-a-connect-in-progress).
 erDiagram
     User ||--o{ Integration : "owns"
     User ||--o{ IntegrationDraft : "has configured, not yet connected"
+    User ||--o{ CustomerAccount : "owns — identity is per tenant, not per connection"
+    User ||--o{ IdentityResolutionRun : "audited by"
 
     Integration ||--o{ IntegrationFunction : "declares"
     Integration ||--o| OAuthToken : "authorized by"
@@ -26,9 +35,22 @@ erDiagram
     Integration ||--o{ DiscoveredField : "caches source fields in"
     Integration ||--o{ Customer : "syncs"
     Integration ||--o{ Contact : "syncs"
+    Integration ||--o{ Product : "syncs"
+    Integration ||--o{ Offering : "syncs"
+    Integration ||--o{ Agreement : "syncs"
+    Integration ||--o{ Subscription : "syncs"
     Integration ||--o{ SyncRun : "audited by"
 
     Customer |o--o{ Contact : "employs, link nullable"
+    Product |o--o{ Offering : "priced by, link nullable"
+
+    Customer |o--o{ Agreement : "agreed to, link nullable"
+    Offering |o--o{ Agreement : "sold under, link nullable"
+    Agreement ||--o| Subscription : "detailed by, required and unique"
+
+    CustomerAccount |o--o{ Customer : "resolves, link nullable"
+    CustomerAccount ||--o{ CustomerAccountKey : "matched by"
+    Customer ||--o{ IdentityAssertion : "asserted about, twice per row"
 
     User {
         string id PK
@@ -62,6 +84,7 @@ erDiagram
         string status "IntegrationStatus, see state diagram"
         string instanceLabel "user-facing label"
         int syncIntervalHours "default 24, clamped 1..168"
+        int identityPriority "default 100, clamped 1..1000 — values only, never grouping"
         datetime authorizationTimestamp "null until consent completes"
         datetime lastSyncTimestamp "null until first run"
         boolean pendingTokenRevocation "revocation failed on delete"
@@ -72,7 +95,7 @@ erDiagram
     IntegrationFunction {
         string id PK
         string integrationId FK
-        string functionName "identity, support, billing, usage, communication"
+        string functionName "identity, catalog, agreement, support, billing, usage, communication"
         datetime addedAt
     }
 
@@ -114,10 +137,14 @@ erDiagram
         string externalSourceId "provider-assigned, upsert key"
         string name
         string domain
+        string email "a column, not a custom field — the resolver matches on it"
         string industry
         datetime createDate
         string type "CustomerType, nullable"
         string customFields "JSON object, max 50 keys"
+        string crossRefs "JSON, provider to foreign id, from crossRef.* rules"
+        string importedCrossRefs "JSON, same shape, human-supplied — see below"
+        string customerAccountId FK "which company this row resolved to, nullable"
         datetime updatedAt
     }
 
@@ -135,6 +162,68 @@ erDiagram
         datetime updatedAt
     }
 
+    Product {
+        string id PK
+        string integrationId FK
+        string externalSourceId "provider-assigned, upsert key"
+        string name
+        string description
+        boolean active "nullable — null is 'not told', not 'inactive'"
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    Offering {
+        string id PK
+        string integrationId FK
+        string externalSourceId "provider-assigned, upsert key"
+        string name "required; synthesized when the provider has none"
+        string productId FK "resolved internal parent, nullable"
+        string externalProductId "provider product id, pre-resolution"
+        int amountMinor "minor units — never a float"
+        string currency "ISO 4217"
+        string interval "BillingInterval: day|week|month|year|one_time"
+        int intervalCount
+        boolean active
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    Agreement {
+        string id PK
+        string integrationId FK
+        string externalSourceId "provider-assigned, upsert key"
+        string name "required; synthesized — Stripe names no subscription"
+        string agreementType "AgreementType, NOT NULL — which detail table joins"
+        string status "AgreementStatus, nullable"
+        string customerId FK "resolved internal parent, nullable"
+        string externalCustomerId "provider customer id, pre-resolution"
+        string offeringId FK "resolved internal parent, nullable"
+        string externalOfferingId "provider price id, pre-resolution"
+        datetime effectiveDate
+        datetime endDate
+        string currency
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    Subscription {
+        string id PK
+        string integrationId FK
+        string externalSourceId "same provider id as its Agreement"
+        string agreementId FK "required and unique — Cascade, not SetNull"
+        datetime currentPeriodStart
+        datetime currentPeriodEnd
+        datetime trialEndsAt
+        datetime canceledAt "when cancellation was requested"
+        boolean cancelAtPeriodEnd
+        string collectionMethod
+        int quantity
+        int itemCount "priced lines; only the first is linked"
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
     SyncRun {
         string id PK
         string integrationId FK
@@ -146,6 +235,60 @@ erDiagram
         int contactCount
         int attempt "default 1"
         string errorsJson "JSON array of RecordIssue"
+    }
+
+    CustomerAccount {
+        string id PK "not stable — created, absorbed and reaped every pass"
+        string userId FK
+        string name "survivorship result, recomputed whole each pass"
+        string domain
+        string email
+        string industry
+        datetime createDate "earliest across members, not highest-priority"
+        string type "CustomerType, nullable"
+        string customFields "JSON, unioned across members"
+        string fieldProvenance "JSON, field name to the integrationId that won it"
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    CustomerAccountKey {
+        string id PK
+        string userId FK "denormalized — the unique below spans it"
+        string customerAccountId FK
+        string kind "IdentityKeyKind — array order is the strength ranking"
+        string value "normalized; the thing actually matched on"
+        string rawValue "as the provider gave it; what a human is shown"
+        string emailClass "EmailClass — stored to explain, never to filter"
+        string source "IdentityEvidenceSource"
+        string sourceIntegrationId "which connection contributed it"
+        datetime firstSeenAt
+        datetime lastSeenAt
+    }
+
+    IdentityAssertion {
+        string id PK
+        string userId FK
+        string kind "same or distinct"
+        string leftCustomerId FK "canonically ordered: left lt right"
+        string rightCustomerId FK
+        string note "why, in the user's words"
+        datetime createdAt
+    }
+
+    IdentityResolutionRun {
+        string id PK
+        string userId FK "per user, not per integration"
+        string status "SyncRunStatus, reused verbatim"
+        string trigger "IdentityRunTrigger: sync, scheduled, manual"
+        datetime startedAt
+        datetime completedAt "null while running"
+        int accountsCreated
+        int accountsAbsorbed
+        int accountsReaped
+        int customersLinked
+        int keysIndexed "rows written, not keys offered"
+        string issuesJson "JSON array of IdentityIssue"
     }
 ```
 
@@ -176,6 +319,73 @@ Two relationships carry the design load:
   build an `external → internal` index; a contact whose company will not resolve
   is kept with `customerId = null` and its `externalCustomerId` retained, so a
   later sync links it once that company arrives.
+
+---
+
+## The identity layer, and why it hangs off `User`
+
+Everything above is scoped by `Integration`. These four are not, and the reason
+is the whole point of them: one real company appears as three `Customer` rows in
+three connections, so the thing that says "these are one company" cannot belong
+to any of the three.
+
+```mermaid
+flowchart LR
+    C1["Customer<br/><i>hubspot · 12345</i>"] --> A
+    C2["Customer<br/><i>stripe · cus_9f2</i>"] --> A
+    C3["Customer<br/><i>metrifox · ACME-001</i>"] --> A["<b>CustomerAccount</b><br/>one company<br/><i>fields resolved from members</i>"]
+    A --> K["<b>CustomerAccountKey</b> ×N<br/>email · domain · external_ref<br/><i>unique per tenant — the join</i>"]
+    ASRT["<b>IdentityAssertion</b><br/><i>anchored to Customer pairs,<br/>never to accounts</i>"] -.->|"outranks every key"| A
+
+    style A fill:#eef7ee,stroke:#5a8a5a
+```
+
+Four things about this shape are load-bearing.
+
+**`userId` is on every one of them, and the uniques lead with it.** This is the
+severe failure mode in the whole schema: not a missed join, which is visible and
+recoverable, but *one tenant's customers appearing under another's company*. A
+single `where` clause missing `userId` does that silently. Hence
+`@@unique([userId, kind, value])` on the key table — within one tenant a key
+belongs to at most one account, so a second claim is a detectable conflict
+rather than an overwrite — and hence the rule that every query in
+[`identity-repository.ts`](../src/core/repositories/identity-repository.ts)
+filters on it.
+
+**`CustomerAccountKey` is a table, not a column.** The identity table is
+`account → [keys]`, one-to-many, and `kind` is polymorphic. That is what lets a
+Stripe customer id, an email and a domain all be the same sort of evidence with
+different strengths — `IDENTITY_KEY_KINDS` array order *is* the ranking, which
+is why it is an ordered const and not a set.
+
+**`CustomerAccount` fields are derived, never authored.** Every column on it is
+a pure function of (members, `Integration.identityPriority`), recomputed whole
+on every pass, so it cannot drift from its members. `fieldProvenance` records
+which integration won each field, which is what makes the per-field provider
+chip on the Accounts tab renderable — and traceability is a stated requirement,
+not a nicety.
+
+**`IdentityAssertion` anchors to `Customer`, not to `CustomerAccount`.** Account
+ids are created, absorbed and reaped by every pass, so they are not stable
+anchors; a `Customer` row survives re-sync because the writer upserts it, and
+cascades away with its integration. That is exactly the lifetime a human's
+verdict should have. The pair is stored canonically ordered
+(`leftCustomerId < rightCustomerId`) because without it `(A,B)` and `(B,A)` both
+insert and the unique means nothing.
+
+`Customer.customerAccountId` is `SetNull` rather than `Cascade` for the same
+reason `Contact.customerId` is: reaping an empty account must not delete the
+records that just left it.
+
+### Two JSON columns that look redundant and are not
+
+`Customer.crossRefs` and `Customer.importedCrossRefs` hold the same shape —
+`{ provider: foreignId }` — and are deliberately separate. The record writer
+**overwrites `crossRefs` wholesale on every upsert**, because it is the output
+of the mapping rules and nothing else. A human-supplied pair kept there would
+survive exactly until the next sync, taking its grouping with it. Keeping them
+apart also lets a key record `imported_crosswalk` as its `source` rather than
+claiming a mapping rule it never came from.
 
 ---
 
@@ -213,12 +423,44 @@ a draft id.
 
 | Parent | Child | On parent delete |
 |---|---|---|
-| `User` | `Integration`, `IntegrationDraft` | `Cascade` |
-| `Integration` | `IntegrationFunction`, `OAuthToken`, `FieldMapping`, `DiscoveredField`, `Customer`, `Contact`, `SyncRun` | `Cascade` |
+| `User` | `Integration`, `IntegrationDraft`, `CustomerAccount`, `IdentityResolutionRun` | `Cascade` |
+| `Integration` | `IntegrationFunction`, `OAuthToken`, `FieldMapping`, `DiscoveredField`, `Customer`, `Contact`, `Product`, `Offering`, `Agreement`, `Subscription`, `SyncRun` | `Cascade` |
 | `Customer` | `Contact` | `SetNull` — the contact survives, unlinked |
+| `Customer` | `Agreement` | `SetNull` — the agreement survives, unlinked |
+| `Product` | `Offering` | `SetNull` — the price survives, unlinked |
+| `Offering` | `Agreement` | `SetNull` — the agreement survives, unlinked |
+| `Agreement` | `Subscription` | `Cascade` — see below; the one exception |
+| `Customer` | `IdentityAssertion` (both sides) | `Cascade` — a verdict about a row that no longer exists is not a verdict |
+| `CustomerAccount` | `CustomerAccountKey` | `Cascade` |
+| `CustomerAccount` | `Customer` | `SetNull` — the customer survives, unresolved |
 
 `Customer` → `Contact` is deliberately not a cascade: losing a company record
-should not silently delete the people attached to it.
+should not silently delete the people attached to it. `CustomerAccount` →
+`Customer` is `SetNull` for the sharper version of the same reason — accounts
+are reaped routinely, and a cascade there would delete synced records as a side
+effect of housekeeping.
+
+The `CustomerAccount` → `CustomerAccountKey` cascade is what makes reaping
+correct rather than merely tidy. An empty account still holding a key claim
+would permanently block the right account from ever forming, because the unique
+means that key can only belong to one.
+
+**`Agreement` → `Subscription` is the one association here that cascades**, and
+it is worth understanding why rather than reading it as an inconsistency. Every
+other nullable FK above points at a record that means something on its own: an
+offering without its product is still a readable price, a contact without its
+company is still a person. A `Subscription` row is a billing period, a trial
+date and a cancellation flag — about nothing, if the agreement they describe is
+gone. So the FK is `NOT NULL`, `@unique` and `Cascade`, which together say "this
+is an extension of exactly one row" rather than "this is a collection hanging
+off one".
+
+That also means `Subscription` is the only synced table with **no**
+`external…Id` column for late linking, and no relink pass. Both rows come off
+one provider record in one run, so "arrived before its parent" — the case the
+other children retain a provider id for — cannot happen. It is reachable by two
+cascade paths, from its integration and from its agreement; both end in the same
+place.
 
 ---
 
@@ -229,18 +471,26 @@ should not silently delete the people attached to it.
 | `User` | `email` | The stable handle the demo looks the user up by. |
 | `Customer` | `(integrationId, externalSourceId)` | The upsert key. Re-running a sync updates rather than duplicates. |
 | `Contact` | `(integrationId, externalSourceId)` | Same. |
+| `Product`, `Offering`, `Agreement`, `Subscription` | `(integrationId, externalSourceId)` | Same — every synced table is keyed this way, which is what `findByExternalId` relies on. |
+| `Subscription` | `agreementId` | **Also unique on its own.** One detail row per agreement, not many: the unique is what makes it an extension rather than a collection, and what stops a re-sync inserting a second. |
 | `IntegrationFunction` | `(integrationId, functionName)` | A function is declared once per integration. |
 | `FieldMapping` | `(integrationId, functionName, targetObject, targetFieldPath)` | One rule per target field. Function and target object are part of the identity, because two functions on one integration can write to the same object. |
 | `DiscoveredField` | `(integrationId, functionName, targetObject, path)` | Cache key. |
 | `OAuthToken` | `integrationId` as the primary key | Structurally at most one live token per integration. |
+| `CustomerAccountKey` | `(userId, kind, value)` | **This one is the join.** Within a tenant a key belongs to at most one account, so a second claim is a detectable conflict rather than a silent overwrite — and it is the concurrency backstop two passes race on. `userId` is denormalized into the row because Prisma cannot express a unique spanning a relation, the same reason `OAuthState` keeps `subjectKind`/`subjectId` flat. |
+| `IdentityAssertion` | `(leftCustomerId, rightCustomerId)` | One verdict per pair. Only meaningful because the pair is stored canonically ordered; without that, asserting `(B,A)` after `(A,B)` would insert a second row instead of conflicting. |
 
 Indexes beyond those: `Integration(userId)` and `Integration(status)` for the
 scheduler sweep, `FieldMapping(integrationId)` and
 `(integrationId, functionName)`, `Customer(integrationId)`,
 `Contact(integrationId)` and `Contact(customerId)`,
 `SyncRun(integrationId, startedAt)` for run-history ordering, and
-`IntegrationFunction(functionName)`. The scratch tables add
-`IntegrationDraft(userId)`, `OAuthState(subjectKind, subjectId)` for the two
+`IntegrationFunction(functionName)`. The identity layer adds
+`Customer(customerAccountId)` for member lookups, `CustomerAccount(userId)` and
+`(userId, name)` for the Accounts tab's `name asc, id asc` ordering,
+`CustomerAccountKey(customerAccountId)`, `IdentityAssertion(userId)`, and
+`IdentityResolutionRun(userId, startedAt)` for run history. The scratch tables
+add `IntegrationDraft(userId)`, `OAuthState(subjectKind, subjectId)` for the two
 discard-by-subject paths, and `expiresAt` on both, which is what the sweep on
 each write path scans.
 
@@ -264,10 +514,42 @@ the source of truth.
 | Column | Legal values | Guard |
 |---|---|---|
 | `Integration.status` | `pending_authorization`, `active`, `expired`, `requires_reauthorization`, `error` | `isIntegrationStatus` |
-| `Customer.type` | `prospect`, `customer`, `partner`, `vendor`, or null | `isCustomerType` |
-| `FieldMapping.targetObject` | `customer`, `contact` | `isTargetObject` |
-| `SyncRun.status` | `running`, `success`, `partial`, `failed`, `discarded` | `isSyncRunStatus` |
+| `Customer.type`, `CustomerAccount.type` | `prospect`, `customer`, `partner`, `vendor`, or null | `isCustomerType` |
+| `FieldMapping.targetObject` | `customer`, `contact`, `product`, `offering`, `agreement`, `subscription` | `isTargetObject` |
+| `Offering.interval` | `day`, `week`, `month`, `year`, `one_time`, or null | `isBillingInterval` |
+| `Agreement.agreementType` | `subscription`, `order_form`, `contract`, `deal` — **never null** | `isAgreementType` |
+| `Agreement.status` | `draft`, `trialing`, `active`, `past_due`, `paused`, `canceled`, `expired`, or null | `isAgreementStatus` |
+| `SyncRun.status`, `IdentityResolutionRun.status` | `running`, `success`, `partial`, `failed`, `discarded` | `isSyncRunStatus` |
 | `FieldMapping.transform` | `none`, `trim`, `lowercase`, `domainFromUrl`, `dateOnly` | [`transforms.ts`](../src/core/field-mapper/transforms.ts) |
+| `CustomerAccountKey.kind` | `external_ref`, `email`, `domain` | `isIdentityKeyKind` |
+| `CustomerAccountKey.emailClass` | `corporate`, `role`, `freemail` | `isEmailClass` |
+| `CustomerAccountKey.source` | `customer_email`, `customer_domain`, `customer_custom_field`, `contact_email`, `self_reference`, `mapped_cross_ref`, `imported_crosswalk` | `isIdentityEvidenceSource` |
+| `IdentityAssertion.kind` | `same`, `distinct` | `isIdentityAssertionKind` |
+| `IdentityResolutionRun.trigger` | `sync`, `scheduled`, `manual` | `isIdentityRunTrigger` |
+
+Two of those carry meaning beyond validity. **`IDENTITY_KEY_KINDS` is ordered,
+and the order is the strength ranking** — `external_ref` beats `email` beats
+`domain` — which is why it is a const array and not a set. And
+`IdentityResolutionRun` reuses `SyncRunStatus` verbatim rather than declaring
+its own: the five states mean the same things, down to `discarded` being what
+the concurrency guard produces.
+
+Three more are worth a note. `Offering.interval` holds **`one_time` as a value
+rather than a null**, because "this price does not recur" is a fact and "we were
+not told" is an absence, and the UI must not render them alike.
+`Agreement.agreementType` is the only enum-shaped column in the schema that is
+`NOT NULL`: it names which detail table to join, so a row that cannot say what
+it is cannot be read at all — a writer that cannot parse it defaults to
+`subscription` and records a warning rather than storing a null. And
+`Agreement.status` is deliberately **not** any provider's vocabulary: Stripe has
+eight subscription statuses, Salesforce Contract has its own, and folding them
+into these seven is the provider handler's job, so the collapse is visible in
+one place instead of assumed everywhere.
+
+`emailClass` is stored to **explain** a key, never to filter one. Role addresses
+like `billing@` and `accounts@` are still keys — the spec's own seeds are
+billing emails — so classifying one is a fact shown to a human adjudicating a
+match, not a gate.
 
 Each guard lives beside its union in
 [`src/core/types/common.ts`](../src/core/types/common.ts), so the type and its
@@ -281,10 +563,21 @@ Read and written only through
 | Column | Default | Shape |
 |---|---|---|
 | `Customer.customFields` | `{}` | `Record<string, unknown>`, max 50 keys |
+| `Customer.crossRefs` | `{}` | `Record<provider, foreignId>` from `crossRef.<provider>` mapping rules. **Overwritten wholesale on every upsert** |
+| `Customer.importedCrossRefs` | `{}` | Same shape, human-supplied. Separate precisely because the line above is true |
 | `Contact.customFields` | `{}` | `Record<string, unknown>` |
-| `OAuthToken.providerMetadata` | `{}` | Provider extras from the token response, e.g. Salesforce `instance_url` |
+| `CustomerAccount.customFields` | `{}` | Unioned across members, higher priority winning a shared key |
+| `CustomerAccount.fieldProvenance` | `{}` | `Record<fieldName, integrationId>` — which source won each field |
+| `OAuthToken.providerMetadata` | `{}` | Provider extras from the token response, e.g. Salesforce `instance_url` and `organizationId` |
 | `SyncRun.errorsJson` | `[]` | `RecordIssue[]` — `{ sourceRecordId, targetObject, reason, fieldName?, severity }` |
+| `IdentityResolutionRun.issuesJson` | `[]` | `IdentityIssue[]` — a **discriminated union** on `kind`, not one shape with eight optional fields, so a renderer cannot read `fieldName` off a key conflict |
 | `IntegrationDraft.functionNames` | none | `string[]` — the function names chosen, deduped and sorted before storage |
+
+The four `IdentityIssue` kinds are `key_claimed_elsewhere` (two accounts claim
+one key; never auto-merged, a human decides), `blocked_by_assertion` (a
+`distinct` verdict refused a grouping some key would have made), `field_conflict`
+(equal-priority sources disagree on a value) and `key_race_lost` (a concurrent
+pass inserted the same key first).
 
 ---
 

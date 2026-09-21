@@ -15,8 +15,13 @@
  *    a deliberate departure from the original spec's fetch-all-then-map.
  */
 
+import {
+  isIdentityObject,
+  type IdentityObject,
+} from "../../identity-schema";
 import type { RawRecord, TargetObject } from "../../types/common";
 import type {
+  ExternalRefs,
   HandlerContext,
   SourcePage,
   SyncHandler,
@@ -28,11 +33,11 @@ import {
   createProviderSession,
   type ProviderSession,
 } from "../http";
-import { nextPageUrl, queryUrl, SALESFORCE_OBJECT } from "./api";
+import { nextPageUrl, queryUrl, salesforceObject } from "./api";
 import { buildQuery, buildSelectList } from "./soql";
 
 /** Fields the sync cannot work without, whatever the user mapped. */
-const REQUIRED_FIELDS: Record<TargetObject, readonly string[]> = {
+const REQUIRED_FIELDS: Record<IdentityObject, readonly string[]> = {
   customer: ["Id"],
   contact: ["Id", "AccountId"],
 };
@@ -42,10 +47,12 @@ async function* fetchObject(
   object: TargetObject,
   sourcePaths: readonly string[]
 ): AsyncGenerator<SourcePage> {
-  const { fields, rejected } = buildSelectList(
-    sourcePaths,
-    REQUIRED_FIELDS[object]
-  );
+  // Narrowed before either lookup: both `REQUIRED_FIELDS` and the sObject name
+  // cover the identity objects only, and `salesforceObject` says so by name.
+  const sObject = salesforceObject(object);
+  const required = isIdentityObject(object) ? REQUIRED_FIELDS[object] : [];
+
+  const { fields, rejected } = buildSelectList(sourcePaths, required);
 
   if (rejected.length > 0) {
     // Loud but non-fatal: the rest of the mapping still works, and a silently
@@ -55,7 +62,7 @@ async function* fetchObject(
     );
   }
 
-  const soql = buildQuery(SALESFORCE_OBJECT[object], fields);
+  const soql = buildQuery(sObject, fields);
   let url: string | undefined = queryUrl(session.metadata, soql);
 
   while (url !== undefined) {
@@ -87,11 +94,15 @@ export const salesforceIdentityHandler: SyncHandler = {
     return asString(record["Id"]);
   },
 
-  externalCustomerIdOf(contact: RawRecord): string | undefined {
+  externalRefsOf(contact: RawRecord, object: TargetObject): ExternalRefs {
+    // Only a contact hangs off another record in the identity function; a
+    // customer is a root, so it claims no references at all.
+    if (object !== "contact") return {};
+
     // Salesforce nulls the field rather than omitting it, so an unaffiliated
     // contact arrives as `AccountId: null` — asString turns that into undefined,
     // which the record writer reads as "no association claimed" and links to
     // nothing without raising a warning.
-    return asString(contact["AccountId"]);
+    return { customer: asString(contact["AccountId"]) };
   },
 };

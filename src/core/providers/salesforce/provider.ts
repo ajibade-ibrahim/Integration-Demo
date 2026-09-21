@@ -26,6 +26,17 @@ export const SALESFORCE_IDENTITY_SCOPES = ["api", "refresh_token"] as const;
 export const SALESFORCE_SUPPORT_SCOPES = ["api", "refresh_token"] as const;
 
 /**
+ * Agreement needs no additional scopes either: Contract and Opportunity are
+ * ordinary objects, and `api` already spans everything the user can see.
+ *
+ * Salesforce is the reason the agreement function exists at the shape it does
+ * — it is the only connected provider carrying a sales-led agreement (a
+ * Contract with status, dates and a linked opportunity) rather than a
+ * self-serve subscription.
+ */
+export const SALESFORCE_AGREEMENT_SCOPES = ["api", "refresh_token"] as const;
+
+/**
  * Sandboxes authorize against test.salesforce.com, production and Developer
  * Edition orgs against login.salesforce.com. Configurable because getting it
  * wrong produces an opaque "invalid_client_id" that is hard to diagnose.
@@ -38,6 +49,26 @@ function loginHost(): string {
 export function salesforceApiVersion(): string {
   const version = process.env["SALESFORCE_API_VERSION"];
   return version === undefined || version === "" ? "v60.0" : version;
+}
+
+/**
+ * Pull the org id out of Salesforce's identity URL.
+ *
+ * The token response's `id` looks like
+ * `https://login.salesforce.com/id/00Dx0000000BV7z/005x00000012Q9P` — org id,
+ * then user id. The org id is the stable tenant identifier, and the reason
+ * identity resolution cannot use `instanceUrl` for that job: legacy pod
+ * hostnames like `na1.salesforce.com` were shared by thousands of unrelated
+ * orgs, so scoping record ids by host would have been no scoping at all.
+ *
+ * @returns The 15- or 18-character org id, or undefined if the URL is not the
+ *   expected shape — in which case no self-key is emitted.
+ */
+export function organizationIdFromIdentityUrl(
+  identityUrl: string
+): string | undefined {
+  const match = /\/id\/(00D[A-Za-z0-9]{12,15})\//.exec(identityUrl);
+  return match?.[1];
 }
 
 export const salesforceProvider: ProviderDefinition = {
@@ -90,6 +121,16 @@ export const salesforceProvider: ProviderDefinition = {
       const refreshToken = body["refresh_token"];
       const issuedAt = body["issued_at"];
 
+      // Captured for identity resolution, not for addressing requests — unlike
+      // `instance_url`, whose absence is fatal above. A missing or unparseable
+      // identity URL costs one join and nothing else, so it must not refuse a
+      // perfectly usable connection.
+      const identityUrl = body["id"];
+      const organizationId =
+        typeof identityUrl === "string"
+          ? organizationIdFromIdentityUrl(identityUrl)
+          : undefined;
+
       return {
         accessToken,
         ...(typeof refreshToken === "string" ? { refreshToken } : {}),
@@ -99,8 +140,18 @@ export const salesforceProvider: ProviderDefinition = {
         metadata: {
           instanceUrl,
           ...(typeof issuedAt === "string" ? { issuedAt } : {}),
+          ...(organizationId === undefined ? {} : { organizationId }),
         },
       };
     },
+  },
+
+  // Account and Contact ids are unique within an org, not across Salesforce.
+  externalIdScope: "tenant",
+
+  // The org id, captured above. The one provider here whose credential actually
+  // names its tenant, so the only one that emits self-keys today.
+  tenantScopeValue(metadata) {
+    return metadata["organizationId"];
   },
 };

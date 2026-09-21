@@ -13,7 +13,7 @@ import type {
   HandlerContext,
 } from "../../types/registry";
 import { asArray, asRecord, asString, createProviderSession } from "../http";
-import { describeUrl, SALESFORCE_OBJECT } from "./api";
+import { describeUrl, salesforceObject } from "./api";
 
 export const salesforceFieldDiscovery: FieldDiscovery = {
   async discover(
@@ -22,7 +22,7 @@ export const salesforceFieldDiscovery: FieldDiscovery = {
   ): Promise<readonly DiscoveredFieldDef[]> {
     const session = createProviderSession(ctx, "Salesforce");
     const body = asRecord(
-      await session.getJson(describeUrl(session.metadata, SALESFORCE_OBJECT[object]))
+      await session.getJson(describeUrl(session.metadata, salesforceObject(object)))
     );
 
     const fields: DiscoveredFieldDef[] = [];

@@ -206,7 +206,7 @@ describe("Stripe contact synthesis", () => {
     expect(contact?.["contact_name"]).toBe("Acme Manufacturing");
     expect(contact?.["email"]).toBe("Billing@Acme.example");
     expect(contact?.["phone"]).toBe("+1 415 555 0101");
-    expect(stripeIdentityHandler.externalCustomerIdOf(contact!)).toBe("cus_1");
+    expect(stripeIdentityHandler.externalRefsOf(contact!, "contact")).toEqual({ customer: "cus_1" });
     expect(stripeIdentityHandler.externalIdOf(contact!)).toBe("cus_1:contact");
   });
 

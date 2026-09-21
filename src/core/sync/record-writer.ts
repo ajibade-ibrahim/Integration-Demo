@@ -1,37 +1,72 @@
 /**
- * Turning mapped records into rows: validation, upsert, and resolving the
- * contact→customer association.
+ * Turning mapped records into rows: validation, upsert, and resolving each
+ * child record's association to its parent.
  *
- * The association is the subtle part. Providers hand back their *own* company
- * id on a contact — HubSpot via an associations block, Salesforce via
- * `AccountId` — never our internal UUID. Writing that straight into a foreign
- * key produces a dangling reference. So customers are written first, building
- * an external→internal index, and contacts resolve through it.
+ * The association is the subtle part, and it is now the same shape five times.
+ * Providers hand back their *own* id for the parent — a company id on a contact
+ * (HubSpot via an associations block, Salesforce via `AccountId`), a product id
+ * on a price — never our internal UUID. Writing that straight into a foreign key
+ * produces a dangling reference. So parents are written first, building an
+ * external→internal index, and children resolve through it.
+ *
+ * Three families live here: customers and contacts for `identity`, products and
+ * offerings for `catalog`, agreements and subscriptions for `agreement`. They
+ * share `resolveAssociation` and the relink pass rather than each growing their
+ * own, because a second copy of that cache-then-fall-back logic is exactly
+ * where the database fallback gets quietly omitted — and the symptom of
+ * omitting it is a link that vanishes on the second sync, which is not a thing
+ * anyone notices quickly.
+ *
+ * The agreement family is where the shape stops being uniform, in two ways
+ * worth knowing before reading it:
+ *
+ *   - An agreement has **two** parents, a customer and an offering, and neither
+ *     is primary. It resolves two indexes rather than one, and an unresolved
+ *     half is a warning on that half alone.
+ *   - Both of its parents are written by *other functions*, so neither index
+ *     has anything in it when the agreement writer runs. The database fallback
+ *     is not an optimization there, it is the only path.
  */
 
 import { prisma } from "@/lib/prisma";
 import {
+  isAgreementStatus,
+  isAgreementType,
+  isBillingInterval,
   isCustomerType,
   type RecordIssue,
   type TargetObject,
 } from "../types/common";
-import {
-  IDENTITY_SCHEMA,
-  MAX_CUSTOM_FIELDS,
-} from "../identity-schema";
+import { MAX_CUSTOM_FIELDS, OBJECT_SCHEMAS } from "../object-schema";
 import type { MappedRecord } from "../types/mapping";
+import type { ExternalRefs } from "../types/registry";
 import { writeJsonObject } from "../repositories/json-column";
-
-/**
- * Email shape check: a non-empty local part, an @, and a dotted domain.
- * Deliberately permissive — the goal is catching obvious rubbish, not
- * adjudicating RFC 5322.
- */
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
+// Imported rather than defined here: identity resolution matches on the same
+// addresses this writer validates, and two definitions of "a valid address"
+// would let the writer store something the matcher silently refuses to join on.
+import { EMAIL_PATTERN } from "../identity/normalize";
 
 export interface WriteOutcome {
   written: number;
   issues: RecordIssue[];
+}
+
+/**
+ * One source record, mapped and ready to write.
+ *
+ * `externalRefs` holds the provider's own ids for whatever this record hangs
+ * off, keyed by which relationship each is — `{ customer }` for a contact,
+ * `{ product }` for an offering, `{ customer, offering }` for an agreement.
+ *
+ * A map rather than one id because an agreement has two parents and neither is
+ * the primary one. A missing key and a present-but-undefined value mean the
+ * same thing — this record claims no such relationship — so a handler may
+ * return either, and root objects return an empty object.
+ */
+export interface CollectedRecord {
+  externalSourceId: string | undefined;
+  externalRefs?: ExternalRefs;
+  mapped: MappedRecord;
 }
 
 /** Trim to a field's max length, returning null for blanks. */
@@ -43,7 +78,7 @@ function normalize(value: string | null, maxLength?: number): string | null {
 }
 
 function maxLengthOf(object: TargetObject, field: string): number | undefined {
-  return IDENTITY_SCHEMA[object].fields.find((f) => f.name === field)?.maxLength;
+  return OBJECT_SCHEMAS[object].fields.find((f) => f.name === field)?.maxLength;
 }
 
 /** Cap the custom-field map and its values at the documented limits. */
@@ -71,7 +106,7 @@ export interface CustomerWriteResult extends WriteOutcome {
 
 export async function writeCustomers(
   integrationId: string,
-  records: Array<{ externalSourceId: string | undefined; mapped: MappedRecord }>
+  records: readonly CollectedRecord[]
 ): Promise<CustomerWriteResult> {
   const issues: RecordIssue[] = [];
   const externalToInternal = new Map<string, string>();
@@ -124,9 +159,31 @@ export async function writeCustomers(
       }
     }
 
+    // A malformed account email is warned about and nulled, *not* rejected —
+    // the opposite of the contact policy a hundred lines down, and deliberately
+    // so. A contact is rejected because an address is a person's primary
+    // identifier; a customer's identity is `name` + `externalSourceId`, so
+    // discarding an entire company over one bad field is worse than an empty
+    // column. Same treatment `type` gets just above.
+    let email = normalize(
+      mapped.fields["email"] ?? null,
+      maxLengthOf("customer", "email")
+    );
+    if (email !== null && !EMAIL_PATTERN.test(email)) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "customer",
+        reason: `'${email}' is not a valid email address; left unset`,
+        fieldName: "email",
+        severity: "warning",
+      });
+      email = null;
+    }
+
     const data = {
       name,
       domain: normalize(mapped.fields["domain"] ?? null, maxLengthOf("customer", "domain")),
+      email,
       industry: normalize(
         mapped.fields["industry"] ?? null,
         maxLengthOf("customer", "industry")
@@ -134,6 +191,11 @@ export async function writeCustomers(
       createDate: parseDate(mapped.fields["createDate"] ?? null),
       type,
       customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+      // No bound needed: `applyMappings` only fills this from a target path
+      // naming a registered provider, and mapping targets are unique, so the
+      // object has at most one key per provider and each value is already
+      // clamped to MAX_CUSTOM_FIELD_VALUE_LENGTH.
+      crossRefs: writeJsonObject(mapped.crossRefs),
     };
 
     const row = await prisma.customer.upsert({
@@ -158,17 +220,14 @@ export async function writeCustomers(
 
 export async function writeContacts(
   integrationId: string,
-  records: Array<{
-    externalSourceId: string | undefined;
-    externalCustomerId: string | undefined;
-    mapped: MappedRecord;
-  }>,
+  records: readonly CollectedRecord[],
   externalToInternal: Map<string, string>
 ): Promise<WriteOutcome> {
   const issues: RecordIssue[] = [];
   let written = 0;
 
-  for (const { externalSourceId, externalCustomerId, mapped } of records) {
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    const externalCustomerId = externalRefs?.customer;
     if (externalSourceId === undefined || externalSourceId === "") {
       issues.push({
         sourceRecordId: "(unknown)",
@@ -269,24 +328,84 @@ async function resolveCustomer(
   externalCustomerId: string | undefined,
   externalToInternal: Map<string, string>
 ): Promise<string | null> {
-  if (externalCustomerId === undefined || externalCustomerId === "") return null;
+  return resolveAssociation(
+    integrationId,
+    "customer",
+    externalCustomerId,
+    externalToInternal
+  );
+}
 
-  const fromThisRun = externalToInternal.get(externalCustomerId);
+/** Parent models a child record can be associated with by foreign id. */
+type ParentModel = "customer" | "product" | "offering" | "agreement";
+
+/**
+ * Look a parent up by the provider's own id.
+ *
+ * An exhaustive switch, and it has to be exhaustive rather than merely a
+ * switch. `prisma[model]` would need a cast to `any` and would take the
+ * compiler's word for the `where` shape with it. A ternary chain — which this
+ * was while there were two models — compiles silently when a third is added
+ * and resolves it against whichever table the final branch happened to name,
+ * so `agreement` would have quietly looked itself up in `product`. Written
+ * this way, adding a member fails the build until it is handled.
+ */
+async function findByExternalId(
+  integrationId: string,
+  model: ParentModel,
+  externalSourceId: string
+): Promise<{ id: string } | null> {
+  const where = {
+    integrationId_externalSourceId: { integrationId, externalSourceId },
+  };
+  const select = { id: true };
+
+  switch (model) {
+    case "customer":
+      return prisma.customer.findUnique({ where, select });
+    case "product":
+      return prisma.product.findUnique({ where, select });
+    case "offering":
+      return prisma.offering.findUnique({ where, select });
+    case "agreement":
+      return prisma.agreement.findUnique({ where, select });
+  }
+}
+
+/**
+ * Map a provider's own id for a parent record to our internal id.
+ *
+ * Checks the index built during this run first, then falls back to the database
+ * for a parent written by an earlier run — without that fallback, a child whose
+ * parent did not change would lose its link on every subsequent sync.
+ *
+ * Shared by contact→customer, offering→product, agreement→customer,
+ * agreement→offering and subscription→agreement. They differ only in which
+ * table they read, and having written the same cache-then-fall-back logic five
+ * times is how one of them ends up quietly missing the fallback.
+ *
+ * **One index per model, never one shared between them.** The index is keyed by
+ * the provider's id alone, so a single map passed for two models would let a
+ * customer id collide with a product id that happened to match — unlikely
+ * across Stripe's prefixed ids, guaranteed nowhere. Callers that resolve two
+ * parents pass two maps.
+ */
+async function resolveAssociation(
+  integrationId: string,
+  model: ParentModel,
+  externalId: string | undefined,
+  index: Map<string, string>
+): Promise<string | null> {
+  if (externalId === undefined || externalId === "") return null;
+
+  const fromThisRun = index.get(externalId);
   if (fromThisRun !== undefined) return fromThisRun;
 
-  const existing = await prisma.customer.findUnique({
-    where: {
-      integrationId_externalSourceId: {
-        integrationId,
-        externalSourceId: externalCustomerId,
-      },
-    },
-    select: { id: true },
-  });
+  const existing = await findByExternalId(integrationId, model, externalId);
 
   if (existing !== null) {
-    // Cache it so a batch of contacts sharing a company hits the DB once.
-    externalToInternal.set(externalCustomerId, existing.id);
+    // Cache it so a batch of children sharing a parent hits the DB once.
+    index.set(externalId, existing.id);
     return existing.id;
   }
   return null;
@@ -334,4 +453,751 @@ export async function relinkOrphanedContacts(
     }
   }
   return relinked;
+}
+
+// ---------------------------------------------------------------------------
+// Catalog
+//
+// Products then offerings, mirroring customers then contacts: the parent is
+// written first so the child can resolve its association through the index that
+// produces. The shape is deliberately the same — an offering whose product we
+// cannot find is kept with its `externalProductId` retained, exactly as an
+// unlinkable contact is, so a later sync can complete the link.
+// ---------------------------------------------------------------------------
+
+/** Parse a whole number from a mapped field, or null if it is not one. */
+function parseInteger(value: string | null): number | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+
+  // `Number`, not `parseInt`: `parseInt("49.99")` is 49, which would turn a
+  // major-unit price into a plausible-looking minor-unit one — wrong by a factor
+  // of a hundred, with nothing in the data to show for it. A non-integer is
+  // refused here and warned about by the caller.
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) return null;
+  return parsed;
+}
+
+/**
+ * Parse a boolean from a mapped field.
+ *
+ * Accepts the spellings providers actually send. Anything else is null rather
+ * than false — "we were not told" and "no" are different answers, and
+ * `Product.active` is nullable precisely so it can hold the difference.
+ */
+function parseBoolean(value: string | null): boolean | null {
+  if (value === null) return null;
+  switch (value.trim().toLowerCase()) {
+    case "true":
+    case "1":
+    case "yes":
+      return true;
+    case "false":
+    case "0":
+    case "no":
+      return false;
+    default:
+      return null;
+  }
+}
+
+export interface ProductWriteResult extends WriteOutcome {
+  /** Provider id -> our internal id, for resolving offering associations. */
+  externalToInternal: Map<string, string>;
+}
+
+export async function writeProducts(
+  integrationId: string,
+  records: readonly CollectedRecord[]
+): Promise<ProductWriteResult> {
+  const issues: RecordIssue[] = [];
+  const externalToInternal = new Map<string, string>();
+  let written = 0;
+
+  for (const { externalSourceId, mapped } of records) {
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "product",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const name = normalize(
+      mapped.fields["name"] ?? null,
+      maxLengthOf("product", "name")
+    );
+    if (name === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "product",
+        reason: "Name is required",
+        fieldName: "name",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const data = {
+      name,
+      description: normalize(
+        mapped.fields["description"] ?? null,
+        maxLengthOf("product", "description")
+      ),
+      active: parseBoolean(mapped.fields["active"] ?? null),
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+    };
+
+    const row = await prisma.product.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+      select: { id: true },
+    });
+
+    externalToInternal.set(externalSourceId, row.id);
+    written += 1;
+  }
+
+  return { written, issues, externalToInternal };
+}
+
+export async function writeOfferings(
+  integrationId: string,
+  records: readonly CollectedRecord[],
+  externalToInternal: Map<string, string>
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  let written = 0;
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    const externalProductId = externalRefs?.product;
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "offering",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    // Rejected rather than warned, as it is for a customer and a product: a
+    // price with no name is not something a catalog page can render, and a
+    // provider whose price records carry no name is expected to synthesize one
+    // in its handler rather than leave the writer to invent it.
+    const name = normalize(
+      mapped.fields["name"] ?? null,
+      maxLengthOf("offering", "name")
+    );
+    if (name === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "offering",
+        reason: "Name is required",
+        fieldName: "name",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    // Every field below is warned about and left unset rather than rejecting
+    // the row — the policy `customer.type` gets, for the same reason: an
+    // offering with an unreadable amount is still a real offering, and dropping
+    // it would lose the name, the currency and the interval along with it.
+    const rawAmount = mapped.fields["amountMinor"] ?? null;
+    const amountMinor = parseInteger(rawAmount);
+    if (rawAmount !== null && rawAmount.trim() !== "" && amountMinor === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "offering",
+        reason: `'${rawAmount}' is not a whole number of minor units; left unset`,
+        fieldName: "amountMinor",
+        severity: "warning",
+      });
+    }
+
+    const rawInterval = normalize(mapped.fields["interval"] ?? null);
+    let interval: string | null = null;
+    if (rawInterval !== null) {
+      const candidate = rawInterval.toLowerCase();
+      if (isBillingInterval(candidate)) {
+        interval = candidate;
+      } else {
+        issues.push({
+          sourceRecordId: externalSourceId,
+          targetObject: "offering",
+          reason: `Unrecognised billing interval '${rawInterval}'; left unset`,
+          fieldName: "interval",
+          severity: "warning",
+        });
+      }
+    }
+
+    const productId = await resolveAssociation(
+      integrationId,
+      "product",
+      externalProductId,
+      externalToInternal
+    );
+
+    if (externalProductId !== undefined && productId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "offering",
+        reason: `Product '${externalProductId}' not found; offering saved without a link`,
+        fieldName: "associatedProductId",
+        severity: "warning",
+      });
+    }
+
+    const data = {
+      name,
+      productId,
+      externalProductId: externalProductId ?? null,
+      amountMinor,
+      currency: normalize(
+        mapped.fields["currency"] ?? null,
+        maxLengthOf("offering", "currency")
+      ),
+      interval,
+      intervalCount: parseInteger(mapped.fields["intervalCount"] ?? null),
+      active: parseBoolean(mapped.fields["active"] ?? null),
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+    };
+
+    await prisma.offering.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+    });
+
+    written += 1;
+  }
+
+  return { written, issues };
+}
+
+/**
+ * Retry offering->product associations left unresolved by earlier runs.
+ *
+ * The catalog counterpart of `relinkOrphanedContacts`, run after products are
+ * written for the same reason: an offering that arrived before its product gets
+ * linked as soon as that product exists, without waiting for the offering
+ * itself to change.
+ */
+export async function relinkOrphanedOfferings(
+  integrationId: string
+): Promise<number> {
+  const orphans = await prisma.offering.findMany({
+    where: {
+      integrationId,
+      productId: null,
+      externalProductId: { not: null },
+    },
+    select: { id: true, externalProductId: true },
+  });
+
+  let relinked = 0;
+  for (const orphan of orphans) {
+    if (orphan.externalProductId === null) continue;
+
+    const product = await findByExternalId(
+      integrationId,
+      "product",
+      orphan.externalProductId
+    );
+
+    if (product !== null) {
+      await prisma.offering.update({
+        where: { id: orphan.id },
+        data: { productId: product.id },
+      });
+      relinked += 1;
+    }
+  }
+  return relinked;
+}
+
+// ---------------------------------------------------------------------------
+// Agreements
+// ---------------------------------------------------------------------------
+
+export interface AgreementWriteResult extends WriteOutcome {
+  /** Provider id → our internal id, for resolving subscription associations. */
+  externalToInternal: Map<string, string>;
+}
+
+/**
+ * Write agreements: the shared commercial node, whatever type it is.
+ *
+ * Unlike every other writer here this one resolves **two** parents, and both
+ * belong to other functions — the customer to `identity`, the offering to
+ * `catalog`. Three consequences follow, and none of them are bugs:
+ *
+ *   - Two indexes, created empty and local. Neither function's run index is in
+ *     scope, so both start cold and fill from the database as rows are written.
+ *     They still earn their keep: a hundred subscriptions on one customer read
+ *     that customer once.
+ *   - Each half warns independently. An agreement whose customer resolved and
+ *     whose offering did not is a real, useful row, and saying "unresolved"
+ *     about the whole thing would be wrong about half of it.
+ *   - An agreement on an integration that serves neither other function links
+ *     to nothing at all, permanently, and that is the documented cost of
+ *     letting the functions stay independent. The relink pass catches it the
+ *     moment either one is added.
+ */
+export async function writeAgreements(
+  integrationId: string,
+  records: readonly CollectedRecord[]
+): Promise<AgreementWriteResult> {
+  const issues: RecordIssue[] = [];
+  const externalToInternal = new Map<string, string>();
+  // One per model. Sharing a single map between them would let a customer id
+  // collide with an offering id — see `resolveAssociation`.
+  const customerIndex = new Map<string, string>();
+  const offeringIndex = new Map<string, string>();
+  let written = 0;
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    const externalCustomerId = externalRefs?.customer;
+    const externalOfferingId = externalRefs?.offering;
+
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "agreement",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    // Rejected, as it is for every other object with a required name. A Stripe
+    // subscription has no name of its own, so the handler synthesizes one —
+    // without that, this branch would reject every subscription in the account
+    // on every sync, and the only evidence would be a `partial` run status.
+    const name = normalize(
+      mapped.fields["name"] ?? null,
+      maxLengthOf("agreement", "name")
+    );
+    if (name === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreement",
+        reason: "Name is required",
+        fieldName: "name",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    // The discriminator is required in the database, so unlike `status` below
+    // it cannot simply be left unset. An unreadable one falls back to
+    // `subscription` *and says so*, because the alternative — rejecting the
+    // row — throws away a real agreement over a label, and the alternative to
+    // that — a nullable column — is the shapeless table this design exists to
+    // avoid.
+    const rawType = normalize(mapped.fields["agreementType"] ?? null);
+    let agreementType = "subscription";
+    if (rawType !== null) {
+      const candidate = rawType.toLowerCase();
+      if (isAgreementType(candidate)) {
+        agreementType = candidate;
+      } else {
+        issues.push({
+          sourceRecordId: externalSourceId,
+          targetObject: "agreement",
+          reason: `Unrecognised agreement type '${rawType}'; recorded as subscription`,
+          fieldName: "agreementType",
+          severity: "warning",
+        });
+      }
+    }
+
+    // Warned and left unset, the policy `customer.type` and
+    // `offering.interval` get: an agreement whose status we cannot read is
+    // still an agreement, and a wrong status is worse than a missing one.
+    const rawStatus = normalize(mapped.fields["status"] ?? null);
+    let status: string | null = null;
+    if (rawStatus !== null) {
+      const candidate = rawStatus.toLowerCase();
+      if (isAgreementStatus(candidate)) {
+        status = candidate;
+      } else {
+        issues.push({
+          sourceRecordId: externalSourceId,
+          targetObject: "agreement",
+          reason: `Unrecognised agreement status '${rawStatus}'; left unset`,
+          fieldName: "status",
+          severity: "warning",
+        });
+      }
+    }
+
+    const customerId = await resolveAssociation(
+      integrationId,
+      "customer",
+      externalCustomerId,
+      customerIndex
+    );
+    if (externalCustomerId !== undefined && customerId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreement",
+        reason: `Customer '${externalCustomerId}' not found; agreement saved without a link`,
+        fieldName: "associatedCustomerId",
+        severity: "warning",
+      });
+    }
+
+    const offeringId = await resolveAssociation(
+      integrationId,
+      "offering",
+      externalOfferingId,
+      offeringIndex
+    );
+    if (externalOfferingId !== undefined && offeringId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreement",
+        reason: `Offering '${externalOfferingId}' not found; agreement saved without a link`,
+        fieldName: "associatedOfferingId",
+        severity: "warning",
+      });
+    }
+
+    const data = {
+      name,
+      agreementType,
+      status,
+      customerId,
+      externalCustomerId: externalCustomerId ?? null,
+      offeringId,
+      externalOfferingId: externalOfferingId ?? null,
+      effectiveDate: parseDate(mapped.fields["effectiveDate"] ?? null),
+      endDate: parseDate(mapped.fields["endDate"] ?? null),
+      currency: normalize(
+        mapped.fields["currency"] ?? null,
+        maxLengthOf("agreement", "currency")
+      ),
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+    };
+
+    const row = await prisma.agreement.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+      select: { id: true },
+    });
+
+    externalToInternal.set(externalSourceId, row.id);
+    written += 1;
+  }
+
+  return { written, externalToInternal, issues };
+}
+
+// ---------------------------------------------------------------------------
+// Subscriptions
+// ---------------------------------------------------------------------------
+
+/**
+ * Write the recurring-billing half of an agreement.
+ *
+ * The one child writer that **rejects** an unresolved parent instead of keeping
+ * the row. Every other association here is nullable and worth preserving: an
+ * offering without its product is still a price someone can read. A
+ * subscription row without its agreement is a set of dates about nothing — the
+ * column is required, the foreign key cascades, and there is no page that could
+ * render it.
+ *
+ * That is affordable precisely because it cannot happen by accident. Both rows
+ * come off the same source record in the same run, and agreements are written
+ * first, so a missing parent means the parent was itself rejected — and then
+ * rejecting the child is the consistent answer rather than a harsh one.
+ */
+export async function writeSubscriptions(
+  integrationId: string,
+  records: readonly CollectedRecord[],
+  externalToInternal: Map<string, string>
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  let written = 0;
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    const externalAgreementId = externalRefs?.agreement;
+
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "subscription",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const agreementId = await resolveAssociation(
+      integrationId,
+      "agreement",
+      externalAgreementId,
+      externalToInternal
+    );
+
+    if (agreementId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "subscription",
+        reason:
+          externalAgreementId === undefined
+            ? "Subscription claims no agreement; nothing to attach it to"
+            : `Agreement '${externalAgreementId}' was not written; subscription detail dropped`,
+        fieldName: "associatedAgreementId",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const itemCount = parseInteger(mapped.fields["itemCount"] ?? null);
+
+    // Only the first priced line is linked to an offering, so a count above one
+    // is the only thing on the row that says the rest exist. Warned every run
+    // rather than once: it stays true until the subscription changes, and a
+    // warning that appears once and then goes quiet reads as resolved.
+    if (itemCount !== null && itemCount > 1) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "subscription",
+        reason: `Subscription has ${itemCount} priced items; only the first is linked to an offering`,
+        fieldName: "itemCount",
+        severity: "warning",
+      });
+    }
+
+    const data = {
+      agreementId,
+      currentPeriodStart: parseDate(
+        mapped.fields["currentPeriodStart"] ?? null
+      ),
+      currentPeriodEnd: parseDate(mapped.fields["currentPeriodEnd"] ?? null),
+      trialEndsAt: parseDate(mapped.fields["trialEndsAt"] ?? null),
+      canceledAt: parseDate(mapped.fields["canceledAt"] ?? null),
+      cancelAtPeriodEnd: parseBoolean(
+        mapped.fields["cancelAtPeriodEnd"] ?? null
+      ),
+      collectionMethod: normalize(
+        mapped.fields["collectionMethod"] ?? null,
+        maxLengthOf("subscription", "collectionMethod")
+      ),
+      quantity: parseInteger(mapped.fields["quantity"] ?? null),
+      itemCount,
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+    };
+
+    await prisma.subscription.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+    });
+
+    written += 1;
+  }
+
+  return { written, issues };
+}
+
+/**
+ * Retry agreement associations left unresolved by earlier runs.
+ *
+ * Two edges rather than one, which changes the shape from the contact and
+ * offering versions: the query is an `OR` over both, and a single row can be
+ * relinked on both halves in one pass. It is counted **once** in that case,
+ * because the count answers "how many rows changed" and a row that gained two
+ * links is still one row.
+ *
+ * There is deliberately no subscription counterpart. Its parent FK is required,
+ * so an unlinked subscription row cannot exist to be repaired.
+ */
+export async function relinkOrphanedAgreements(
+  integrationId: string
+): Promise<number> {
+  const orphans = await prisma.agreement.findMany({
+    where: {
+      integrationId,
+      OR: [
+        { customerId: null, externalCustomerId: { not: null } },
+        { offeringId: null, externalOfferingId: { not: null } },
+      ],
+    },
+    select: {
+      id: true,
+      customerId: true,
+      externalCustomerId: true,
+      offeringId: true,
+      externalOfferingId: true,
+    },
+  });
+
+  let relinked = 0;
+  for (const orphan of orphans) {
+    const data: { customerId?: string; offeringId?: string } = {};
+
+    if (orphan.customerId === null && orphan.externalCustomerId !== null) {
+      const customer = await findByExternalId(
+        integrationId,
+        "customer",
+        orphan.externalCustomerId
+      );
+      if (customer !== null) data.customerId = customer.id;
+    }
+
+    if (orphan.offeringId === null && orphan.externalOfferingId !== null) {
+      const offering = await findByExternalId(
+        integrationId,
+        "offering",
+        orphan.externalOfferingId
+      );
+      if (offering !== null) data.offeringId = offering.id;
+    }
+
+    if (Object.keys(data).length === 0) continue;
+
+    await prisma.agreement.update({ where: { id: orphan.id }, data });
+    relinked += 1;
+  }
+  return relinked;
+}
+
+// ---------------------------------------------------------------------------
+// Per-function dispatch
+// ---------------------------------------------------------------------------
+
+export interface FunctionWriteResult {
+  /**
+   * Rows written, per target object. An object this run produced none of is
+   * absent rather than zero — "the catalog sync wrote no customers" is not a
+   * fact worth recording, and `SyncRun.recordCountsJson` is shaped to say so.
+   */
+  counts: Partial<Record<TargetObject, number>>;
+  issues: RecordIssue[];
+}
+
+/**
+ * Write everything one function collected, parents before children.
+ *
+ * A switch rather than a loop over `objectsForFunction`, because the writers
+ * genuinely do not share a signature: `writeContacts`, `writeOfferings` and
+ * `writeSubscriptions` each need the index their parent writer produced, and a
+ * uniform interface that passed every index to every writer would be a worse
+ * lie than this switch is a repetition. The *order* inside each branch must
+ * still match `objectsForFunction`; `tests/integration/catalog-writer.test.ts`
+ * pins it by building the collected map child-first and asserting the link
+ * still resolves.
+ *
+ * For `agreement` the order is not merely an optimization: a subscription's
+ * agreement id is a required column, so a child written before its parent is
+ * rejected outright rather than saved unlinked.
+ *
+ * @throws If the function has no writers. The sync engine resolves a handler
+ *   before reaching here, so that is a registration mistake rather than a user
+ *   error, and it should be loud.
+ */
+export async function writeRecordsForFunction(
+  integrationId: string,
+  functionName: string,
+  collected: ReadonlyMap<TargetObject, CollectedRecord[]>
+): Promise<FunctionWriteResult> {
+  const at = (object: TargetObject): readonly CollectedRecord[] =>
+    collected.get(object) ?? [];
+
+  switch (functionName) {
+    case "identity": {
+      const customers = await writeCustomers(integrationId, at("customer"));
+      const contacts = await writeContacts(
+        integrationId,
+        at("contact"),
+        customers.externalToInternal
+      );
+      return {
+        counts: { customer: customers.written, contact: contacts.written },
+        issues: [...customers.issues, ...contacts.issues],
+      };
+    }
+
+    case "catalog": {
+      const products = await writeProducts(integrationId, at("product"));
+      const offerings = await writeOfferings(
+        integrationId,
+        at("offering"),
+        products.externalToInternal
+      );
+      return {
+        counts: { product: products.written, offering: offerings.written },
+        issues: [...products.issues, ...offerings.issues],
+      };
+    }
+
+    case "agreement": {
+      // Both counts come from the same source records — one Stripe
+      // subscription yields an agreement row and a subscription row — so this
+      // reports `{ agreement: 5, subscription: 5 }` for five subscriptions
+      // rather than five of one thing. The identity branch above already
+      // behaves this way for Stripe, whose contacts are derived from its
+      // customers, so the run report is consistent about it.
+      const agreements = await writeAgreements(integrationId, at("agreement"));
+      const subscriptions = await writeSubscriptions(
+        integrationId,
+        at("subscription"),
+        agreements.externalToInternal
+      );
+      return {
+        counts: {
+          agreement: agreements.written,
+          subscription: subscriptions.written,
+        },
+        issues: [...agreements.issues, ...subscriptions.issues],
+      };
+    }
+
+    default:
+      throw new Error(
+        `No record writers registered for function '${functionName}'`
+      );
+  }
+}
+
+/**
+ * Retry the associations one function left unresolved on earlier runs.
+ *
+ * Silent for a function with nothing to relink, unlike the writer above: a
+ * function may legitimately have no parent/child pair, whereas one with no
+ * writers at all cannot have got this far.
+ */
+export async function relinkOrphansForFunction(
+  integrationId: string,
+  functionName: string
+): Promise<number> {
+  switch (functionName) {
+    case "identity":
+      return relinkOrphanedContacts(integrationId);
+    case "catalog":
+      return relinkOrphanedOfferings(integrationId);
+    case "agreement":
+      return relinkOrphanedAgreements(integrationId);
+    default:
+      return 0;
+  }
 }

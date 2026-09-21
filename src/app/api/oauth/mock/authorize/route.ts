@@ -26,6 +26,7 @@ const SCOPE_DESCRIPTIONS: Record<string, string> = {
   "crm.objects.companies.read": "View companies and their properties",
   "crm.objects.contacts.read": "View contacts and their properties",
   "crm.objects.tickets.read": "View support tickets",
+  "crm.objects.deals.read": "View deals, subscriptions and contract terms",
   "crm.schemas.read": "View the list of available fields",
   "billing.invoices.read": "View invoices and payment history",
 };

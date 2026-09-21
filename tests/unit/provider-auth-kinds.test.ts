@@ -11,6 +11,7 @@ import { bootstrap, resetBootstrapForTests } from "@/core/bootstrap";
 import {
   canRefresh,
   credentialHint,
+  externalIdScopeValue,
   isProviderConfigured,
   providerRegistry,
   registerProvider,
@@ -19,6 +20,7 @@ import {
 import { buildAuthorizationRequest } from "@/core/oauth/oauth-service";
 import { connectHrefFor } from "@/core/providers/connect-url";
 import { metrifoxProvider } from "@/core/providers/metrifox/provider";
+import { organizationIdFromIdentityUrl } from "@/core/providers/salesforce/provider";
 import { stripeProvider } from "@/core/providers/stripe/provider";
 import type { ProviderDefinition } from "@/core/types/registry";
 
@@ -33,6 +35,7 @@ function oauthDefinition(name: string): ProviderDefinition {
     name,
     label: name,
     description: "",
+    externalIdScope: "global",
     auth: {
       kind: "oauth",
       authorizeEndpoint: "https://example.test/authorize",
@@ -76,6 +79,7 @@ describe("registration validation per credential kind", () => {
       name: "broken-apikey",
       label: "Broken",
       description: "",
+      externalIdScope: "global",
       auth: {
         kind: "apiKey",
         header: "x-api-key",
@@ -95,6 +99,7 @@ describe("registration validation per credential kind", () => {
       name: "broken-header",
       label: "Broken",
       description: "",
+      externalIdScope: "global",
       auth: {
         kind: "apiKey",
         header: "  ",
@@ -106,6 +111,110 @@ describe("registration validation per credential kind", () => {
     };
 
     expect(() => registerProvider(broken)).toThrow(/missing auth.header/);
+  });
+});
+
+/**
+ * How widely a provider's record ids are unique.
+ *
+ * Identity resolution turns those ids into match keys, so getting this wrong
+ * merges two unrelated businesses rather than failing visibly — which is why
+ * the field is non-optional and why registration re-checks it even though the
+ * type already requires it.
+ */
+describe("external id scope", () => {
+  it("declares a scope for every registered provider", () => {
+    for (const provider of providerRegistry.getAll()) {
+      expect(["global", "tenant"], provider.name).toContain(
+        provider.externalIdScope
+      );
+    }
+  });
+
+  it("gives every tenant-scoped provider a way to name its tenant", () => {
+    // The hook may well return undefined at runtime — three of these have no
+    // account identifier available yet. Its *absence* is the bug: a provider
+    // with no hook has no way to ever be scoped, so the omission would be
+    // permanent and silent.
+    for (const provider of providerRegistry.getAll()) {
+      if (provider.externalIdScope !== "tenant") continue;
+      expect(typeof provider.tenantScopeValue, provider.name).toBe("function");
+    }
+  });
+
+  it("scopes Stripe globally, because a cus_ id means one customer", () => {
+    // The reason the Metrifox → Stripe crosswalk works at all: neither side has
+    // to agree on a tenant for a Stripe id to name the same customer.
+    expect(providerRegistry.require("stripe").externalIdScope).toBe("global");
+    expect(externalIdScopeValue(stripeProvider, {})).toBe("");
+  });
+
+  it("scopes HubSpot per tenant and emits nothing until the portal is known", () => {
+    // Company `12345` exists in most portals and they are unrelated
+    // businesses. HubSpot's token response carries no hub_id — it is only
+    // available from /oauth/v1/access-tokens/{token}, which parseTokenResponse
+    // cannot call — so the honest answer today is no key at all.
+    const hubspot = providerRegistry.require("hubspot");
+    expect(hubspot.externalIdScope).toBe("tenant");
+    expect(externalIdScopeValue(hubspot, {})).toBeUndefined();
+    expect(externalIdScopeValue(hubspot, { hubId: "hub-1" })).toBe("hub-1");
+  });
+
+  it("scopes Salesforce by org id, never by instance host", () => {
+    // The distinction is the whole point of the scope segment. Legacy pod
+    // hostnames like na1.salesforce.com were shared by thousands of unrelated
+    // orgs, so scoping by instanceUrl would have been no scoping at all.
+    const salesforce = providerRegistry.require("salesforce");
+    expect(salesforce.externalIdScope).toBe("tenant");
+    expect(
+      externalIdScopeValue(salesforce, {
+        instanceUrl: "https://na1.salesforce.com",
+      })
+    ).toBeUndefined();
+    expect(
+      externalIdScopeValue(salesforce, {
+        instanceUrl: "https://na1.salesforce.com",
+        organizationId: "00Dxx0000001gPA",
+      })
+    ).toBe("00Dxx0000001gPA");
+  });
+
+  it("captures the org id out of Salesforce's identity URL", () => {
+    expect(
+      organizationIdFromIdentityUrl(
+        "https://login.salesforce.com/id/00Dxx0000001gPA/005xx000001Sv6c"
+      )
+    ).toBe("00Dxx0000001gPA");
+    // A missing or reshaped URL costs one join, so it must not throw.
+    expect(organizationIdFromIdentityUrl("")).toBeUndefined();
+    expect(
+      organizationIdFromIdentityUrl("https://login.salesforce.com/id/nope/x")
+    ).toBeUndefined();
+  });
+
+  it("treats a blank scope value as no scope, not as an empty segment", () => {
+    // An empty segment is the *global* shape. A tenant-scoped provider reaching
+    // it would emit `hubspot::12345` — exactly the unscoped key the design
+    // exists to prevent.
+    const hubspot = providerRegistry.require("hubspot");
+    expect(externalIdScopeValue(hubspot, { hubId: "   " })).toBeUndefined();
+  });
+
+  it("rejects a provider that declares no scope", () => {
+    const broken = oauthDefinition("broken-scope");
+    // @ts-expect-error deliberately omitting a required field
+    delete broken.externalIdScope;
+
+    expect(() => registerProvider(broken)).toThrow(/missing externalIdScope/);
+  });
+
+  it("rejects a tenant-scoped provider with no scope hook", () => {
+    const broken = {
+      ...oauthDefinition("broken-tenant"),
+      externalIdScope: "tenant" as const,
+    };
+
+    expect(() => registerProvider(broken)).toThrow(/no tenantScopeValue hook/);
   });
 });
 
@@ -152,13 +261,22 @@ describe("credential-kind behaviour", () => {
 });
 
 describe("function coverage", () => {
-  it("serves identity, and only identity", async () => {
+  it("serves identity and agreement, but not billing", async () => {
     const { functionNamesForProvider, providerNamesForFunction } = await import(
       "@/core/registries/function-registry"
     );
 
-    expect(functionNamesForProvider("metrifox")).toEqual(["identity"]);
+    expect(functionNamesForProvider("metrifox")).toEqual([
+      "agreement",
+      "identity",
+    ]);
     expect(providerNamesForFunction("identity")).toContain("metrifox");
+
+    // Metrifox carries orders and subscriptions, so agreement is a true claim
+    // about the API even though no handler reads them yet. It carries invoices
+    // too — billing is held to the mock deliberately, to keep
+    // ["identity","billing"] a genuine partial intersection.
+    expect(providerNamesForFunction("billing")).not.toContain("metrifox");
   });
 });
 
@@ -192,15 +310,27 @@ describe("Stripe as a second API-key provider", () => {
     expect(connectHrefFor("stripe", "int-1")).toBe("/integrations/int-1/connect");
   });
 
-  it("serves identity, and only identity", async () => {
+  it("serves identity, catalog and agreement, but not billing", async () => {
     const { functionNamesForProvider, providerNamesForFunction } = await import(
       "@/core/registries/function-registry"
     );
 
-    // Stripe has a billing API, conspicuously — but the billing function has no
-    // schema and no handlers, so claiming it would be a claim that is not true.
-    expect(functionNamesForProvider("stripe")).toEqual(["identity"]);
+    // A declared scope set claims the provider *can* serve the function and
+    // names what it would need — not that the handler exists. Stripe genuinely
+    // exposes subscriptions, so agreement is true of the API today; catalog is
+    // true *and* built.
+    expect(functionNamesForProvider("stripe")).toEqual([
+      "agreement",
+      "catalog",
+      "identity",
+    ]);
+    expect(providerNamesForFunction("catalog")).toEqual(["stripe"]);
     expect(providerNamesForFunction("identity")).toContain("stripe");
+
+    // Stripe has a billing API, conspicuously. Withholding it is a deliberate
+    // demo shape rather than a statement about the API: it is what keeps
+    // ["identity","billing"] resolving to the mock alone, which is the only
+    // place the whole-set coverage rule is observable.
     expect(providerNamesForFunction("billing")).not.toContain("stripe");
   });
 

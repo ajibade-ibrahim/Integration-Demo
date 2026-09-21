@@ -2,11 +2,14 @@
  * Field mapper — validation, application, and serialization of mapping rules.
  */
 
+import { crossRefProviderName } from "../identity-schema";
 import {
   CUSTOM_FIELD_PATTERN,
   MAX_CUSTOM_FIELD_VALUE_LENGTH,
+  functionOwnsObject,
+  objectsForFunction,
   resolveTargetField,
-} from "../identity-schema";
+} from "../object-schema";
 import {
   isTargetObject,
   type RawRecord,
@@ -32,16 +35,24 @@ const MAX_PATH_LENGTH = 255;
 // ---------------------------------------------------------------------------
 
 /**
- * Validate a rule set against the identity schema.
+ * Validate a rule set against the schema for one function.
  *
  * Every rule is checked and every violation reported — the caller shows the
  * user all their mistakes at once rather than one per save attempt.
+ *
+ * `functionName` is not optional, and that is the point of it. A rule set is
+ * always stored against a function, so a rule targeting an object that function
+ * does not write is meaningless — and before this check existed it validated
+ * cleanly and then silently wrote nothing, which is a worse outcome than a
+ * refusal because there is no symptom to notice.
  */
 export function validateMappings(
+  functionName: string,
   rules: readonly FieldMappingRule[]
 ): ValidationResult {
   const violations: MappingViolation[] = [];
   const seen = new Set<string>();
+  const owned = objectsForFunction(functionName);
 
   rules.forEach((rule, index) => {
     // --- target object ---
@@ -52,6 +63,21 @@ export function validateMappings(
         message: `'${String(rule.targetObject)}' is not a known target object`,
       });
       return; // Everything below depends on a valid object.
+    }
+
+    // A real object, but not one this function writes. Named separately from
+    // the check above so the message can say which objects *are* available
+    // rather than claiming the object does not exist.
+    if (!functionOwnsObject(functionName, rule.targetObject)) {
+      violations.push({
+        index,
+        field: "targetObject",
+        message:
+          owned.length === 0
+            ? `'${functionName}' writes no objects, so it can hold no mappings`
+            : `'${functionName}' does not write '${rule.targetObject}'; it writes ${owned.join(", ")}`,
+      });
+      return;
     }
 
     // --- source path ---
@@ -86,8 +112,21 @@ export function validateMappings(
       });
     } else {
       const resolved = resolveTargetField(rule.targetObject, target);
+      const crossRefProvider = crossRefProviderName(target);
 
-      if (resolved === undefined) {
+      if (resolved === undefined && crossRefProvider !== undefined) {
+        // The path is a well-formed cross-reference, so the problem is the
+        // provider or the object — never "not a field", which would send the
+        // user looking for a typo in a path that is shaped correctly.
+        violations.push({
+          index,
+          field: "targetFieldPath",
+          message:
+            rule.targetObject === "customer"
+              ? `'${crossRefProvider}' is not a known provider`
+              : `A cross-reference identifies a company, so it can only be mapped onto a customer`,
+        });
+      } else if (resolved === undefined) {
         // Name the object explicitly: mapping a contact field onto a customer
         // is the most likely mistake and the message should say so.
         violations.push({
@@ -95,7 +134,11 @@ export function validateMappings(
           field: "targetFieldPath",
           message: `'${target}' is not a field on ${rule.targetObject}`,
         });
-      } else if (resolved !== "customField" && resolved.readOnly === true) {
+      } else if (
+        resolved !== "customField" &&
+        resolved !== "crossRef" &&
+        resolved.readOnly === true
+      ) {
         violations.push({
           index,
           field: "targetFieldPath",
@@ -182,6 +225,7 @@ export function applyMappings(
 ): MappedRecord {
   const fields: Record<string, string | null> = {};
   const customFields: Record<string, string> = {};
+  const crossRefs: Record<string, string> = {};
 
   for (const rule of rules) {
     if (rule.targetObject !== object) continue;
@@ -198,10 +242,24 @@ export function applyMappings(
       continue;
     }
 
+    const crossRefProvider = crossRefProviderName(rule.targetFieldPath);
+    if (crossRefProvider !== undefined) {
+      // Absent means "this record names no counterpart", which is ordinary —
+      // most records will not. A null entry would later read as a reference to
+      // nothing and have to be filtered out again by every consumer.
+      if (value !== null && value !== "") {
+        crossRefs[crossRefProvider] = value.slice(
+          0,
+          MAX_CUSTOM_FIELD_VALUE_LENGTH
+        );
+      }
+      continue;
+    }
+
     fields[rule.targetFieldPath] = value;
   }
 
-  return { object, fields, customFields };
+  return { object, fields, customFields, crossRefs };
 }
 
 /** Source paths a handler needs to request, grouped by object. */

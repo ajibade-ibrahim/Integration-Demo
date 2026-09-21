@@ -26,10 +26,39 @@ interface Run {
   trigger: string;
   startedAt: string;
   completedAt: string | null;
-  customerCount: number;
-  contactCount: number;
+  /** Rows written per target object; absent keys were not synced at all. */
+  recordCounts: Record<string, number>;
   attempt: number;
   issues: Issue[];
+}
+
+/** Plural form for the object names a run can report. */
+const OBJECT_LABELS: Record<string, [singular: string, plural: string]> = {
+  customer: ["customer", "customers"],
+  contact: ["contact", "contacts"],
+  product: ["product", "products"],
+  offering: ["offering", "offerings"],
+  agreement: ["agreement", "agreements"],
+  subscription: ["subscription", "subscriptions"],
+};
+
+/**
+ * "12 customers, 30 contacts" — or "no records" when a run wrote nothing.
+ *
+ * Reads whatever keys the run recorded rather than a fixed pair, so a catalog
+ * sync reports products and offerings instead of claiming zero customers. An
+ * unknown key still renders, under its own name: a run that recorded something
+ * this build does not know about is worth showing, not hiding.
+ */
+function summarizeCounts(counts: Record<string, number>): string {
+  const parts = Object.entries(counts)
+    .filter(([, n]) => n > 0)
+    .map(([object, n]) => {
+      const [singular, plural] = OBJECT_LABELS[object] ?? [object, `${object}s`];
+      return `${n} ${n === 1 ? singular : plural}`;
+    });
+
+  return parts.length === 0 ? "no records" : parts.join(", ");
 }
 
 const RUN_STATUS: Record<string, string> = {
@@ -159,10 +188,7 @@ function RunRow({ run }: { run: Run }) {
           >
             {run.status}
           </span>
-          <span className="text-sm text-slate-700">
-            {run.customerCount} customer{run.customerCount === 1 ? "" : "s"},{" "}
-            {run.contactCount} contact{run.contactCount === 1 ? "" : "s"}
-          </span>
+          <span className="text-sm text-slate-700">{summarizeCounts(run.recordCounts)}</span>
           {run.attempt > 1 && (
             <span className="text-xs text-slate-400">
               after {run.attempt} attempts
