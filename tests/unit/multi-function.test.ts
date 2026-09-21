@@ -20,9 +20,16 @@ import {
 import {
   HUBSPOT_AGREEMENT_SCOPES,
   HUBSPOT_IDENTITY_SCOPES,
+  HUBSPOT_PROVIDER_NAME,
   HUBSPOT_SUPPORT_SCOPES,
 } from "@/core/providers/hubspot/provider";
-import { SALESFORCE_IDENTITY_SCOPES } from "@/core/providers/salesforce/provider";
+import {
+  SALESFORCE_IDENTITY_SCOPES,
+  SALESFORCE_PROVIDER_NAME,
+} from "@/core/providers/salesforce/provider";
+import { METRIFOX_PROVIDER_NAME } from "@/core/providers/metrifox/provider";
+import { MOCK_PROVIDER_NAME } from "@/core/providers/mock/provider";
+import { STRIPE_PROVIDER_NAME } from "@/core/providers/stripe/provider";
 
 beforeEach(() => {
   resetBootstrapForTests();
@@ -183,18 +190,41 @@ describe("the agreement function", () => {
   it("owns subscriptions, and billing does not", () => {
     expect(functionRegistry.require("agreement").dataModels).toEqual([
       "agreement",
+      "subscription",
     ]);
     expect(functionRegistry.require("billing").dataModels).not.toContain(
       "subscription"
     );
   });
 
-  // Declared, not built. The picker reads the handler registry separately and
-  // offers the function as visibly unavailable; this pins that state so the
-  // declaration is not mistaken for a working sync.
-  it("has no sync handler yet, on any provider", () => {
-    for (const provider of providerNamesForFunction("agreement")) {
-      expect(getSyncHandler("agreement", provider)).toBeUndefined();
+  // Built on Stripe, declared on the rest. The picker reads the handler
+  // registry separately and offers a function as visibly unavailable per
+  // provider, so this pins the boundary: one provider real, four still not.
+  //
+  // It is a list rather than a loop over every agreement provider, which is
+  // what it used to be. A loop asserting "no handler anywhere" stops being a
+  // statement about the unbuilt providers the moment one is built — it just
+  // fails, and the fix looks like deleting the test. Naming them keeps the
+  // assertion meaningful and makes the next provider a one-line change.
+  it("is built on Stripe and on no other provider yet", () => {
+    expect(getSyncHandler("agreement", STRIPE_PROVIDER_NAME)).toBeDefined();
+
+    for (const provider of [
+      HUBSPOT_PROVIDER_NAME,
+      SALESFORCE_PROVIDER_NAME,
+      METRIFOX_PROVIDER_NAME,
+      MOCK_PROVIDER_NAME,
+    ]) {
+      expect(
+        getSyncHandler("agreement", provider),
+        `${provider} unexpectedly has an agreement handler`
+      ).toBeUndefined();
     }
+
+    // And every one of them is still offered in the picker, which is the point
+    // of declaring scopes ahead of handlers.
+    expect(providerNamesForFunction("agreement")).toContain(
+      HUBSPOT_PROVIDER_NAME
+    );
   });
 });

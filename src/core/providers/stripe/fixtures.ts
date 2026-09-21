@@ -136,3 +136,122 @@ export const STRIPE_OFFERING_FIELDS: DiscoveredFieldDef[] = [
     type: "datetime",
   },
 ];
+
+/**
+ * Agreement fields — the shared commercial node, read from a subscription.
+ *
+ * Synthesized paths first, as in `STRIPE_OFFERING_FIELDS`, because they are the
+ * ones a user should reach for: `agreement_name` exists because Stripe gives a
+ * subscription no name, and `status` here is already translated into our
+ * vocabulary rather than Stripe's eight.
+ */
+export const STRIPE_AGREEMENT_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Subscription ID", type: "string" },
+  {
+    path: "agreement_name",
+    label: "Name (synthesized from the price nickname or amount)",
+    type: "string",
+  },
+  {
+    path: "agreement_type",
+    label: "Agreement type (synthesized; always subscription here)",
+    type: "string",
+  },
+  {
+    path: "status",
+    label: "Status (translated to draft/trialing/active/past_due/paused/canceled)",
+    type: "string",
+  },
+  {
+    path: "customer_id",
+    label: "Customer ID (synthesized)",
+    type: "string",
+  },
+  {
+    path: "offering_id",
+    label: "Offering ID — the first item's price (synthesized)",
+    type: "string",
+  },
+  {
+    path: "effective_date",
+    label: "Effective date (ISO 8601, synthesized from start_date)",
+    type: "datetime",
+  },
+  {
+    path: "ended_at",
+    label: "Ended at (ISO 8601, synthesized from ended_at)",
+    type: "datetime",
+  },
+  { path: "currency", label: "Currency", type: "string" },
+  {
+    path: "raw_status",
+    label: "Stripe's own status — map `status` instead unless you need the original",
+    type: "string",
+  },
+  { path: "description", label: "Description", type: "string" },
+  {
+    path: "start_date",
+    label: "Start date (Unix epoch seconds — map effective_date instead)",
+    type: "number",
+  },
+];
+
+/**
+ * Subscription fields — the recurring-billing detail.
+ *
+ * No name here, deliberately: this row extends one agreement, which has one.
+ * The period dates are the reason the object exists, so they lead.
+ */
+export const STRIPE_SUBSCRIPTION_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Subscription ID", type: "string" },
+  {
+    path: "current_period_start",
+    label: "Current period start (ISO 8601, synthesized)",
+    type: "datetime",
+  },
+  {
+    path: "current_period_end",
+    label: "Current period end (ISO 8601, synthesized)",
+    type: "datetime",
+  },
+  {
+    path: "trial_ends_at",
+    label: "Trial ends at (ISO 8601, synthesized from trial_end)",
+    type: "datetime",
+  },
+  {
+    path: "canceled_at",
+    label: "Canceled at (ISO 8601, synthesized)",
+    type: "datetime",
+  },
+  {
+    path: "cancel_at_period_end",
+    label: "Cancels at period end",
+    type: "boolean",
+  },
+  {
+    path: "item_count",
+    label: "Number of priced items (synthesized; only the first is linked)",
+    type: "number",
+  },
+  {
+    path: "quantity",
+    label: "Quantity on the first item (synthesized)",
+    type: "number",
+  },
+  {
+    path: "collection_method",
+    label: "Collection method (charge_automatically or send_invoice)",
+    type: "string",
+  },
+  {
+    path: "items.data.0.price.unit_amount",
+    label: "First item's unit amount (minor units)",
+    type: "number",
+  },
+  {
+    path: "items.data.0.price.nickname",
+    label: "First item's price nickname (often empty)",
+    type: "string",
+  },
+];

@@ -26,6 +26,7 @@ import {
   mappableFields,
   objectsForFunction,
   resolveTargetField,
+  OBJECT_SCHEMAS,
 } from "@/core/object-schema";
 
 beforeEach(() => {
@@ -115,11 +116,19 @@ describe("shipped default mappings", () => {
     }
   });
 
-  it("supplies the one required field for each object it writes to", () => {
+  it("supplies every required field for each object it writes to", () => {
     // A default set that maps contact fields but not `contact.name` produces a
     // rejected record for every contact of every sync — worse than mapping
     // nothing, because it looks like it is working. The same trap catches
-    // `offering.name`, which is why Stripe synthesizes one.
+    // `offering.name` and `agreement.name`, which is why Stripe synthesizes
+    // both.
+    //
+    // The required list is read from the schema rather than hardcoded as
+    // `"name"`, which is what this test used to assert. Two reasons: it now
+    // covers any future required field for free, and — the reason it had to
+    // change — not every object has a name. `subscription` deliberately has
+    // none, because it extends exactly one agreement that already carries one,
+    // and a copy could only ever drift from it.
     for (const { functionName, providerName } of handlerPairs()) {
       const rules = defaultMappingsFor(functionName, providerName);
       if (rules.length === 0) continue;
@@ -127,10 +136,18 @@ describe("shipped default mappings", () => {
       for (const object of objectsForFunction(functionName)) {
         const forObject = rules.filter((r) => r.targetObject === object);
         if (forObject.length === 0) continue;
-        expect(
-          forObject.map((r) => r.targetFieldPath),
-          `${providerName} maps ${object} fields but not ${object}.name`
-        ).toContain("name");
+
+        const mapped = forObject.map((r) => r.targetFieldPath);
+        const required = OBJECT_SCHEMAS[object].fields
+          .filter((f) => f.required === true)
+          .map((f) => f.name);
+
+        for (const field of required) {
+          expect(
+            mapped,
+            `${providerName} maps ${object} fields but not ${object}.${field}`
+          ).toContain(field);
+        }
       }
     }
   });

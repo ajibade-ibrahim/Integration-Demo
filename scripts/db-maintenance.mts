@@ -143,6 +143,32 @@ report(
   }),
   " — they relink when the product syncs"
 );
+// Two edges, reported separately. An agreement's customer comes from the
+// identity function and its offering from catalog, so a row can have either
+// half linked and the other not — and one combined figure would be wrong about
+// half of every such row.
+report(
+  "agreements whose customer did not resolve",
+  await prisma.agreement.count({
+    where: { customerId: null, externalCustomerId: { not: null } },
+  }),
+  " — they relink when identity syncs"
+);
+report(
+  "agreements whose offering did not resolve",
+  await prisma.agreement.count({
+    where: { offeringId: null, externalOfferingId: { not: null } },
+  }),
+  " — they relink when the catalog syncs"
+);
+// Not an unresolved association but the same class of thing: a fact about the
+// row that is only visible if something says it out loud. Only the first priced
+// item of a subscription is linked to an offering.
+report(
+  "subscriptions with more priced items than we linked",
+  await prisma.subscription.count({ where: { itemCount: { gt: 1 } } }),
+  " — only the first item is linked to an offering"
+);
 report(
   "customers not yet linked to an account",
   await prisma.customer.count({ where: { customerAccountId: null } }),

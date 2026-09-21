@@ -27,7 +27,12 @@
  */
 
 import type { RawRecord, TargetObject } from "../../types/common";
-import type { HandlerContext, SourcePage, SyncHandler } from "../../types/registry";
+import type {
+  ExternalRefs,
+  HandlerContext,
+  SourcePage,
+  SyncHandler,
+} from "../../types/registry";
 import { asString, createProviderSession } from "../http";
 import {
   customersUrl,
@@ -110,15 +115,12 @@ export const stripeIdentityHandler: SyncHandler = {
     return asString(record["contact_id"]) ?? asString(record["id"]);
   },
 
-  externalParentIdOf(
-    contact: RawRecord,
-    object: TargetObject
-  ): string | undefined {
+  externalRefsOf(contact: RawRecord, object: TargetObject): ExternalRefs {
     // Only a contact hangs off another record in the identity function; a
-    // customer is a root, so it has no parent id to report.
-    if (object !== "contact") return undefined;
+    // customer is a root, so it claims no references at all.
+    if (object !== "contact") return {};
 
-    return asString(contact["customer_id"]);
+    return { customer: asString(contact["customer_id"]) };
   },
 };
 

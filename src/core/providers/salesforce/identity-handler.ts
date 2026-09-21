@@ -21,6 +21,7 @@ import {
 } from "../../identity-schema";
 import type { RawRecord, TargetObject } from "../../types/common";
 import type {
+  ExternalRefs,
   HandlerContext,
   SourcePage,
   SyncHandler,
@@ -93,18 +94,15 @@ export const salesforceIdentityHandler: SyncHandler = {
     return asString(record["Id"]);
   },
 
-  externalParentIdOf(
-    contact: RawRecord,
-    object: TargetObject
-  ): string | undefined {
+  externalRefsOf(contact: RawRecord, object: TargetObject): ExternalRefs {
     // Only a contact hangs off another record in the identity function; a
-    // customer is a root, so it has no parent id to report.
-    if (object !== "contact") return undefined;
+    // customer is a root, so it claims no references at all.
+    if (object !== "contact") return {};
 
     // Salesforce nulls the field rather than omitting it, so an unaffiliated
     // contact arrives as `AccountId: null` — asString turns that into undefined,
     // which the record writer reads as "no association claimed" and links to
     // nothing without raising a warning.
-    return asString(contact["AccountId"]);
+    return { customer: asString(contact["AccountId"]) };
   },
 };

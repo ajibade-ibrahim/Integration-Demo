@@ -1,0 +1,31 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - link "Integration Demo" [ref=e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=e5]:
+        - link "Integrations" [ref=e6] [cursor=pointer]:
+          - /url: /integrations
+        - link "Synced data" [ref=e7] [cursor=pointer]:
+          - /url: /customers
+        - link "Catalog" [ref=e8] [cursor=pointer]:
+          - /url: /catalog
+        - link "Agreements" [ref=e9] [cursor=pointer]:
+          - /url: /agreements
+  - main [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - heading "Sign in" [level=1] [ref=e13]
+        - paragraph [ref=e14]: Integrations, their credentials and their synced records belong to the account that created them.
+      - generic [ref=e15]:
+        - generic [ref=e16]:
+          - generic [ref=e17]: Email
+          - textbox "Email" [ref=e18]
+        - generic [ref=e19]:
+          - generic [ref=e20]: Password
+          - textbox "Password" [ref=e21]
+        - button "Sign in" [ref=e22] [cursor=pointer]
+      - paragraph [ref=e23]:
+        - text: No account yet?
+        - code [ref=e24]: npm run seed
+        - text: creates the demo user and prints its credentials.

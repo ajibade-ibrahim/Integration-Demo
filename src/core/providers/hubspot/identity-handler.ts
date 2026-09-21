@@ -15,6 +15,7 @@
 
 import type { RawRecord, TargetObject } from "../../types/common";
 import type {
+  ExternalRefs,
   HandlerContext,
   SourcePage,
   SyncHandler,
@@ -96,13 +97,10 @@ export const hubspotIdentityHandler: SyncHandler = {
     return asString(record["id"]);
   },
 
-  externalParentIdOf(
-    contact: RawRecord,
-    object: TargetObject
-  ): string | undefined {
+  externalRefsOf(contact: RawRecord, object: TargetObject): ExternalRefs {
     // Only a contact hangs off another record in the identity function; a
-    // customer is a root, so it has no parent id to report.
-    if (object !== "contact") return undefined;
+    // customer is a root, so it claims no references at all.
+    if (object !== "contact") return {};
 
     // associations.companies.results[] — take the first. HubSpot allows a
     // contact to associate with several companies, but our model holds one, and
@@ -110,6 +108,6 @@ export const hubspotIdentityHandler: SyncHandler = {
     const associations = asRecord(contact["associations"]);
     const companies = asRecord(associations?.["companies"]);
     const first = asRecord(asArray(companies?.["results"])[0]);
-    return asString(first?.["id"]);
+    return { customer: asString(first?.["id"]) };
   },
 };

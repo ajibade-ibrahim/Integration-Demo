@@ -33,7 +33,12 @@
  */
 
 import type { RawRecord, TargetObject } from "../../types/common";
-import type { HandlerContext, SourcePage, SyncHandler } from "../../types/registry";
+import type {
+  ExternalRefs,
+  HandlerContext,
+  SourcePage,
+  SyncHandler,
+} from "../../types/registry";
 import { asString, createProviderSession, type ProviderSession } from "../http";
 import {
   epochToIso,
@@ -108,13 +113,10 @@ export const stripeCatalogHandler: SyncHandler = {
     return asString(record["id"]);
   },
 
-  externalParentIdOf(
-    record: RawRecord,
-    object: TargetObject
-  ): string | undefined {
+  externalRefsOf(record: RawRecord, object: TargetObject): ExternalRefs {
     // A product is a root; only an offering hangs off one.
-    if (object !== "offering") return undefined;
-    return priceProductId(record);
+    if (object !== "offering") return {};
+    return { product: priceProductId(record) };
   },
 };
 

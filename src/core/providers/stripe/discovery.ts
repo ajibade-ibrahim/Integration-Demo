@@ -28,10 +28,12 @@ import type {
 import { asRecord, createProviderSession, type ProviderSession } from "../http";
 import { listUrl, parseListPage, STRIPE_DISCOVERY_SAMPLE, type StripeResource } from "./api";
 import {
+  STRIPE_AGREEMENT_FIELDS,
   STRIPE_CONTACT_FIELDS,
   STRIPE_CUSTOMER_FIELDS,
   STRIPE_OFFERING_FIELDS,
   STRIPE_PRODUCT_FIELDS,
+  STRIPE_SUBSCRIPTION_FIELDS,
 } from "./fixtures";
 import { STRIPE_SESSION_OPTIONS } from "./identity-handler";
 
@@ -85,6 +87,21 @@ export const stripeFieldDiscovery: FieldDiscovery = {
         return withMetadataKeys(session, "products", STRIPE_PRODUCT_FIELDS);
       case "offering":
         return withMetadataKeys(session, "prices", STRIPE_OFFERING_FIELDS);
+      // Both halves of an agreement are read from the same endpoint, because
+      // they are two halves of one Stripe record. Only the field list differs:
+      // the shared node's fields against the recurring detail's.
+      case "agreement":
+        return withMetadataKeys(
+          session,
+          "subscriptions",
+          STRIPE_AGREEMENT_FIELDS
+        );
+      case "subscription":
+        return withMetadataKeys(
+          session,
+          "subscriptions",
+          STRIPE_SUBSCRIPTION_FIELDS
+        );
     }
   },
 };

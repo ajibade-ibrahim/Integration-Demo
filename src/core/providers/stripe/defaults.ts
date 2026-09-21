@@ -99,3 +99,44 @@ export const stripeCatalogDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "billing_scheme", targetObject: "offering", targetFieldPath: "customFields.billing_scheme", transform: "none" },
   { sourceFieldPath: "recurring.usage_type", targetObject: "offering", targetFieldPath: "customFields.usage_type", transform: "none" },
 ];
+
+/**
+ * Agreement defaults for Stripe.
+ *
+ * Covers both objects the function writes, because a rule set that mapped only
+ * the agreement half would sync subscriptions with no period dates — the one
+ * thing the detail table exists to hold.
+ *
+ * `agreement_name` is the load-bearing entry. `Agreement.name` is required and
+ * Stripe's subscriptions have no name, so without this rule every record is
+ * rejected on every sync. `provider-defaults.test.ts` asserts exactly that for
+ * each object's required fields, which is what keeps it here.
+ *
+ * Note the source paths are almost all synthesized by `flattenSubscription`
+ * rather than read from the response: the dates are epoch seconds in Stripe's
+ * payload, the status is Stripe's vocabulary, and the two ids are nested inside
+ * `items`. Mapping the raw paths instead would store numbers in date columns
+ * and Stripe's words in our enum.
+ */
+export const stripeAgreementDefaults: FieldMappingRule[] = [
+  // --- agreement ---
+  { sourceFieldPath: "agreement_name", targetObject: "agreement", targetFieldPath: "name", transform: "trim" },
+  { sourceFieldPath: "agreement_type", targetObject: "agreement", targetFieldPath: "agreementType", transform: "none" },
+  { sourceFieldPath: "status", targetObject: "agreement", targetFieldPath: "status", transform: "none" },
+  { sourceFieldPath: "effective_date", targetObject: "agreement", targetFieldPath: "effectiveDate", transform: "none" },
+  { sourceFieldPath: "ended_at", targetObject: "agreement", targetFieldPath: "endDate", transform: "none" },
+  // Lowercased to match the ISO 4217 form the rest of the app compares against.
+  { sourceFieldPath: "currency", targetObject: "agreement", targetFieldPath: "currency", transform: "lowercase" },
+  { sourceFieldPath: "raw_status", targetObject: "agreement", targetFieldPath: "customFields.stripe_status", transform: "none" },
+  { sourceFieldPath: "created_at", targetObject: "agreement", targetFieldPath: "customFields.created_at", transform: "none" },
+
+  // --- subscription ---
+  { sourceFieldPath: "current_period_start", targetObject: "subscription", targetFieldPath: "currentPeriodStart", transform: "none" },
+  { sourceFieldPath: "current_period_end", targetObject: "subscription", targetFieldPath: "currentPeriodEnd", transform: "none" },
+  { sourceFieldPath: "trial_ends_at", targetObject: "subscription", targetFieldPath: "trialEndsAt", transform: "none" },
+  { sourceFieldPath: "canceled_at", targetObject: "subscription", targetFieldPath: "canceledAt", transform: "none" },
+  { sourceFieldPath: "cancel_at_period_end", targetObject: "subscription", targetFieldPath: "cancelAtPeriodEnd", transform: "none" },
+  { sourceFieldPath: "collection_method", targetObject: "subscription", targetFieldPath: "collectionMethod", transform: "none" },
+  { sourceFieldPath: "quantity", targetObject: "subscription", targetFieldPath: "quantity", transform: "none" },
+  { sourceFieldPath: "item_count", targetObject: "subscription", targetFieldPath: "itemCount", transform: "none" },
+];

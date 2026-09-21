@@ -5,6 +5,7 @@ import {
   formatOfferingPrice,
   loadCatalog,
 } from "@/core/repositories/catalog-repository";
+import { Empty, Table, Td } from "../data-table";
 
 export const dynamic = "force-dynamic";
 
@@ -174,43 +175,4 @@ function Tab({
       {children}
     </Link>
   );
-}
-
-function Table({
-  headers,
-  children,
-}: {
-  headers: string[];
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-      <table className="w-full text-left text-sm">
-        <thead className="border-b border-slate-200 text-slate-500">
-          <tr>
-            {headers.map((header) => (
-              <th key={header} className="px-4 py-2 font-medium">
-                {header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>{children}</tbody>
-      </table>
-    </div>
-  );
-}
-
-function Td({
-  children,
-  className = "",
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return <td className={`px-4 py-2 align-top ${className}`}>{children}</td>;
-}
-
-function Empty() {
-  return <span className="text-slate-300">—</span>;
 }

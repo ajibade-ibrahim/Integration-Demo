@@ -184,14 +184,15 @@ describe("the catalog handler's record shape", () => {
   });
 
   it("gives an offering its product as parent, and a product none", () => {
-    expect(stripeCatalogHandler.externalParentIdOf(price(), "offering")).toBe(
-      "prod_1"
-    );
-    // A product is a root record. Returning an id here would try to link a
-    // product to itself.
+    expect(stripeCatalogHandler.externalRefsOf(price(), "offering")).toEqual({
+      product: "prod_1",
+    });
+    // A product is a root record, so it claims no references at all — an empty
+    // map rather than a map with an empty value. Returning an id here would try
+    // to link a product to itself.
     expect(
-      stripeCatalogHandler.externalParentIdOf({ id: "prod_1" }, "product")
-    ).toBeUndefined();
+      stripeCatalogHandler.externalRefsOf({ id: "prod_1" }, "product")
+    ).toEqual({});
   });
 });
 

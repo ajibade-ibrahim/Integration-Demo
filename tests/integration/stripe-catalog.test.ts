@@ -259,8 +259,8 @@ describe("Stripe catalog record shape", () => {
     expect(second).toBeDefined();
     if (first === undefined || second === undefined) return;
 
-    expect(stripeCatalogHandler.externalParentIdOf(first, "offering")).toBe("prod_1");
-    expect(stripeCatalogHandler.externalParentIdOf(second, "offering")).toBe("prod_2");
+    expect(stripeCatalogHandler.externalRefsOf(first, "offering")).toEqual({ product: "prod_1" });
+    expect(stripeCatalogHandler.externalRefsOf(second, "offering")).toEqual({ product: "prod_2" });
   });
 
   it("converts the epoch created stamp on products as well as prices", async () => {

@@ -140,11 +140,11 @@ describe("HubSpot pagination", () => {
 describe("HubSpot record shape", () => {
   it("reads the association as the contact's company id", () => {
     expect(
-      hubspotIdentityHandler.externalParentIdOf(contact("c1", "42"), "contact")
-    ).toBe("42");
+      hubspotIdentityHandler.externalRefsOf(contact("c1", "42"), "contact")
+    ).toEqual({ customer: "42" });
     expect(
-      hubspotIdentityHandler.externalParentIdOf(contact("c2"), "contact")
-    ).toBeUndefined();
+      hubspotIdentityHandler.externalRefsOf(contact("c2"), "contact")
+    ).toEqual({ customer: undefined });
     expect(hubspotIdentityHandler.externalIdOf(company("7", "Acme"))).toBe("7");
   });
 });

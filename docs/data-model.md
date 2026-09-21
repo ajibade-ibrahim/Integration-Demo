@@ -35,9 +35,18 @@ erDiagram
     Integration ||--o{ DiscoveredField : "caches source fields in"
     Integration ||--o{ Customer : "syncs"
     Integration ||--o{ Contact : "syncs"
+    Integration ||--o{ Product : "syncs"
+    Integration ||--o{ Offering : "syncs"
+    Integration ||--o{ Agreement : "syncs"
+    Integration ||--o{ Subscription : "syncs"
     Integration ||--o{ SyncRun : "audited by"
 
     Customer |o--o{ Contact : "employs, link nullable"
+    Product |o--o{ Offering : "priced by, link nullable"
+
+    Customer |o--o{ Agreement : "agreed to, link nullable"
+    Offering |o--o{ Agreement : "sold under, link nullable"
+    Agreement ||--o| Subscription : "detailed by, required and unique"
 
     CustomerAccount |o--o{ Customer : "resolves, link nullable"
     CustomerAccount ||--o{ CustomerAccountKey : "matched by"
@@ -86,7 +95,7 @@ erDiagram
     IntegrationFunction {
         string id PK
         string integrationId FK
-        string functionName "identity, support, billing, usage, communication"
+        string functionName "identity, catalog, agreement, support, billing, usage, communication"
         datetime addedAt
     }
 
@@ -149,6 +158,68 @@ erDiagram
         string phone
         string customerId FK "resolved internal parent, nullable"
         string externalCustomerId "provider company id, pre-resolution"
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    Product {
+        string id PK
+        string integrationId FK
+        string externalSourceId "provider-assigned, upsert key"
+        string name
+        string description
+        boolean active "nullable — null is 'not told', not 'inactive'"
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    Offering {
+        string id PK
+        string integrationId FK
+        string externalSourceId "provider-assigned, upsert key"
+        string name "required; synthesized when the provider has none"
+        string productId FK "resolved internal parent, nullable"
+        string externalProductId "provider product id, pre-resolution"
+        int amountMinor "minor units — never a float"
+        string currency "ISO 4217"
+        string interval "BillingInterval: day|week|month|year|one_time"
+        int intervalCount
+        boolean active
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    Agreement {
+        string id PK
+        string integrationId FK
+        string externalSourceId "provider-assigned, upsert key"
+        string name "required; synthesized — Stripe names no subscription"
+        string agreementType "AgreementType, NOT NULL — which detail table joins"
+        string status "AgreementStatus, nullable"
+        string customerId FK "resolved internal parent, nullable"
+        string externalCustomerId "provider customer id, pre-resolution"
+        string offeringId FK "resolved internal parent, nullable"
+        string externalOfferingId "provider price id, pre-resolution"
+        datetime effectiveDate
+        datetime endDate
+        string currency
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    Subscription {
+        string id PK
+        string integrationId FK
+        string externalSourceId "same provider id as its Agreement"
+        string agreementId FK "required and unique — Cascade, not SetNull"
+        datetime currentPeriodStart
+        datetime currentPeriodEnd
+        datetime trialEndsAt
+        datetime canceledAt "when cancellation was requested"
+        boolean cancelAtPeriodEnd
+        string collectionMethod
+        int quantity
+        int itemCount "priced lines; only the first is linked"
         string customFields "JSON object"
         datetime updatedAt
     }
@@ -353,8 +424,12 @@ a draft id.
 | Parent | Child | On parent delete |
 |---|---|---|
 | `User` | `Integration`, `IntegrationDraft`, `CustomerAccount`, `IdentityResolutionRun` | `Cascade` |
-| `Integration` | `IntegrationFunction`, `OAuthToken`, `FieldMapping`, `DiscoveredField`, `Customer`, `Contact`, `SyncRun` | `Cascade` |
+| `Integration` | `IntegrationFunction`, `OAuthToken`, `FieldMapping`, `DiscoveredField`, `Customer`, `Contact`, `Product`, `Offering`, `Agreement`, `Subscription`, `SyncRun` | `Cascade` |
 | `Customer` | `Contact` | `SetNull` — the contact survives, unlinked |
+| `Customer` | `Agreement` | `SetNull` — the agreement survives, unlinked |
+| `Product` | `Offering` | `SetNull` — the price survives, unlinked |
+| `Offering` | `Agreement` | `SetNull` — the agreement survives, unlinked |
+| `Agreement` | `Subscription` | `Cascade` — see below; the one exception |
 | `Customer` | `IdentityAssertion` (both sides) | `Cascade` — a verdict about a row that no longer exists is not a verdict |
 | `CustomerAccount` | `CustomerAccountKey` | `Cascade` |
 | `CustomerAccount` | `Customer` | `SetNull` — the customer survives, unresolved |
@@ -370,6 +445,23 @@ correct rather than merely tidy. An empty account still holding a key claim
 would permanently block the right account from ever forming, because the unique
 means that key can only belong to one.
 
+**`Agreement` → `Subscription` is the one association here that cascades**, and
+it is worth understanding why rather than reading it as an inconsistency. Every
+other nullable FK above points at a record that means something on its own: an
+offering without its product is still a readable price, a contact without its
+company is still a person. A `Subscription` row is a billing period, a trial
+date and a cancellation flag — about nothing, if the agreement they describe is
+gone. So the FK is `NOT NULL`, `@unique` and `Cascade`, which together say "this
+is an extension of exactly one row" rather than "this is a collection hanging
+off one".
+
+That also means `Subscription` is the only synced table with **no**
+`external…Id` column for late linking, and no relink pass. Both rows come off
+one provider record in one run, so "arrived before its parent" — the case the
+other children retain a provider id for — cannot happen. It is reachable by two
+cascade paths, from its integration and from its agreement; both end in the same
+place.
+
 ---
 
 ## Uniqueness — where identity actually lives
@@ -379,6 +471,8 @@ means that key can only belong to one.
 | `User` | `email` | The stable handle the demo looks the user up by. |
 | `Customer` | `(integrationId, externalSourceId)` | The upsert key. Re-running a sync updates rather than duplicates. |
 | `Contact` | `(integrationId, externalSourceId)` | Same. |
+| `Product`, `Offering`, `Agreement`, `Subscription` | `(integrationId, externalSourceId)` | Same — every synced table is keyed this way, which is what `findByExternalId` relies on. |
+| `Subscription` | `agreementId` | **Also unique on its own.** One detail row per agreement, not many: the unique is what makes it an extension rather than a collection, and what stops a re-sync inserting a second. |
 | `IntegrationFunction` | `(integrationId, functionName)` | A function is declared once per integration. |
 | `FieldMapping` | `(integrationId, functionName, targetObject, targetFieldPath)` | One rule per target field. Function and target object are part of the identity, because two functions on one integration can write to the same object. |
 | `DiscoveredField` | `(integrationId, functionName, targetObject, path)` | Cache key. |
@@ -421,7 +515,10 @@ the source of truth.
 |---|---|---|
 | `Integration.status` | `pending_authorization`, `active`, `expired`, `requires_reauthorization`, `error` | `isIntegrationStatus` |
 | `Customer.type`, `CustomerAccount.type` | `prospect`, `customer`, `partner`, `vendor`, or null | `isCustomerType` |
-| `FieldMapping.targetObject` | `customer`, `contact` | `isTargetObject` |
+| `FieldMapping.targetObject` | `customer`, `contact`, `product`, `offering`, `agreement`, `subscription` | `isTargetObject` |
+| `Offering.interval` | `day`, `week`, `month`, `year`, `one_time`, or null | `isBillingInterval` |
+| `Agreement.agreementType` | `subscription`, `order_form`, `contract`, `deal` — **never null** | `isAgreementType` |
+| `Agreement.status` | `draft`, `trialing`, `active`, `past_due`, `paused`, `canceled`, `expired`, or null | `isAgreementStatus` |
 | `SyncRun.status`, `IdentityResolutionRun.status` | `running`, `success`, `partial`, `failed`, `discarded` | `isSyncRunStatus` |
 | `FieldMapping.transform` | `none`, `trim`, `lowercase`, `domainFromUrl`, `dateOnly` | [`transforms.ts`](../src/core/field-mapper/transforms.ts) |
 | `CustomerAccountKey.kind` | `external_ref`, `email`, `domain` | `isIdentityKeyKind` |
@@ -436,6 +533,18 @@ and the order is the strength ranking** — `external_ref` beats `email` beats
 `IdentityResolutionRun` reuses `SyncRunStatus` verbatim rather than declaring
 its own: the five states mean the same things, down to `discarded` being what
 the concurrency guard produces.
+
+Three more are worth a note. `Offering.interval` holds **`one_time` as a value
+rather than a null**, because "this price does not recur" is a fact and "we were
+not told" is an absence, and the UI must not render them alike.
+`Agreement.agreementType` is the only enum-shaped column in the schema that is
+`NOT NULL`: it names which detail table to join, so a row that cannot say what
+it is cannot be read at all — a writer that cannot parse it defaults to
+`subscription` and records a warning rather than storing a null. And
+`Agreement.status` is deliberately **not** any provider's vocabulary: Stripe has
+eight subscription statuses, Salesforce Contract has its own, and folding them
+into these seven is the provider handler's job, so the collapse is visible in
+one place instead of assumed everywhere.
 
 `emailClass` is stored to **explain** a key, never to filter one. Role addresses
 like `billing@` and `accounts@` are still keys — the spec's own seeds are

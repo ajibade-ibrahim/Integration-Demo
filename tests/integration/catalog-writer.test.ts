@@ -79,12 +79,12 @@ function productRecord(
 
 function offeringRecord(
   externalSourceId: string,
-  externalParentId: string | undefined,
+  externalProductId: string | undefined,
   fields: Record<string, string | null> = {}
 ): CollectedRecord {
   return {
     externalSourceId,
-    externalParentId,
+    externalRefs: { product: externalProductId },
     mapped: {
       object: "offering",
       fields: {
@@ -332,8 +332,12 @@ describe("per-function dispatch", () => {
     // A registration mistake rather than a user error: the sync engine resolves
     // a handler before reaching the writer, so silence here would mean a
     // successful-looking run that wrote nothing.
+    //
+    // `usage` rather than `agreement`, which this used to name: agreement has
+    // writers now. Any declared-but-unbuilt function does, so this test needs
+    // one and will need re-pointing again when `usage` is built.
     await expect(
-      writeRecordsForFunction(INTEGRATION_ID, "agreement", new Map())
+      writeRecordsForFunction(INTEGRATION_ID, "usage", new Map())
     ).rejects.toThrow(/no record writers/i);
   });
 });

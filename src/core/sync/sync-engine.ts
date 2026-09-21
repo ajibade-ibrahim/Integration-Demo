@@ -14,6 +14,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { applyMappings, requestedSourcePaths } from "../field-mapper/field-mapper";
+import { functionsInWriteOrder } from "../object-schema";
 import { getValidToken, refreshToken } from "../oauth/oauth-service";
 import { requireSyncHandler } from "../registries/handler-registry";
 import { canRefresh } from "../registries/provider-registry";
@@ -229,7 +230,10 @@ async function runOnce(
   const recordCounts: Partial<Record<TargetObject, number>> = {};
   const issues: RecordIssue[] = [];
 
-  for (const functionName of integration.functionNames) {
+  // Ordered, not as stored: an agreement's parents are written by `identity`
+  // and `catalog`, and `IntegrationFunction` rows come back in whatever order
+  // Postgres likes. See `functionsInWriteOrder`.
+  for (const functionName of functionsInWriteOrder(integration.functionNames)) {
     const handler = requireSyncHandler(functionName, integration.providerName);
     const rules = await findMappings(integration.id, functionName);
 
@@ -273,7 +277,7 @@ async function runOnce(
       for (const raw of page.records) {
         bucket.push({
           externalSourceId: handler.externalIdOf(raw),
-          externalParentId: handler.externalParentIdOf(raw, page.object),
+          externalRefs: handler.externalRefsOf(raw, page.object),
           mapped: applyMappings(rules, page.object, raw),
         });
       }

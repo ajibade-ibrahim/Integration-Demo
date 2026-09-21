@@ -138,12 +138,17 @@ describe("function scoping of mapping rules", () => {
   });
 
   it("refuses everything for a function that writes no objects", () => {
-    // `agreement` is declared with real scopes and no objects. A rule set saved
+    // `usage` is declared with no objects and no provider. A rule set saved
     // against it could never be written by anything, so accepting one would be
     // storing data with no reader.
-    expect(objectsForFunction("agreement")).toEqual([]);
+    //
+    // This used to name `agreement`, which now writes two objects. Some
+    // declared-but-unbuilt function has to stand in here, and the test is worth
+    // re-pointing rather than deleting: the "writes no objects" branch of the
+    // validator is only reachable through one.
+    expect(objectsForFunction("usage")).toEqual([]);
 
-    const result = validateMappings("agreement", [customerRule]);
+    const result = validateMappings("usage", [customerRule]);
     expect(result.valid).toBe(false);
     expect(result.violations[0]?.message).toContain("no objects");
   });
@@ -160,7 +165,11 @@ describe("function scoping of mapping rules", () => {
       "customer",
       "contact",
     ]);
-    expect(schemasForFunction("agreement")).toEqual([]);
+    expect(schemasForFunction("agreement").map((s) => s.object)).toEqual([
+      "agreement",
+      "subscription",
+    ]);
+    expect(schemasForFunction("usage")).toEqual([]);
   });
 });
 

@@ -36,7 +36,7 @@ flowchart TB
 
     subgraph registries["Registries — the extension seam"]
         direction LR
-        FREG["functionRegistry<br/><i>identity, support,<br/>billing, usage, comms</i>"]
+        FREG["functionRegistry<br/><i>identity, catalog, agreement,<br/>support, billing, usage, comms</i>"]
         PREG["providerRegistry<br/><i>hubspot, salesforce,<br/>metrifox, stripe, mock</i>"]
         HREG["handler + discovery<br/>keyed <b>function:provider</b>"]
     end
@@ -131,7 +131,7 @@ Three consequences worth internalising before reading any file:
 | Consequence | Where you see it |
 |---|---|
 | An integration serves a **set** of functions, not one | `IntegrationFunction` is one-to-many; `resolveScopes` takes an array |
-| A function can be **declared without being built** | `billing`/`usage`/`communication` are registered with no handler, so "no provider supports this yet" is a real, reachable state |
+| A function can be **declared without being built** | `billing`/`usage`/`communication` are registered with no handler, so "no provider supports this yet" is a real, reachable state. `agreement` spent a while there too — declared on four providers, built on one — which is the state the declaration is *for* |
 | A provider is **added, not wired in** | New directory under `core/providers/` + one call in [`bootstrap.ts`](../src/core/bootstrap.ts). No orchestration code changes. |
 
 ---
@@ -287,14 +287,15 @@ flowchart TB
     G2 -->|no| LOCK["claim lock, create SyncRun(running)"]
 
     LOCK --> TOK["getValidToken()<br/><i>refreshes if within 5 min of expiry</i>"]
-    TOK --> LOOP["for each declared function:<br/>requireSyncHandler(fn, provider)<br/>+ findMappings(fn)"]
+    TOK --> ORDER["functionsInWriteOrder(declared)<br/><i>identity, then catalog, then agreement</i>"]
+    ORDER --> LOOP["for each function, in that order:<br/>requireSyncHandler(fn, provider)<br/>+ findMappings(fn)"]
 
     LOOP --> FETCH["<b>handler.fetchPages()</b><br/><i>async iterable - pages are mapped<br/>as they arrive, never buffered whole</i>"]
     FETCH --> MAP["applyMappings() per record"]
 
-    MAP --> WC["<b>1. writeCustomers()</b><br/>upsert on integrationId + externalSourceId<br/>builds the external-to-internal index"]
-    WC --> WK["<b>2. writeContacts()</b><br/>resolve association through the index,<br/>then fall back to a DB lookup"]
-    WK --> RELINK["<b>3. relinkOrphanedContacts()</b><br/><i>contacts stranded by earlier runs<br/>get linked once their company arrives</i>"]
+    MAP --> WC["<b>1. parent writer</b><br/>writeCustomers / writeProducts / writeAgreements<br/>upsert on integrationId + externalSourceId,<br/>building the external-to-internal index"]
+    WC --> WK["<b>2. child writer</b><br/>writeContacts / writeOfferings / writeSubscriptions<br/>resolve through the index,<br/>then fall back to a DB lookup"]
+    WK --> RELINK["<b>3. relinkOrphansForFunction()</b><br/><i>children stranded by earlier runs<br/>get linked once their parent arrives</i>"]
 
     RELINK --> STATUS{"any rejected records?"}
     STATUS -->|no| OK["<b>success</b>"]
@@ -308,14 +309,39 @@ flowchart TB
     style DISC fill:#f7eeee,stroke:#a55a5a
 ```
 
-**Why customers are written before contacts.** Providers return their *own*
-company id on a contact — HubSpot in an associations block, Salesforce as
-`AccountId` — never our internal UUID. Writing that into a foreign key produces
-a dangling reference. Customers go first to build the `external → internal`
-index; a contact that still cannot be resolved is **kept with a null link and a
-warning**, its `externalCustomerId` retained so a later run links it. That
-ordering is why [`record-writer.ts`](../src/core/sync/record-writer.ts) exists as
-its own module rather than living inline in the engine.
+**Why parents are written before children.** Providers return their *own* id for
+the parent — HubSpot in an associations block, Salesforce as `AccountId`, Stripe
+as a product id on a price — never our internal UUID. Writing that into a
+foreign key produces a dangling reference. Parents go first to build the
+`external → internal` index; a child that still cannot be resolved is **kept
+with a null link and a warning**, the provider's id retained so a later run
+links it. That ordering is why
+[`record-writer.ts`](../src/core/sync/record-writer.ts) exists as its own module
+rather than living inline in the engine.
+
+The order itself is declared in
+[`object-schema.ts`](../src/core/object-schema.ts) rather than hardcoded per
+function — `identity: [customer, contact]`, `catalog: [product, offering]`,
+`agreement: [agreement, subscription]`. Adding a function is a change there and
+in the writer's switch, not another branch in this loop.
+
+**Why the *functions* are ordered too, which is newer.** Identity and catalog
+share nothing, so their order never mattered. An agreement does: it references a
+customer written by `identity` and an offering written by `catalog`, so running
+it first leaves both links dangling until the next sync. `functionsInWriteOrder`
+sorts them, which is why "connect three functions, sync once" produces fully
+linked agreements rather than rows that heal on the second run.
+
+**An agreement is the one record with two parents.** `SyncHandler.externalRefsOf`
+returns a *map* keyed by object — `{ customer }` for a contact, `{ product }` for
+an offering, `{ customer, offering }` for an agreement — because neither half of
+an agreement is the primary one. Each resolves and warns independently, so a
+half-linked row says which half.
+
+**And one exception to "keep the child".** A `Subscription` whose agreement was
+rejected is rejected too, because its foreign key is required: the row would be
+a set of billing dates about nothing. Both come off the same provider record in
+the same run, so a missing parent can only mean the parent was itself refused.
 
 **Per-record failures never abort a run.** A `RecordIssue` carries
 `severity: "warning" | "rejected"` — a malformed email rejects the contact
@@ -489,8 +515,9 @@ instantly instead of sitting through them.
 | I want to change… | Open |
 |---|---|
 | Which scopes a function asks a provider for | [`bootstrap.ts`](../src/core/bootstrap.ts) — every registration is in this one file |
-| The fields a mapping may write to | [`identity-schema.ts`](../src/core/identity-schema.ts) — validator, UI and engine all read it |
-| How a provider paginates or shapes its query | `core/providers/<name>/identity-handler.ts` and `api.ts` |
+| The fields a mapping may write to | [`object-schema.ts`](../src/core/object-schema.ts) — the composed registry the validator, UI and engine all read. The per-object definitions are in `identity-schema.ts`, `catalog-schema.ts` and `agreement-schema.ts` beside it |
+| Which objects a function writes, and in what order | `FUNCTION_OBJECTS` in [`object-schema.ts`](../src/core/object-schema.ts) — and `functionsInWriteOrder` for the order of the functions themselves |
+| How a provider paginates or shapes its query | `core/providers/<name>/<function>-handler.ts` and `api.ts` |
 | What the mapping editor offers as sources | `core/providers/<name>/discovery.ts` |
 | The pre-filled mapping a new integration starts with | `core/providers/<name>/defaults.ts` |
 | Retry / rate-limit behaviour | [`providers/http.ts`](../src/core/providers/http.ts) (per request) or [`sync-engine.ts`](../src/core/sync/sync-engine.ts) (per run) |
@@ -652,6 +679,30 @@ pagination.
 appears in the picker immediately — with no handler it correctly reports that no
 provider supports it yet. Add a handler per provider to make it real, plus a
 target schema alongside `identity-schema.ts` if it writes new record types.
+
+Concretely, for a function that writes new objects, in the order the compiler
+will ask for them:
+
+1. Add the objects to `TARGET_OBJECTS` in
+   [`types/common.ts`](../src/core/types/common.ts), plus any enum union they
+   need. `OBJECT_SCHEMAS` is exhaustive over that union, so this step breaks the
+   build until step 2 is done — which is the intended pressure.
+2. Write `<function>-schema.ts` and register it in `object-schema.ts`, in
+   `FUNCTION_OBJECTS` (parents first) and in `FUNCTION_WRITE_ORDER`.
+3. Add the models to [`schema.prisma`](../prisma/schema.prisma) and
+   `npm run db:push`.
+4. Add the writers and a branch to `writeRecordsForFunction` /
+   `relinkOrphansForFunction` in
+   [`record-writer.ts`](../src/core/sync/record-writer.ts).
+5. Provider side: a handler, a branch in that provider's `discovery.ts`
+   (exhaustive on Stripe, so the compiler asks), field lists in `fixtures.ts`,
+   defaults in `defaults.ts`, and registrations in `bootstrap.ts` and
+   `defaults-registry.ts`.
+6. The seams with no compiler and no test behind them, which is where a new
+   object actually gets forgotten: the nav in `app/layout.tsx`, the
+   delete-confirmation total in `app/integrations/[id]/page.tsx`,
+   `OBJECT_LABELS` in `sync-panel.tsx`, and the unresolved-association report in
+   `scripts/db-maintenance.mts`.
 
 ---
 

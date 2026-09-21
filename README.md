@@ -15,7 +15,13 @@ before consent.
 
 Currently implemented: the **identity** function on **HubSpot**, **Salesforce**,
 **Metrifox**, **Stripe**, and a built-in **mock provider** so the whole thing
-runs with no credentials.
+runs with no credentials — plus **catalog** (products and offerings) and
+**agreement** (subscriptions) on **Stripe**.
+
+The three functions are independent by design, and that independence is
+observable: catalog needs no customer, identity needs no price, and an agreement
+references both but syncs without either — keeping the row, retaining the
+provider's ids, and linking itself once the other functions are connected.
 
 Providers come in two credential kinds. HubSpot, Salesforce and the mock are
 OAuth 2.0 authorization-code. Metrifox and Stripe authenticate with a static API
@@ -200,6 +206,283 @@ rejecting it at creation time the rest of the fixture run has already succeeded.
    has been warned instead of getting a silently empty column.
 7. Re-sync and confirm the counts do not move.
 
+#### Catalog and agreements — the products, prices and subscriptions
+
+The same fixture file seeds four products, nine prices and eleven subscriptions.
+They are generated rather than hand-written, because every subscription has to
+reference a price created earlier in the same run and a mistyped `${…:id}`
+placeholder only shows up halfway through seeding a sandbox:
+
+```bash
+npm run fixtures:gen      # rewrites the catalog/agreement block in the fixture file
+stripe fixtures scripts/stripe-sandbox-fixtures.json
+npm run fixtures:verify   # runs the real handlers against the sandbox
+```
+
+`fixtures:verify` is the one worth knowing about. Each fixture below exists to
+drive a *specific* branch, and nothing in the test suite can tell whether it
+still does — retune one price and the branch it covered goes quiet. So the
+verifier runs the real catalog and agreement handlers against the seeded
+sandbox and reports each branch by name. It reads no database and writes
+nothing, and it refuses to run against a key without `_test_` in it.
+
+| Fixture | What it is there to do |
+| --- | --- |
+| `price_platform_monthly` | The only nicknamed price — the agreement takes its name from a human's word for it rather than from the money |
+| `price_platform_annual` | No nickname, so the name is synthesized: `$490/year` |
+| `price_support_quarterly` | `interval_count: 3`, the pluralized branch: `$300/3 months` |
+| `price_platform_gbp` | Non-USD, so the symbol comes from `Intl` and not a hardcoded `# Integration Platform — function-scoped OAuth with a field mapping layer
+
+Connect external business systems (CRM, billing, usage, support, communication)
+by OAuth, and decide how their fields land in your own schema.
+
+The distinguishing idea: **an integration declares which _functions_ it serves,
+and that declaration determines the OAuth scopes requested.** You pick the
+functions first, then the provider, then authorize — so the consent screen asks
+for exactly the permissions those functions need and nothing more.
+
+An integration serves a **set** of functions, not one. A single HubSpot
+connection supplies identity from companies and contacts *and* support from
+tickets; the scopes requested are the union across the selected set, resolved
+before consent.
+
+Currently implemented: the **identity** function on **HubSpot**, **Salesforce**,
+**Metrifox**, **Stripe**, and a built-in **mock provider** so the whole thing
+runs with no credentials — plus **catalog** (products and offerings) and
+**agreement** (subscriptions) on **Stripe**.
+
+The three functions are independent by design, and that independence is
+observable: catalog needs no customer, identity needs no price, and an agreement
+references both but syncs without either — keeping the row, retaining the
+provider's ids, and linking itself once the other functions are connected.
+
+Providers come in two credential kinds. HubSpot, Salesforce and the mock are
+OAuth 2.0 authorization-code. Metrifox and Stripe authenticate with a static API
+key — no authorization server, no consent screen, no refresh — so
+`ProviderDefinition` carries a discriminated `auth` union rather than assuming
+every provider has a token endpoint. The two are not the same shape either:
+Metrifox uses an `x-api-key` header, Stripe uses `Authorization: Bearer` plus a
+pinned API version. Both are absorbed by one hook on the session options, so
+nothing downstream branches on a provider name.
+
+---
+
+## Run it
+
+Needs a Postgres server. Any one will do — a local install, Supabase, or Neon —
+and there is no SQLite fallback on purpose; see [Deploying](#the-database) for
+why one engine everywhere is worth the server.
+
+```bash
+npm install
+cp .env.example .env          # then set DATABASE_URL, DIRECT_URL,
+                              # TEST_DATABASE_URL, TOKEN_ENCRYPTION_KEY
+                              # and AUTH_SECRET
+psql -U postgres -c "CREATE DATABASE integration_demo"
+npx prisma db push
+npm run seed
+npm run dev
+```
+
+`DIRECT_URL` is required even against a local server with no pooler — Prisma
+reads it while parsing the schema, so an unset value fails `prisma generate`
+outright. Point it at the same place as `DATABASE_URL`.
+
+Open <http://localhost:3000> and sign in. `npm run seed` prints the demo
+account's password, or set `DEMO_USER_PASSWORD` before running it to choose one.
+
+With `ENABLE_MOCK_PROVIDER=true` you can then walk the entire flow — function →
+provider → OAuth → mapping → synced data — without any provider credentials.
+
+Generate both secrets with:
+
+```bash
+npx auth secret   # AUTH_SECRET, written straight into .env
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"   # TOKEN_ENCRYPTION_KEY
+```
+
+There is deliberately no fallback key. A dev default that silently becomes a
+production default is how token encryption turns into decoration, so the app
+refuses to start without a real one.
+
+---
+
+## The credential-free walkthrough
+
+1. **New integration** → select **Identity**. Note that selecting **Billing**
+   yields an empty provider list and blocks the flow — functions with no
+   provider support are honestly represented rather than hidden.
+2. Pick **Mock CRM**. On the consent screen, confirm the scopes shown are
+   exactly the identity scopes — no `billing.invoices.read`, no ticket scopes.
+   This is the core feature made visible.
+3. Authorize. The mapping editor is pre-filled with suggested defaults, so the
+   integration can sync immediately.
+4. **Sync now** on the detail page → 8 customers and 19 contacts appear under
+   **Synced data**.
+5. The run reports `partial` with two issues: one contact rejected for a
+   malformed email, one kept with an unresolved company link. Both are
+   deliberate fixtures.
+6. Re-run the sync and confirm the counts do not double — records upsert on
+   `(integrationId, externalSourceId)`.
+7. Change a mapping (try removing `domainFromUrl` from `customer.domain`) and
+   re-sync to watch the stored values change.
+
+### The Metrifox walkthrough — the API-key path
+
+Set both of these in `.env`, then restart:
+
+```
+ENABLE_METRIFOX_FAKE="true"
+METRIFOX_API_BASE="http://localhost:3000/api/fake/metrifox"
+METRIFOX_PAGE_SIZE="3"
+```
+
+The fake is served over real HTTP from a route in this app, so the real client
+runs unchanged — real headers, real pagination, real status codes, the real
+failure policy.
+
+1. **New integration** → **Identity** → **Metrifox**. It is offered even with no
+   credentials in `.env`, tagged `API key`, because its credential arrives per
+   integration rather than per deployment.
+2. Step 3 reads *"Data this integration will read"*, not *"Permissions that will
+   be requested"* — an API key has no consent step to narrow, so claiming
+   otherwise would overstate the guarantee.
+3. Create it. You land on a paste box rather than a redirect. Try
+   `sk_test_abcd1234_denied` first (the fake returns 401 — the key is never
+   stored), then `sk_test_abcd12345678`. Note what the failure does *not* do:
+   check the integrations list after the rejection and it is unchanged. Nothing
+   is created until a key is accepted, so a bad paste leaves nothing to delete —
+   and the paste box keeps your provider and function choices for the retry.
+4. **Sync now** → 7 customers and 10 contacts. The run reports `partial` with
+   three deliberate rejections: a customer with a blank name, a contact with a
+   malformed email, and a contact with no name at all.
+5. Look at the Contacts tab. Metrifox has no contacts endpoint — these are
+   flattened out of each customer's nested `contact_people[]` and given a
+   synthesized id. Two of Acme's people share the mailbox `ap@acme.example`, and
+   both survive: the second gets a `#1` suffix rather than overwriting the first.
+6. Re-sync and confirm the counts do not move. That is the property that matters
+   most here: `Contact` is unique on `(integrationId, externalSourceId)`, so an
+   unstable synthesized id would not error — it would quietly duplicate every
+   contact and orphan the old rows.
+
+### The Stripe walkthrough — a real API, no account required
+
+Metrifox is demonstrated against a fake served from inside this app. Stripe is
+demonstrated against **Stripe itself**, because its CLI will provision a
+throwaway sandbox and seed it:
+
+```bash
+stripe sandbox create --from-git --non-interactive   # prints a secret_key; expires in 7 days
+stripe fixtures scripts/stripe-sandbox-fixtures.json
+stripe customers list --limit 3                      # confirm the data landed
+```
+
+Then set `STRIPE_PAGE_SIZE="3"` in `.env` and restart, so the ten seeded
+customers span four pages with a ragged last one.
+
+The fixtures are chosen the way the Metrifox ones are — **the awkward records are
+the point**, so the per-record issue reporting has something honest to report:
+
+| Fixture | What it is there to do |
+| --- | --- |
+| `cus_no_name_no_email` | Rejected for a missing name, with no contact synthesized |
+| `cus_email_only` | No name, so the **customer** is rejected too — but its contact survives, named from the email's local part, and is kept with an unresolved customer link |
+| `cus_shared_email` | Shares `billing@acme.example` with `cus_acme`. Two contacts, no collision and no `#1` suffix — the contrast with Metrifox, whose ids key on the mailbox |
+| `cus_no_email` | A contact with a name and no address |
+| `cus_consumer_email` | Why `email` is not a default source for `customer.domain` |
+| `cus_long_name` | Exactly 256 characters — Stripe's own maximum for `name`, and one over our 255-char column, so exactly one character is truncated |
+| `cus_unicode` | Non-ASCII name and address |
+
+The deliberately-bad record is seeded **last**, so if Stripe ever starts
+rejecting it at creation time the rest of the fixture run has already succeeded.
+
+> Two limits of the source API are worth knowing, because both bound what a
+> fixture can demonstrate at all:
+>
+> - **Stripe normalizes `name: "   "` to `null`** on create, so there is no
+>   whitespace-only-name fixture — it would be an exact duplicate of
+>   `cus_no_name_no_email`. The handler's trim guard still exists, because a
+>   provider *can* send whitespace, and is covered in
+>   `tests/unit/stripe-ids.test.ts` instead.
+> - **Stripe caps `name` at 256 characters**, one more than our 255-char column.
+>   So truncation against this provider is real but can only ever lose a single
+>   character; a Stripe customer name cannot arrive long enough to lose more.
+
+1. **New integration** → **Identity** → **Stripe**. Offered with no credentials
+   in `.env` and tagged `API key`, for the same reason Metrifox is.
+2. Step 3 lists exactly one thing this integration reads: `customers:read`. Not
+   `contacts:read` — the contrast with Metrifox is deliberate. Metrifox really
+   does read contact data, nested inside each customer. Stripe has no contact
+   resource at all, so claiming to read one would be claiming to read something
+   that does not exist.
+3. Create it. Try a **publishable** key (`pk_test_…`) first: it is refused
+   locally, with no network call, because a publishable key cannot authenticate
+   any request. Then try a bogus `sk_test_…`: Stripe answers 401 and the key is
+   not stored. Then paste the sandbox key.
+4. **Sync now** → a `partial` run: 8 of the 10 customers written, 2 rejected for
+   a missing name, and 9 contacts — one of which keeps an unresolved customer
+   link, because the customer it belongs to was one of the rejected pair. That
+   last outcome is worth sitting with: our `customer.name` is required and Stripe
+   supplied none, so a checkout signup that only ever gave an email cannot land
+   as a customer. Metrifox behaves the same way for the same reason.
+5. Look at the Contacts tab. Stripe has no contacts — each of these is
+   *constructed* from its customer's own `name`, `email` and `phone`, with the id
+   `cus_…:contact`. Unlike Metrifox's email-derived contact ids, that slot is
+   constant: there is exactly one contact per Stripe customer, so nothing needs
+   disambiguating, and an id derived from the email would re-key the row the
+   first time someone corrects an address.
+6. Check the **Create date** column is populated. That is not free: Stripe sends
+   `created` as Unix epoch seconds, which the record writer's date parse reads as
+   an invalid date and stores as null. The handler synthesizes an ISO `created_at`
+   alongside it, and the mapping editor offers the raw `created` too — labelled,
+   rather than hidden, so a user reaching for the field Stripe's own docs name
+   has been warned instead of getting a silently empty column.
+7. Re-sync and confirm the counts do not move.
+
+ |
+| `price_platform_jpy` | A **zero-decimal** currency. 5000 minor units is ¥5,000, not ¥50.00 — the one case `formatMoney`'s exponent lookup exists for, and the one that reads plausibly while being 100× wrong |
+| `price_seats_tiered` | Tiered, so `unit_amount` is null and there is no single amount to format. Drives both names to `Custom pricing/month` |
+| `price_platform_legacy` | Archived immediately after creation, so the catalog has an inactive offering to render |
+| `sub_acme_platform` | The only subscription that bills a card, so `collection_method` is not constant |
+| `sub_northwind_multi` | **Three priced lines on one subscription.** Only the first is linked, so this must produce a warning rather than a tidy row reading `$49/month` for a customer paying $86.50 |
+| `sub_dutchman_trial` | `trialing`, with a trial end date — a state with a deadline attached |
+| `sub_halcyon_cancelling` | `active` **and** cancelling at period end: one column value, two opposite commercial facts |
+| `sub_tessellate_canceled` | Created then canceled. **Absent from `/v1/subscriptions` unless the handler asks for `status=all`** — the churn check |
+| `sub_unicode_incomplete` | Stripe's `incomplete`, which we store as `draft`, with `raw_status` keeping Stripe's own word |
+| `sub_email_only_orphan` | Belongs to `cus_email_only`, which our writer rejects for having no name — so the agreement lands with `externalCustomerId` set and `customerId` null, and the unresolved-customer count on `/agreements` is reachable from a fixture |
+
+Then, continuing the walkthrough with **Catalog** and **Agreement** added to the
+integration:
+
+1. `/integrations/[id]/mapping?function=agreement` shows **two** sections,
+   Agreement and Subscription, and no Customer, Contact, Product or Offering.
+   Two tables, because the mapping layer addresses one table per target object.
+2. **Sync now** → the run reports `{ agreement: 11, subscription: 11 }` and a
+   `partial` status. The warnings are the point: one subscription carries three
+   priced items, and one names a customer that was rejected.
+3. `/agreements` — status and effective date from the parent row, period and
+   trial dates from the joined child, and **three** separate banners: unresolved
+   customers, unresolved offerings, and multi-item subscriptions.
+4. Confirm `$300/3 months` shows as `canceled` rather than missing. That row is
+   the whole reason the handler sends `status=all`; without it a subscription
+   canceled at Stripe stays `active` here forever, because this system has no
+   absence detection to notice a row that stopped arriving.
+5. Confirm the **Renews** column is populated. Not free either, and for a
+   subtler reason than the epoch dates one function over: Stripe **moved
+   `current_period_end` off the subscription and onto each subscription item**.
+   Reading only the old location leaves the column null on every row, the sort
+   order meaningless and the index unused, with nothing raising an error —
+   a subscription may legitimately have no period. `periodBoundary` reads
+   whichever location the account's API version uses.
+6. Re-sync and confirm the counts do not move.
+
+> **Two statuses no fixture can reach.** `past_due` and `paused` both need time
+> to pass — a renewal that fails dunning, or a trial that ends with no payment
+> method — so they need a [test clock](https://docs.stripe.com/billing/testing/test-clocks)
+> rather than a create call. The status *map* covers them in
+> `tests/unit/stripe-agreement.test.ts`; what the sandbox does not demonstrate
+> is Stripe actually producing them.
+
 ### The identity walkthrough — one company out of three rows
 
 The other two walkthroughs each end at "the records landed". This one is about
@@ -323,11 +606,18 @@ Target paths are **object-qualified** — `customer.name`, `contact.email`,
 `customer.customFields.<key>`. A flat namespace would let a contact field be
 mapped onto a customer record and validate cleanly.
 
-[`src/core/identity-schema.ts`](src/core/identity-schema.ts) is the single
-source of truth, read by the validator, the mapping UI's target dropdown, and
-the sync engine's record validation — so they cannot drift.
+[`src/core/object-schema.ts`](src/core/object-schema.ts) is the single source of
+truth, read by the validator, the mapping UI's target dropdown, and the sync
+engine's record validation — so they cannot drift. It composes the per-object
+definitions in `identity-schema.ts`, `catalog-schema.ts` and
+`agreement-schema.ts`.
 `contact.associatedCustomerId` is marked read-only and never offered as a
 target: it is derived by the sync engine, not user-mapped.
+
+It also records **which function owns which object**, which is the other half of
+the guarantee. Without that, a `catalog` rule set could contain customer rules,
+validate cleanly, save, and then write nothing on every sync — a mapping that
+silently does nothing being considerably worse than one that is refused.
 
 Source options come from the provider's own schema API (HubSpot's
 `/crm/v3/properties/*`, Salesforce's `describe`), cached in `DiscoveredField`.
@@ -396,7 +686,11 @@ The primary demo path remains the manual **Sync now** button.
 
 ```
 src/core/                framework-free domain — no Next.js imports
-  identity-schema.ts     target field definitions; single source of truth
+  object-schema.ts       the composed target registry; single source of truth
+  identity-schema.ts     customer + contact field definitions
+  catalog-schema.ts      product + offering field definitions
+  agreement-schema.ts    agreement + subscription field definitions
+  price-format.ts        money and recurrence, formatted once for both callers
   registries/            function, provider, and handler registries
   field-mapper/          validate, apply, serialize
   identity/              cross-integration resolution — evidence, survivorship,

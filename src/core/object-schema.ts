@@ -22,6 +22,7 @@
  * silently does nothing being considerably worse than one that is refused.
  */
 
+import { AGREEMENT_OBJECT_SCHEMA } from "./agreement-schema";
 import { CATALOG_SCHEMA } from "./catalog-schema";
 import {
   CROSS_REF_OBJECTS,
@@ -100,6 +101,7 @@ export interface ObjectSchema {
 export const OBJECT_SCHEMAS: Readonly<Record<TargetObject, ObjectSchema>> = {
   ...IDENTITY_SCHEMA,
   ...CATALOG_SCHEMA,
+  ...AGREEMENT_OBJECT_SCHEMA,
 };
 
 /**
@@ -109,7 +111,10 @@ export const OBJECT_SCHEMAS: Readonly<Record<TargetObject, ObjectSchema>> = {
  * index built while products are written, exactly as a contact resolves its
  * customer — so "products before offerings" and "customers before contacts" are
  * the same fact, and the sync engine reads it from here rather than hardcoding
- * a sequence per function.
+ * a sequence per function. `agreement` before `subscription` is the same fact
+ * again, and there it is load-bearing rather than merely efficient: a
+ * subscription's agreement id is a required column, so the parent must be in
+ * the index before the child is written at all.
  *
  * Function names are literals rather than imports from `bootstrap.ts`: that
  * module imports every provider, and every provider reaches this schema, so the
@@ -120,6 +125,7 @@ export const OBJECT_SCHEMAS: Readonly<Record<TargetObject, ObjectSchema>> = {
 const FUNCTION_OBJECTS: Readonly<Record<string, readonly TargetObject[]>> = {
   identity: ["customer", "contact"],
   catalog: ["product", "offering"],
+  agreement: ["agreement", "subscription"],
 };
 
 /**
@@ -141,6 +147,44 @@ export function schemasForFunction(
   functionName: string
 ): readonly ObjectSchema[] {
   return objectsForFunction(functionName).map((o) => OBJECT_SCHEMAS[o]);
+}
+
+/**
+ * Functions in the order a sync must run them, filtered to the ones asked for.
+ *
+ * Until `agreement` existed, function order was arbitrary and correctly so:
+ * identity and catalog share no record, no association and no ordering
+ * constraint, and `IntegrationFunction` rows come back from Postgres in
+ * whatever order it likes. An agreement changed that — it references a customer
+ * written by `identity` and an offering written by `catalog`, so running it
+ * first means both links dangle until the *next* sync.
+ *
+ * That still converges, because the links are nullable and the relink pass
+ * repairs them. But "connect three functions, sync once, see an agreement with
+ * no customer" is a bad first impression of a system that had the customer in
+ * hand the whole time.
+ *
+ * The order is the declaration order below, and it is the same fact as the
+ * object order inside each entry: parents before children, one level up.
+ * Unknown functions sort last and keep their relative order — a function with
+ * no objects writes nothing, so it cannot be anyone's parent.
+ */
+const FUNCTION_WRITE_ORDER: readonly string[] = [
+  "identity",
+  "catalog",
+  "agreement",
+];
+
+export function functionsInWriteOrder(
+  functionNames: readonly string[]
+): readonly string[] {
+  const rank = (name: string): number => {
+    const index = FUNCTION_WRITE_ORDER.indexOf(name);
+    return index === -1 ? FUNCTION_WRITE_ORDER.length : index;
+  };
+  // Sorted on a copy: the caller's array belongs to the caller, and this is
+  // called with a field read off a record.
+  return [...functionNames].sort((a, b) => rank(a) - rank(b));
 }
 
 /** Whether a function may write to a given object. */
@@ -212,7 +256,10 @@ export function mappableFields(
   return OBJECT_SCHEMAS[object].fields.filter((f) => f.readOnly !== true);
 }
 
-/** Every object schema, for UI iteration that is not function-scoped. */
-export function allObjectSchemas(): readonly ObjectSchema[] {
-  return TARGET_OBJECTS.map((o) => OBJECT_SCHEMAS[o]);
-}
+// `allObjectSchemas()` used to live here, iterating every object regardless of
+// function. It was removed rather than kept for symmetry: it had no callers
+// left, and the one thing it was good for — building the mapping editor's
+// sections — is exactly the thing that must be function-scoped. Leaving it
+// exported is leaving the wrong function next to the right one.
+//
+// Use `schemasForFunction`.

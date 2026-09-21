@@ -66,6 +66,7 @@ import {
 import { metrifoxIdentityHandler } from "./providers/metrifox/identity-handler";
 import { metrifoxFieldDiscovery } from "./providers/metrifox/discovery";
 import { stripeIdentityHandler } from "./providers/stripe/identity-handler";
+import { stripeAgreementHandler } from "./providers/stripe/agreement-handler";
 import { stripeCatalogHandler } from "./providers/stripe/catalog-handler";
 import { stripeFieldDiscovery } from "./providers/stripe/discovery";
 import { mockIdentityHandler } from "./providers/mock/identity-handler";
@@ -77,6 +78,7 @@ import { salesforceFieldDiscovery } from "./providers/salesforce/discovery";
 
 export const IDENTITY_FUNCTION = "identity";
 export const CATALOG_FUNCTION = "catalog";
+export const AGREEMENT_FUNCTION = "agreement";
 
 let bootstrapped = false;
 
@@ -167,13 +169,25 @@ export function bootstrap(): void {
   // claim first becomes checkable: Salesforce supplies Contract, Stripe
   // supplies subscriptions, Metrifox supplies both, HubSpot supplies deals.
   //
-  // `dataModels` is one thin entry on purpose. The canonical AGREEMENT node is
-  // six fields — id, account, offering, type, status, effective date — and the
-  // twelve-object zoom-in (items, terms, amendments, acceptance, renewals,
-  // concessions) is additive on top of it. What is expensive to retrofit is the
-  // `agreement_type` discriminator and the foreign-key shape, so those are what
-  // "build Agreement generically from day one" actually means here. Modelling
-  // amendments before anything reads them would be the opposite mistake.
+  // `dataModels` names two objects, and the pair is the whole design. The
+  // canonical AGREEMENT node is six fields — id, account, offering, type,
+  // status, effective date — and `agreement` is exactly that. `subscription`
+  // holds what is true of subscriptions alone: the period, the trial, the
+  // cancellation intent.
+  //
+  // Splitting them rather than widening one table is what keeps the promise
+  // this comment used to make in the abstract. On a shared table no
+  // type-specific column can be NOT NULL, because every column must tolerate
+  // the types that lack it — `Subscription` can require a period, an
+  // `Agreement` with a period column never could. The fourth type is then a
+  // new table rather than an ALTER against every row already stored.
+  //
+  // What was expensive to retrofit is unchanged and is now built: the
+  // `agreement_type` discriminator and the foreign-key shape. The twelve-object
+  // zoom-in (items, terms, amendments, acceptance, renewals, concessions) is
+  // still additive and still unbuilt — modelling amendments before anything
+  // reads them would be the opposite mistake. `Subscription.itemCount` is the
+  // marker for where `agreement_item` goes when something needs it.
   const agreementScopes: Array<[string, readonly string[]]> = [
     [HUBSPOT_PROVIDER_NAME, HUBSPOT_AGREEMENT_SCOPES],
     [SALESFORCE_PROVIDER_NAME, SALESFORCE_AGREEMENT_SCOPES],
@@ -185,11 +199,11 @@ export function bootstrap(): void {
   }
 
   registerFunction({
-    name: "agreement",
+    name: AGREEMENT_FUNCTION,
     label: "Agreement",
     description:
       "Subscriptions, order forms and contracts — what the customer agreed to, on what terms, and when it changes.",
-    dataModels: ["agreement"],
+    dataModels: ["agreement", "subscription"],
     scopesByProvider: scopeMap(agreementScopes),
   });
 
@@ -290,11 +304,25 @@ export function bootstrap(): void {
   registerSyncHandler(IDENTITY_FUNCTION, STRIPE_PROVIDER_NAME, stripeIdentityHandler);
   registerFieldDiscovery(IDENTITY_FUNCTION, STRIPE_PROVIDER_NAME, stripeFieldDiscovery);
 
-  // The same discoverer serves both functions: it switches on the target object
-  // rather than the function, so registering it twice is not a duplicate but
-  // the two entries the (function, provider) key requires.
+  // The same discoverer serves all three functions: it switches on the target
+  // object rather than the function, so registering it repeatedly is not a
+  // duplicate but the entries the (function, provider) key requires.
   registerSyncHandler(CATALOG_FUNCTION, STRIPE_PROVIDER_NAME, stripeCatalogHandler);
   registerFieldDiscovery(CATALOG_FUNCTION, STRIPE_PROVIDER_NAME, stripeFieldDiscovery);
+
+  // Stripe is the first provider to make `agreement` real. Its scopes were
+  // declared long before this handler existed, so nothing about the picker,
+  // the consent screen or the scope union changes here.
+  registerSyncHandler(
+    AGREEMENT_FUNCTION,
+    STRIPE_PROVIDER_NAME,
+    stripeAgreementHandler
+  );
+  registerFieldDiscovery(
+    AGREEMENT_FUNCTION,
+    STRIPE_PROVIDER_NAME,
+    stripeFieldDiscovery
+  );
 
   if (isMockEnabled()) {
     registerSyncHandler(IDENTITY_FUNCTION, MOCK_PROVIDER_NAME, mockIdentityHandler);

@@ -58,6 +58,8 @@ export default async function IntegrationDetailPage({
       prisma.contact.count(where),
       prisma.product.count(where),
       prisma.offering.count(where),
+      prisma.agreement.count(where),
+      prisma.subscription.count(where),
     ])
   ).reduce((sum, n) => sum + n, 0);
 

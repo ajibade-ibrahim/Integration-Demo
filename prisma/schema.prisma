@@ -109,6 +109,8 @@ model Integration {
   contacts         Contact[]
   products         Product[]
   offerings        Offering[]
+  agreements       Agreement[]
+  subscriptions    Subscription[]
   syncRuns         SyncRun[]
 
   @@index([userId])
@@ -275,8 +277,9 @@ model Customer {
   customerAccountId String?
   customerAccount   CustomerAccount? @relation(fields: [customerAccountId], references: [id], onDelete: SetNull)
 
-  updatedAt DateTime  @updatedAt
-  contacts  Contact[]
+  updatedAt  DateTime    @updatedAt
+  contacts   Contact[]
+  agreements Agreement[]
 
   /// Both sides of every human assertion naming this row. Two relations
   /// because the pair is canonically ordered by id, so a given customer may be
@@ -411,11 +414,138 @@ model Offering {
 
   customFields String @default("{}")
 
-  updatedAt DateTime @updatedAt
+  updatedAt  DateTime    @updatedAt
+  agreements Agreement[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
   @@index([productId])
+}
+
+// ---------------------------------------------------------------------------
+// Agreement
+//
+// What the customer agreed to. The shared node holds what every kind of
+// agreement has — who, what, which type, where it stands, from when — and each
+// type's own detail hangs off it in its own table.
+//
+// The alternative was one wide table with a column per type's needs. It was
+// rejected for a reason that shows up in the constraints rather than in taste:
+// on a shared table no type-specific column can ever be NOT NULL, because every
+// column has to tolerate the types that do not have it. `Subscription` can
+// require a period; an `Agreement` with a `currentPeriodEnd` column never
+// could, because a signed contract has no period. Adding the fourth type is
+// then a new table rather than an ALTER against every row already stored.
+//
+// `agreementType` stays on the parent regardless: it is what tells a reader
+// which detail table to join without probing all of them.
+// ---------------------------------------------------------------------------
+
+/// The shared commercial node. One row per subscription, order form or contract.
+model Agreement {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider-assigned id. The upsert key, paired with integrationId.
+  externalSourceId String
+
+  /// Required, and frequently synthesized — Stripe gives a subscription no name.
+  name String
+
+  /// AgreementType: subscription | order_form | contract | deal.
+  /// Not nullable: a row that cannot say what kind of agreement it is cannot be
+  /// joined to its detail table, which is the whole point of the column.
+  agreementType String
+
+  /// AgreementStatus: draft | trialing | active | past_due | paused | canceled | expired.
+  /// Nullable, because a provider that reports no status has told us nothing,
+  /// and guessing `active` would be inventing the one fact worth syncing.
+  status String?
+
+  /// Resolved internal customer. Null when the provider named one we could not
+  /// resolve — most often because `identity` is not on this integration.
+  customerId         String?
+  customer           Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  /// The provider's own customer id, kept so a later sync can link it.
+  externalCustomerId String?
+
+  /// Resolved internal offering, and the provider's own price id beside it.
+  /// Same shape and same reason: `catalog` may not be on this integration yet.
+  offeringId         String?
+  offering           Offering? @relation(fields: [offeringId], references: [id], onDelete: SetNull)
+  externalOfferingId String?
+
+  /// When the agreement began, as against when we first saw it.
+  effectiveDate DateTime?
+  endDate       DateTime?
+
+  /// ISO 4217, as the provider cased it.
+  currency String?
+
+  /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
+  customFields String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  subscription Subscription?
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  @@index([customerId])
+  @@index([offeringId])
+  /// "Every subscription on this integration" without scanning the others.
+  @@index([integrationId, agreementType])
+}
+
+/// Recurring-billing detail for an Agreement of type "subscription".
+model Subscription {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider-assigned id — the same id its Agreement carries, in its own table.
+  externalSourceId String
+
+  /// The agreement this details.
+  ///
+  /// Required, @unique and Cascade, where every other association FK in this
+  /// schema is nullable and SetNull. All three say the same thing: this extends
+  /// exactly one agreement and is not salvageable without it. An offering
+  /// without its product is still a readable price; a period without its
+  /// agreement is a pair of dates about nothing.
+  ///
+  /// Consequently there is no `externalAgreementId` and no relink pass. Both
+  /// rows come off one source record in one run, so "arrived before its parent"
+  /// — the case the other two children keep an external id for — cannot happen.
+  agreementId String    @unique
+  agreement   Agreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  trialEndsAt        DateTime?
+
+  /// When cancellation was requested, which can precede the period end by a
+  /// month. Distinct from `Agreement.endDate`, which is when it actually stops.
+  canceledAt        DateTime?
+  cancelAtPeriodEnd Boolean?
+
+  collectionMethod String?
+  quantity         Int?
+
+  /// How many priced lines the subscription carries. Only the first is linked to
+  /// an offering, so a count above one is the only thing on the row saying the
+  /// rest exist.
+  itemCount Int?
+
+  customFields String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  /// Renewal and churn questions are date-ranged over one integration.
+  @@index([integrationId, currentPeriodEnd])
 }
 
 // ---------------------------------------------------------------------------

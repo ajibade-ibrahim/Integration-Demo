@@ -434,13 +434,24 @@
       salesforce: ["api", "refresh_token"],
       mock: ["crm.objects.tickets.read", "crm.schemas.read"]
     },
+    catalog: {
+      stripe: ["products:read", "prices:read"]
+    },
+    agreement: {
+      hubspot: ["crm.objects.deals.read", "crm.schemas.deals.read"],
+      salesforce: ["api", "refresh_token"],
+      stripe: ["subscriptions:read"],
+      metrifox: ["orders:read", "subscriptions:read"],
+      mock: ["crm.objects.deals.read", "crm.schemas.read"]
+    },
     billing: { mock: ["billing.invoices.read"] },
     usage: {},
     communication: {}
   };
 
   var FN_LABEL = {
-    identity: "Identity", support: "Support", billing: "Billing",
+    identity: "Identity", catalog: "Catalog", agreement: "Agreement",
+    support: "Support", billing: "Billing",
     usage: "Usage", communication: "Communication"
   };
 

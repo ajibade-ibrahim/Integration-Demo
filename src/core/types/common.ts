@@ -69,6 +69,8 @@ export const TARGET_OBJECTS = [
   "contact",
   "product",
   "offering",
+  "agreement",
+  "subscription",
 ] as const;
 
 export type TargetObject = (typeof TARGET_OBJECTS)[number];
@@ -104,6 +106,70 @@ export type BillingInterval = (typeof BILLING_INTERVALS)[number];
 export function isBillingInterval(v: unknown): v is BillingInterval {
   return (
     typeof v === "string" && (BILLING_INTERVALS as readonly string[]).includes(v)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Agreement type and status
+// ---------------------------------------------------------------------------
+
+/**
+ * Which kind of agreement a row is, and therefore which detail table holds the
+ * rest of it.
+ *
+ * The discriminator exists from the first commit that writes an agreement, and
+ * that timing is the whole point: it is the column named in `bootstrap.ts` as
+ * the expensive retrofit. A subscription table built without it is one that
+ * order forms and contracts have to be grafted onto later, against rows that
+ * already exist and cannot say what they are.
+ *
+ * Only `subscription` has a provider behind it today. The other three are
+ * declared because the cost of declaring them is a line each, and the cost of
+ * *not* having declared them is a data migration.
+ */
+export const AGREEMENT_TYPES = [
+  "subscription",
+  "order_form",
+  "contract",
+  "deal",
+] as const;
+
+export type AgreementType = (typeof AGREEMENT_TYPES)[number];
+
+export function isAgreementType(v: unknown): v is AgreementType {
+  return (
+    typeof v === "string" && (AGREEMENT_TYPES as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * Where an agreement stands, in our vocabulary rather than any provider's.
+ *
+ * Deliberately not Stripe's eight subscription statuses. Stripe distinguishes
+ * `incomplete` from `incomplete_expired` and `unpaid` from `past_due`;
+ * Salesforce Contract has `Draft`/`Activated`/`Expired`; HubSpot deals have
+ * user-defined pipeline stages. Mapping each onto this set is the provider's
+ * job, and it is the only place a provider's vocabulary should appear.
+ *
+ * `expired` and `canceled` are both terminal but are not the same fact: a
+ * contract that ran its term to the end is not a customer who left.
+ */
+export const AGREEMENT_STATUSES = [
+  "draft",
+  "trialing",
+  "active",
+  "past_due",
+  "paused",
+  "canceled",
+  "expired",
+] as const;
+
+export type AgreementStatus = (typeof AGREEMENT_STATUSES)[number];
+
+export function isAgreementStatus(v: unknown): v is AgreementStatus {
+  return (
+    typeof v === "string" &&
+    (AGREEMENT_STATUSES as readonly string[]).includes(v)
   );
 }
 

@@ -238,25 +238,44 @@ export interface SourcePage {
 }
 
 /**
- * Provider-specific fetching. Both objects stream page by page — buffering an
+ * A record's parent references, keyed by the object each points at.
+ *
+ * `Partial`, because which keys are present is a property of the object: a
+ * customer has none, a contact has one, an agreement has two. An absent key and
+ * an unresolvable id are different facts, and only the second produces an issue
+ * on the run.
+ */
+export type ExternalRefs = Readonly<Partial<Record<TargetObject, string>>>;
+
+/**
+ * Provider-specific fetching. Every object streams page by page — buffering an
  * entire org before mapping buys nothing and risks exhausting memory on large
  * tenants.
  */
 export interface SyncHandler {
   fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage>;
   /**
-   * Provider id of the record this one hangs off — the company for a contact,
-   * the product for an offering — read from the raw record.
+   * Provider ids of the records this one hangs off, keyed by what each is —
+   * `{ customer }` for a contact, `{ product }` for an offering,
+   * `{ customer, offering }` for an agreement.
+   *
+   * A map rather than a single id because an agreement genuinely has two
+   * parents: it is an arrangement *between* a customer and something sold, and
+   * neither half is the primary one. Every other record returns one key, or an
+   * empty object when it is a root.
+   *
+   * Keyed by `TargetObject` rather than by free strings because a reference is
+   * always named after the object it points at, so the compiler can reject a
+   * misspelled relationship instead of the writer silently resolving nothing.
+   *
+   * An omitted key means the provider gave no association. The engine treats
+   * that as "not linked" rather than an error, and the writer keeps the row —
+   * except where the column is required, which it says for itself.
    *
    * Takes the object because one handler serves several, and what counts as a
-   * parent differs between them. Returns undefined when the record has no
-   * parent or the provider gave no association; the engine treats that as "not
-   * linked" rather than an error, and the writer keeps the row either way.
+   * parent differs between them.
    */
-  externalParentIdOf(
-    record: RawRecord,
-    object: TargetObject
-  ): string | undefined;
+  externalRefsOf(record: RawRecord, object: TargetObject): ExternalRefs;
   /** Provider id of a record; the upsert key. */
   externalIdOf(record: RawRecord): string | undefined;
 }

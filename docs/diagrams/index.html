@@ -214,7 +214,21 @@
                 <td><span class="chip">crm.objects.tickets.read</span><span class="chip">crm.schemas.read</span></td>
               </tr>
               <tr>
-                <th scope="row">Billing<span class="sub">invoice · subscription</span></th>
+                <th scope="row">Catalog<span class="sub">product · offering</span></th>
+                <td class="none">—</td><td class="none">—</td>
+                <td><span class="chip">products:read</span><span class="chip">prices:read</span></td>
+                <td class="none">—</td><td class="none">—</td>
+              </tr>
+              <tr>
+                <th scope="row">Agreement<span class="sub">agreement · subscription</span></th>
+                <td><span class="chip">crm.objects.deals.read</span><span class="chip">crm.schemas.deals.read</span></td>
+                <td><span class="chip">api</span><span class="chip">refresh_token</span></td>
+                <td><span class="chip">subscriptions:read</span></td>
+                <td><span class="chip">orders:read</span><span class="chip">subscriptions:read</span></td>
+                <td><span class="chip">crm.objects.deals.read</span><span class="chip">crm.schemas.read</span></td>
+              </tr>
+              <tr>
+                <th scope="row">Billing<span class="sub">invoice · charge · payment</span></th>
                 <td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td>
                 <td><span class="chip">billing.invoices.read</span></td>
               </tr>
@@ -237,6 +251,8 @@
             </div>
             <div class="fn-picker">
               <label><input type="checkbox" value="identity" checked> Identity</label>
+              <label><input type="checkbox" value="catalog"> Catalog</label>
+              <label><input type="checkbox" value="agreement"> Agreement</label>
               <label><input type="checkbox" value="support"> Support</label>
               <label><input type="checkbox" value="billing"> Billing</label>
               <label><input type="checkbox" value="usage"> Usage</label>

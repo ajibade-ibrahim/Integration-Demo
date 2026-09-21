@@ -38,6 +38,8 @@ const OBJECT_LABELS: Record<string, [singular: string, plural: string]> = {
   contact: ["contact", "contacts"],
   product: ["product", "products"],
   offering: ["offering", "offerings"],
+  agreement: ["agreement", "agreements"],
+  subscription: ["subscription", "subscriptions"],
 };
 
 /**
