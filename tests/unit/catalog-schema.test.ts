@@ -38,11 +38,19 @@ beforeEach(() => {
 });
 
 describe("the catalog schema", () => {
-  it("writes product then offering, in that order", () => {
-    // Order is not presentational: an offering resolves its product through the
-    // index the product writer builds, so reversing this would unlink the whole
-    // catalog on a first sync and quietly relink it on the second.
-    expect(objectsForFunction(CATALOG_FUNCTION)).toEqual(["product", "offering"]);
+  it("writes product, then offering, then feature, in that order", () => {
+    // Order is not presentational: both children resolve their product through
+    // the index the product writer builds, so putting either first would unlink
+    // the whole catalog on a first sync and quietly relink it on the second.
+    //
+    // For a feature the consequence is worse than for an offering, because
+    // there is no relink pass to quietly fix it on the second run — see the
+    // `externalProductId` comment on the model.
+    expect(objectsForFunction(CATALOG_FUNCTION)).toEqual([
+      "product",
+      "offering",
+      "productFeature",
+    ]);
   });
 
   it("agrees with what the function declares it syncs", () => {
@@ -160,6 +168,7 @@ describe("function scoping of mapping rules", () => {
     expect(schemasForFunction(CATALOG_FUNCTION).map((s) => s.object)).toEqual([
       "product",
       "offering",
+      "productFeature",
     ]);
     expect(schemasForFunction("identity").map((s) => s.object)).toEqual([
       "customer",

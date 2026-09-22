@@ -69,6 +69,13 @@ export const TARGET_OBJECTS = [
   "contact",
   "product",
   "offering",
+  // Not `"feature"`, deliberately. This is Stripe's *attachment* of a feature
+  // to a product, and `"feature"` is the name the standalone Feature object
+  // should have if it is ever synced — a wrong discriminator is the expensive
+  // retrofit in this codebase, so the better name is reserved rather than spent.
+  // camelCase is new to this union and matches the Prisma accessor
+  // (`prisma.productFeature`), which is what `findByExternalId`'s switch reads.
+  "productFeature",
   "agreement",
   "subscription",
 ] as const;

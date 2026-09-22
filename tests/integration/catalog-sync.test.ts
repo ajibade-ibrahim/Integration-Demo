@@ -33,9 +33,23 @@ const INTEGRATION_ID = "integration-catalog-sync";
 
 const PRODUCTS = "https://api.stripe.com/v1/products";
 const PRICES = "https://api.stripe.com/v1/prices";
+const ENTITLEMENT_FEATURES = "https://api.stripe.com/v1/entitlements/features";
 const CUSTOMERS = "https://api.stripe.com/v1/customers";
 
-const server = setupServer();
+/**
+ * An empty entitlements list, as a *default* handler.
+ *
+ * The catalog handler probes this endpoint once per sync to decide whether it is
+ * worth asking each product for its features, and an empty answer skips the
+ * fan-out. Registered here rather than per test so it survives
+ * `resetHandlers()`: none of these tests is about the probe — an account with no
+ * entitlements is what almost every Stripe account is — and repeating it in
+ * every `server.use` would bury the thing each test is actually arranging.
+ * `stripe-catalog.test.ts` is where the probe and the fan-out are pinned.
+ */
+const server = setupServer(
+  http.get(ENTITLEMENT_FEATURES, () => listing([]))
+);
 
 beforeAll(async () => {
   bootstrap();
@@ -136,7 +150,14 @@ describe("a catalog sync, end to end", () => {
     });
 
     expect(result.status).toBe("success");
-    expect(result.recordCounts).toEqual({ product: 1, offering: 1 });
+    // `productFeature: 0` and not absent: the catalog function does write that
+    // object, and this account simply has none. Absent would say "not synced",
+    // which is the claim the customer key's absence below makes.
+    expect(result.recordCounts).toEqual({
+      product: 1,
+      offering: 1,
+      productFeature: 0,
+    });
 
     const offering = await prisma.offering.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
@@ -172,6 +193,7 @@ describe("a catalog sync, end to end", () => {
     expect(readJsonCounts(run.recordCountsJson)).toEqual({
       product: 1,
       offering: 1,
+      productFeature: 0,
     });
   });
 
@@ -315,6 +337,7 @@ describe("identity still syncs the way it did", () => {
       contact: 1,
       product: 1,
       offering: 1,
+      productFeature: 0,
     });
   });
 });

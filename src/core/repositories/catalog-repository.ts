@@ -36,6 +36,29 @@ export interface OfferingRow {
   integrationLabel: string;
 }
 
+/**
+ * One feature attachment, with the product it resolved to.
+ *
+ * `featureId` is the provider's `feat_…` and is what groups rows that are the
+ * same feature on different products. Kept beside `lookupKey` rather than
+ * folded into it: a merchant can create two features with the same lookup key
+ * only by deleting the first, but nothing stops the key being absent, and a
+ * grouping that fell back to the display name would merge two features a
+ * merchant had deliberately named alike.
+ */
+export interface ProductFeatureRow {
+  id: string;
+  externalSourceId: string;
+  name: string;
+  lookupKey: string | null;
+  featureId: string | null;
+  productName: string | null;
+  /** The provider's own product id, present even when the link is unresolved. */
+  externalProductId: string | null;
+  customFields: Record<string, string>;
+  integrationLabel: string;
+}
+
 export interface ProductRow {
   id: string;
   externalSourceId: string;
@@ -46,16 +69,29 @@ export interface ProductRow {
   integrationLabel: string;
   providerName: string;
   offeringCount: number;
+  featureCount: number;
 }
 
 export interface CatalogPage {
   products: ProductRow[];
   offerings: OfferingRow[];
+  features: ProductFeatureRow[];
   totals: {
     products: number;
     offerings: number;
+    features: number;
     /** Offerings that named a product we could not resolve. */
     unlinkedOfferings: number;
+    /**
+     * Features that named a product we could not resolve.
+     *
+     * Counted separately from offerings, and expected to be zero rather than
+     * merely small. A feature's product id is one this integration listed in
+     * the same run, so a non-zero figure here means a product was *rejected* by
+     * the writer — a different diagnosis from an offering pointing at a product
+     * that simply did not come back on this page.
+     */
+    unlinkedFeatures: number;
   };
 }
 
@@ -65,15 +101,23 @@ export async function loadCatalog(
 ): Promise<CatalogPage> {
   const scope = { integration: { userId } };
 
-  const [products, offerings, productTotal, offeringTotal, unlinked] =
-    await Promise.all([
+  const [
+    products,
+    offerings,
+    features,
+    productTotal,
+    offeringTotal,
+    featureTotal,
+    unlinked,
+    unlinkedFeatures,
+  ] = await Promise.all([
       prisma.product.findMany({
         where: scope,
         orderBy: { name: "asc" },
         take,
         include: {
           integration: { select: { instanceLabel: true, providerName: true } },
-          _count: { select: { offerings: true } },
+          _count: { select: { offerings: true, features: true } },
         },
       }),
       prisma.offering.findMany({
@@ -87,9 +131,25 @@ export async function loadCatalog(
           product: { select: { name: true } },
         },
       }),
+      prisma.productFeature.findMany({
+        where: scope,
+        // By product, then by name — the order the page reads in, since the
+        // features tab groups under the product that includes them. A feature
+        // whose product did not resolve sorts first, where it is noticed.
+        orderBy: [{ product: { name: "asc" } }, { name: "asc" }],
+        take,
+        include: {
+          integration: { select: { instanceLabel: true } },
+          product: { select: { name: true } },
+        },
+      }),
       prisma.product.count({ where: scope }),
       prisma.offering.count({ where: scope }),
+      prisma.productFeature.count({ where: scope }),
       prisma.offering.count({
+        where: { ...scope, productId: null, externalProductId: { not: null } },
+      }),
+      prisma.productFeature.count({
         where: { ...scope, productId: null, externalProductId: { not: null } },
       }),
     ]);
@@ -105,6 +165,7 @@ export async function loadCatalog(
       integrationLabel: row.integration.instanceLabel,
       providerName: row.integration.providerName,
       offeringCount: row._count.offerings,
+      featureCount: row._count.features,
     })),
     offerings: offerings.map((row) => ({
       id: row.id,
@@ -120,10 +181,23 @@ export async function loadCatalog(
       customFields: readJsonObject(row.customFields),
       integrationLabel: row.integration.instanceLabel,
     })),
+    features: features.map((row) => ({
+      id: row.id,
+      externalSourceId: row.externalSourceId,
+      name: row.name,
+      lookupKey: row.lookupKey,
+      featureId: row.externalFeatureId,
+      productName: row.product?.name ?? null,
+      externalProductId: row.externalProductId,
+      customFields: readJsonObject(row.customFields),
+      integrationLabel: row.integration.instanceLabel,
+    })),
     totals: {
       products: productTotal,
       offerings: offeringTotal,
+      features: featureTotal,
       unlinkedOfferings: unlinked,
+      unlinkedFeatures,
     },
   };
 }

@@ -59,6 +59,7 @@ export async function collect(
     contact: [],
     product: [],
     offering: [],
+    productFeature: [],
     agreement: [],
     subscription: [],
   };

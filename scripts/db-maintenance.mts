@@ -141,7 +141,19 @@ report(
   await prisma.offering.count({
     where: { productId: null, externalProductId: { not: null } },
   }),
-  " — they relink when the product syncs"
+  " — they relink when the product syncs"
+);
+// Expected to be *zero*, not merely small, which is why it is reported
+// separately from the offerings above rather than added to them. A feature's
+// product id comes from the URL the sync called, so the product was listed in
+// the same run; a non-zero figure means that product was rejected by the
+// writer, and there is no relink pass that will ever clear it.
+report(
+  "product features whose product did not resolve",
+  await prisma.productFeature.count({
+    where: { productId: null, externalProductId: { not: null } },
+  }),
+  " — expected zero; a non-zero count means a product was rejected"
 );
 // Two edges, reported separately. An agreement's customer comes from the
 // identity function and its offering from catalog, so a row can have either

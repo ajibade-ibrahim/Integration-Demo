@@ -119,14 +119,16 @@ export const STRIPE_RESOURCES = [
 export type StripeResource = (typeof STRIPE_RESOURCES)[number];
 
 /**
- * A `/v1/<resource>` list URL with Stripe's cursor pagination applied.
+ * A paginated Stripe URL for any path, with the cursor parameters applied.
  *
- * One builder for every resource, because Stripe's list endpoints are uniform:
- * same `limit`, same `starting_after`, same envelope. Three near-identical URL
- * builders would be three places for the cursor parameter to be misspelled.
+ * Private, and the sole implementation of Stripe's pagination convention. It
+ * exists because `/v1/products/{id}/features` is not a top-level list resource
+ * and so cannot go through `listUrl`, while sharing every rule with it — same
+ * `limit`, same `starting_after`, same refusal to let a caller's filter clobber
+ * either.
  */
-export function listUrl(
-  resource: StripeResource,
+function paginatedUrl(
+  path: string,
   limit: number,
   startingAfter?: string,
   extra?: Readonly<Record<string, string>>
@@ -134,7 +136,7 @@ export function listUrl(
   // Concatenated, not `new URL(path, base)`: a leading-slash path replaces the
   // base's own path entirely, which would silently strip any prefix a mock or
   // proxy is mounted under.
-  const url = new URL(`${stripeApiBase().replace(/\/$/, "")}/v1/${resource}`);
+  const url = new URL(`${stripeApiBase().replace(/\/$/, "")}${path}`);
   url.searchParams.set("limit", String(limit));
   if (startingAfter !== undefined) {
     url.searchParams.set("starting_after", startingAfter);
@@ -146,6 +148,70 @@ export function listUrl(
     url.searchParams.set(key, value);
   }
   return url.toString();
+}
+
+/**
+ * A `/v1/<resource>` list URL with Stripe's cursor pagination applied.
+ *
+ * One builder for every resource, because Stripe's list endpoints are uniform:
+ * same `limit`, same `starting_after`, same envelope. Three near-identical URL
+ * builders would be three places for the cursor parameter to be misspelled.
+ *
+ * Still takes a `StripeResource` rather than a path, which is the whole point of
+ * keeping it as a wrapper: a typo cannot reach the wire as a 404.
+ */
+export function listUrl(
+  resource: StripeResource,
+  limit: number,
+  startingAfter?: string,
+  extra?: Readonly<Record<string, string>>
+): string {
+  return paginatedUrl(`/v1/${resource}`, limit, startingAfter, extra);
+}
+
+/**
+ * The features attached to one product.
+ *
+ * A per-product sub-resource rather than a filter on a list, which is why this
+ * cannot be a `listUrl` call: there is no `/v1/product_features?product=…`, and
+ * `?expand[]=features` on the product itself answers "This property cannot be
+ * expanded (features)". Reading features therefore costs one paginated request
+ * per product, and `accountUsesEntitlements` in the catalog handler exists to
+ * avoid paying it for the accounts that would learn nothing.
+ *
+ * The id is percent-encoded. Belt and braces for Stripe's own ids, which are
+ * alphanumeric — and load-bearing for anything a mock, proxy or fixture returns,
+ * because this is the first path segment in the system built from data rather
+ * than from a literal.
+ */
+export function productFeaturesUrl(
+  productId: string,
+  limit: number,
+  startingAfter?: string
+): string {
+  return paginatedUrl(
+    `/v1/products/${encodeURIComponent(productId)}/features`,
+    limit,
+    startingAfter
+  );
+}
+
+/**
+ * The account's feature *definitions* — one page, used only to ask whether
+ * there are any.
+ *
+ * This is the cheap answer to an expensive question. The per-product fan-out
+ * above costs one request per product to discover nothing at all on every
+ * account that does not use Entitlements, which is most of them. This endpoint
+ * is flat and listable, so a single request with `limit=1` settles it.
+ *
+ * Note what it deliberately is *not* used for: the definitions it returns are
+ * not synced. A `Feature` row would add only the ability to see a feature
+ * attached to no product, and `ProductFeature` already carries the feature's id
+ * and name denormalized onto every attachment.
+ */
+export function entitlementFeaturesUrl(limit: number): string {
+  return paginatedUrl("/v1/entitlements/features", limit);
 }
 
 /** Back-compat alias for the customers list, which several call sites name. */
@@ -394,6 +460,49 @@ export function priceProductId(price: RawRecord): string | undefined {
   const direct = asString(price["product"]);
   if (direct !== undefined) return direct;
   return asString(asRecord(price["product"])?.["id"]);
+}
+
+// ---------------------------------------------------------------------------
+// Product feature
+// ---------------------------------------------------------------------------
+
+/**
+ * Flatten one `ProductFeature` into a mappable record.
+ *
+ * Two things make this unlike `flattenPrice`, and both are why it exists.
+ *
+ * **1. The parent id is not in the payload.** A ProductFeature response is
+ * `{ id, object, livemode, entitlement_feature: { id, name, lookup_key } }` —
+ * there is no `product` field anywhere in it. The product id comes from *the URL
+ * the caller just requested*, which is why this takes a second argument where
+ * `flattenPrice` takes one. A caller that loses track of which product it was
+ * fetching links every row to the wrong product **silently**: no error, no null,
+ * nothing to notice, just a catalog that is confidently wrong. The argument is
+ * required rather than optional precisely so that losing track is a type error.
+ *
+ * It is also injected *last* and unconditionally, so a record carrying a
+ * misleading `product` or `product_id` key of its own cannot win. The URL is the
+ * only authority here.
+ *
+ * **2. The interesting fields are one level down.** `name` and `lookup_key`
+ * belong to the nested feature definition rather than to the attachment, so they
+ * are lifted to the top level — a mapping rule is one path, as it is for
+ * `interval`. They are renamed rather than passed through: `name` at the top
+ * level of a record whose `id` is a `prodft_…` would read as the attachment's
+ * name, which is not a thing that exists.
+ */
+export function flattenProductFeature(
+  feature: RawRecord,
+  productId: string
+): RawRecord {
+  const definition = asRecord(feature["entitlement_feature"]);
+
+  return {
+    feature_name: asString(definition?.["name"]),
+    lookup_key: asString(definition?.["lookup_key"]),
+    feature_id: asString(definition?.["id"]),
+    product_id: productId,
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -98,6 +98,20 @@ export const stripeCatalogDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "active", targetObject: "offering", targetFieldPath: "active", transform: "none" },
   { sourceFieldPath: "billing_scheme", targetObject: "offering", targetFieldPath: "customFields.billing_scheme", transform: "none" },
   { sourceFieldPath: "recurring.usage_type", targetObject: "offering", targetFieldPath: "customFields.usage_type", transform: "none" },
+
+  // --- productFeature ---
+  // All three synthesized by `flattenProductFeature`, and not out of
+  // convenience: `name` and `lookup_key` live inside `entitlement_feature` on
+  // the wire, so the raw paths would be two segments deep, and `feature_id`
+  // shares a segment name with the attachment's own `id`. Mapping the raw
+  // `id` instead would store the `prodft_…` where the `feat_…` belongs, which
+  // is exactly the confusion `externalFeatureId` exists to prevent.
+  //
+  // No default for `associatedProductId`: it is `readOnly` and derived by the
+  // engine from `product_id`, as `offering.associatedProductId` is.
+  { sourceFieldPath: "feature_name", targetObject: "productFeature", targetFieldPath: "name", transform: "trim" },
+  { sourceFieldPath: "lookup_key", targetObject: "productFeature", targetFieldPath: "lookupKey", transform: "trim" },
+  { sourceFieldPath: "feature_id", targetObject: "productFeature", targetFieldPath: "externalFeatureId", transform: "none" },
 ];
 
 /**

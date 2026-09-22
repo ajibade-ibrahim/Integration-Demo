@@ -138,6 +138,51 @@ export const STRIPE_OFFERING_FIELDS: DiscoveredFieldDef[] = [
 ];
 
 /**
+ * Product feature fields — a product's entitlement attachments.
+ *
+ * Synthesized paths first, as in `STRIPE_OFFERING_FIELDS`, and here the split
+ * matters more than usual. Every field a user actually wants is nested one level
+ * down inside `entitlement_feature`, and `product_id` does not appear in the
+ * response *at all* — the handler injects it from the URL it requested. The raw
+ * paths are offered below and labelled as raw so a user who maps one knows they
+ * are reaching past the flattening rather than around a gap in it.
+ */
+export const STRIPE_PRODUCT_FEATURE_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Attachment ID (prodft_…)", type: "string" },
+  {
+    path: "feature_name",
+    label: "Feature name (synthesized from entitlement_feature)",
+    type: "string",
+  },
+  {
+    path: "lookup_key",
+    label: "Lookup key — what code gates on (synthesized)",
+    type: "string",
+  },
+  {
+    path: "feature_id",
+    label: "Feature ID (feat_…, synthesized)",
+    type: "string",
+  },
+  {
+    path: "product_id",
+    label: "Product ID (synthesized from the request URL, not the payload)",
+    type: "string",
+  },
+  {
+    path: "entitlement_feature.name",
+    label: "Feature name (raw)",
+    type: "string",
+  },
+  {
+    path: "entitlement_feature.lookup_key",
+    label: "Lookup key (raw)",
+    type: "string",
+  },
+  { path: "livemode", label: "Live mode", type: "boolean" },
+];
+
+/**
  * Agreement fields — the shared commercial node, read from a subscription.
  *
  * Synthesized paths first, as in `STRIPE_OFFERING_FIELDS`, because they are the

@@ -15,7 +15,7 @@ before consent.
 
 Currently implemented: the **identity** function on **HubSpot**, **Salesforce**,
 **Metrifox**, **Stripe**, and a built-in **mock provider** so the whole thing
-runs with no credentials — plus **catalog** (products and offerings) and
+runs with no credentials — plus **catalog** (products, offerings and the features they include) and
 **agreement** (subscriptions) on **Stripe**.
 
 The three functions are independent by design, and that independence is
@@ -206,9 +206,10 @@ rejecting it at creation time the rest of the fixture run has already succeeded.
    has been warned instead of getting a silently empty column.
 7. Re-sync and confirm the counts do not move.
 
-#### Catalog and agreements — the products, prices and subscriptions
+#### Catalog and agreements — the products, prices, features and subscriptions
 
-The same fixture file seeds four products, nine prices and eleven subscriptions.
+The same fixture file seeds four products, nine prices, four entitlement
+features with four attachments, and eleven subscriptions.
 They are generated rather than hand-written, because every subscription has to
 reference a price created earlier in the same run and a mistyped `${…:id}`
 placeholder only shows up halfway through seeding a sandbox:
@@ -248,7 +249,7 @@ before consent.
 
 Currently implemented: the **identity** function on **HubSpot**, **Salesforce**,
 **Metrifox**, **Stripe**, and a built-in **mock provider** so the whole thing
-runs with no credentials — plus **catalog** (products and offerings) and
+runs with no credentials — plus **catalog** (products, offerings and the features they include) and
 **agreement** (subscriptions) on **Stripe**.
 
 The three functions are independent by design, and that independence is
@@ -442,7 +443,11 @@ rejecting it at creation time the rest of the fixture run has already succeeded.
  |
 | `price_platform_jpy` | A **zero-decimal** currency. 5000 minor units is ¥5,000, not ¥50.00 — the one case `formatMoney`'s exponent lookup exists for, and the one that reads plausibly while being 100× wrong |
 | `price_seats_tiered` | Tiered, so `unit_amount` is null and there is no single amount to format. Drives both names to `Custom pricing/month` |
-| `price_platform_legacy` | Archived immediately after creation, so the catalog has an inactive offering to render |
+| `price_platform_legacy` | Archived immediately after creation, so the catalog has an inactive offering to render |
+| `feat_api_access` | Attached to **two** products, so two rows share one `externalFeatureId`. The case a standalone `Feature` table would have turned into a many-to-many join row |
+| `feat_advanced_reporting` | Lookup key `reporting-v2`, deliberately not a slug of its name — the two columns are independent, and deriving one from the other would pass every test where they happen to agree |
+| `feat_unattached` | Attached to nothing. Must appear **nowhere** in our data: syncing feature definitions is out of scope, and this is what makes that a checked claim rather than a remembered one |
+| `prod_seats` (no attachment) | The empty-page case — the only fixture proving the per-product fan-out tolerates a product with nothing attached |
 | `sub_acme_platform` | The only subscription that bills a card, so `collection_method` is not constant |
 | `sub_northwind_multi` | **Three priced lines on one subscription.** Only the first is linked, so this must produce a warning rather than a tidy row reading `$49/month` for a customer paying $86.50 |
 | `sub_dutchman_trial` | `trialing`, with a trial end date — a state with a deadline attached |
@@ -474,8 +479,35 @@ integration:
    order meaningless and the index unused, with nothing raising an error —
    a subscription may legitimately have no period. `periodBoundary` reads
    whichever location the account's API version uses.
-6. Re-sync and confirm the counts do not move.
-
+6. Re-sync and confirm the counts do not move.
+And for the features, which ride along on the same catalog sync:
+
+1. `/integrations/[id]/mapping?function=catalog` shows **three** sections —
+   Product, Offering and **Feature** — and no Customer or Agreement.
+2. **Sync now** → the run reports `{ product: 4, offering: 9, productFeature: 4 }`.
+   Four, not five: `feat_unattached` belongs to no product, so nothing reads it.
+3. `/catalog` → **Features**. Platform lists two, Premium Support one,
+   Integrations one, Additional Seats none — and `beta-sandbox` appears nowhere.
+   `api-access` appears **twice**, once per product, which is what a
+   denormalized attachment looks like rather than a bug.
+4. Re-sync and confirm four rows, not eight.
+5. Detach a feature in Stripe and re-sync. **The row persists**, and that is the
+   known gap rather than a bug: sync is upsert-only with no absence detection,
+   so a detached feature stays until the integration is deleted. It is the same
+   limitation `status=all` works around for subscriptions, and there is no
+   equivalent parameter here.
+
+> **An integration connected before this existed syncs no features**, and does
+> so without making a single extra request. Stored mapping rules are not
+> rewritten by a deploy, so nothing points at the new object — and rather than
+> fetch rows the writer would reject for a missing name, the handler checks
+> `requestedSourcePaths` and skips the pass entirely. Press **Reset to
+> suggested** in the mapping editor to pick up the three shipped defaults.
+>
+> This is the only place in the system where a mapping decides whether a request
+> is made at all. It earns the inconsistency because features cost *one request
+> per product* where products and prices cost two requests total.
+
 > **Two statuses no fixture can reach.** `past_due` and `paused` both need time
 > to pass — a renewal that fails dunning, or a trial that ends with no payment
 > method — so they need a [test clock](https://docs.stripe.com/billing/testing/test-clocks)
@@ -688,7 +720,7 @@ The primary demo path remains the manual **Sync now** button.
 src/core/                framework-free domain — no Next.js imports
   object-schema.ts       the composed target registry; single source of truth
   identity-schema.ts     customer + contact field definitions
-  catalog-schema.ts      product + offering field definitions
+  catalog-schema.ts      product + offering + feature field definitions
   agreement-schema.ts    agreement + subscription field definitions
   price-format.ts        money and recurrence, formatted once for both callers
   registries/            function, provider, and handler registries

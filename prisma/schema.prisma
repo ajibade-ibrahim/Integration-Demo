@@ -109,6 +109,7 @@ model Integration {
   contacts         Contact[]
   products         Product[]
   offerings        Offering[]
+  productFeatures  ProductFeature[]
   agreements       Agreement[]
   subscriptions    Subscription[]
   syncRuns         SyncRun[]
@@ -360,8 +361,9 @@ model Product {
   /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
   customFields String @default("{}")
 
-  updatedAt DateTime   @updatedAt
+  updatedAt DateTime         @updatedAt
   offerings Offering[]
+  features  ProductFeature[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
@@ -420,6 +422,89 @@ model Offering {
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
   @@index([productId])
+}
+
+// ---------------------------------------------------------------------------
+// Product feature
+//
+// Stripe Billing's Entitlements API models three objects and they are not
+// interchangeable: a `Feature` is a definition, a `ProductFeature` is the
+// *attachment* of one to a product, and an `ActiveEntitlement` is a grant in
+// force for one customer right now. Only the middle one is synced.
+//
+// Entitlements are product-scoped, not price-scoped — `/v1/prices/{id}/features`
+// does not exist — so every price on a product grants identical features and
+// the route from an offering to its features is `offering -> product ->
+// features`. That is a join this schema can already express, which is why there
+// is no edge from `Offering` here.
+// ---------------------------------------------------------------------------
+
+/// A feature one product includes.
+///
+/// A row is Stripe's *attachment* (`prodft_…`), not the feature itself — the
+/// same feature on three products is three rows, each carrying the feature's own
+/// id and name denormalized onto it. Deliberate: the standalone Feature object
+/// is seven fields and the only thing a table for it would add is the ability to
+/// see a feature attached to nothing.
+///
+/// The denormalization is also what keeps this a plain single-parent child,
+/// identical in shape to `Offering`. A `Feature` table would have made this the
+/// first many-to-many join row in the schema — two required parents and a
+/// resolution policy unlike any other association here.
+model ProductFeature {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Stripe's `prodft_…`. The upsert key, paired with integrationId.
+  externalSourceId String
+
+  /// The feature's display name, from `entitlement_feature.name`. Required, as
+  /// every object's name is — and unlike a price, a feature always has one.
+  name String
+
+  /// The stable machine key an application gates on — "premium-support".
+  ///
+  /// The reason this table is worth having: `name` is for humans and a merchant
+  /// can rename it, this is for code. Stripe's own ActiveEntitlement carries it
+  /// rather than a name, and Metrifox's entitlements carry the same column under
+  /// the same meaning, so it is the one field two independent providers agree is
+  /// the identifier a caller gates on.
+  lookupKey String?
+
+  /// Stripe's own `feat_…`. Kept so rows sharing a feature can be grouped
+  /// without matching on a display string a merchant can rename.
+  externalFeatureId String?
+
+  /// Resolved internal product. Null when the provider gave us a product id we
+  /// could not resolve — the row is kept and a warning is recorded, exactly as
+  /// an offering is.
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  /// The provider's own product id, before resolution.
+  ///
+  /// Kept for the unresolved warning and the data browser, but **not** for a
+  /// relink pass, and that is the deviation from `Offering` worth stating. A
+  /// price can arrive before its product, so offerings need
+  /// `relinkOrphanedOfferings`. A product feature cannot: the handler builds its
+  /// request URL from a product it listed moments earlier in the same run, so
+  /// "arrived before its parent" is unreachable by construction. If a standalone
+  /// feature sync is ever added, that is when the pass becomes real.
+  externalProductId String?
+
+  /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
+  customFields String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  @@index([productId])
+  /// "Which products include `premium-support`?" — the query the table is for,
+  /// and the one that is unreachable without this index once a catalog has more
+  /// than a demo's worth of rows in it.
+  @@index([integrationId, lookupKey])
 }
 
 // ---------------------------------------------------------------------------

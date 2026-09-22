@@ -158,7 +158,7 @@ export function bootstrap(): void {
     label: "Catalog",
     description:
       "Products and the offerings that price them — what is for sale, at what amount, on what billing interval.",
-    dataModels: ["product", "offering"],
+    dataModels: ["product", "offering", "productFeature"],
     scopesByProvider: scopeMap(catalogScopes),
   });
 

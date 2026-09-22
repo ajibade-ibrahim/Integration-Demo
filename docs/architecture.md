@@ -294,7 +294,7 @@ flowchart TB
     FETCH --> MAP["applyMappings() per record"]
 
     MAP --> WC["<b>1. parent writer</b><br/>writeCustomers / writeProducts / writeAgreements<br/>upsert on integrationId + externalSourceId,<br/>building the external-to-internal index"]
-    WC --> WK["<b>2. child writer</b><br/>writeContacts / writeOfferings / writeSubscriptions<br/>resolve through the index,<br/>then fall back to a DB lookup"]
+    WC --> WK["<b>2. child writers</b><br/>writeContacts / writeOfferings / writeProductFeatures / writeSubscriptions<br/>resolve through the index,<br/>then fall back to a DB lookup"]
     WK --> RELINK["<b>3. relinkOrphansForFunction()</b><br/><i>children stranded by earlier runs<br/>get linked once their parent arrives</i>"]
 
     RELINK --> STATUS{"any rejected records?"}
@@ -321,9 +321,11 @@ rather than living inline in the engine.
 
 The order itself is declared in
 [`object-schema.ts`](../src/core/object-schema.ts) rather than hardcoded per
-function — `identity: [customer, contact]`, `catalog: [product, offering]`,
+function — `identity: [customer, contact]`,
+`catalog: [product, offering, productFeature]`,
 `agreement: [agreement, subscription]`. Adding a function is a change there and
-in the writer's switch, not another branch in this loop.
+in the writer's switch, not another branch in this loop. `catalog` is the one
+with two children of the same parent, and both resolve against the same index.
 
 **Why the *functions* are ordered too, which is newer.** Identity and catalog
 share nothing, so their order never mattered. An agreement does: it references a
@@ -337,6 +339,15 @@ returns a *map* keyed by object — `{ customer }` for a contact, `{ product }` 
 an offering, `{ customer, offering }` for an agreement — because neither half of
 an agreement is the primary one. Each resolves and warns independently, so a
 half-linked row says which half.
+
+**One child whose parent id never appears in its payload.** A Stripe
+`ProductFeature` is read from `/v1/products/{id}/features` and the response
+names no product, so the handler injects the id from the URL it requested. Every
+other association here is read off the record, which means a wrong one shows up
+as a null or an unresolved warning; this one would link every row to the wrong
+product and report success. It is also why the catalog has no relink pass for
+features: a feature cannot arrive before a product it was fetched *from*, so an
+unresolved parent means that product was rejected rather than late.
 
 **And one exception to "keep the child".** A `Subscription` whose agreement was
 rejected is rejected too, because its foreign key is required: the row would be

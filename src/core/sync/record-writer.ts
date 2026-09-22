@@ -728,6 +728,124 @@ export async function relinkOrphanedOfferings(
 }
 
 // ---------------------------------------------------------------------------
+// Product features
+// ---------------------------------------------------------------------------
+
+/**
+ * Write the features each product includes.
+ *
+ * Modelled directly on `writeOfferings`, because the shape is the same: a
+ * single-parent child keyed on `(integrationId, externalSourceId)`, whose parent
+ * may or may not resolve. The validation split is the same too, and the same way
+ * round — no id or no name is **rejected**, an unresolvable product is a
+ * **warning** with the row kept.
+ *
+ * Two things are worth knowing about the parent here, and neither is visible
+ * from this function alone.
+ *
+ * The external product id did not come from the record Stripe sent. Features are
+ * read from `/v1/products/{id}/features` and the response carries no product
+ * field, so the handler injected it from the URL. That means an unresolvable
+ * product is a *much* stronger signal here than it is for an offering — the id
+ * is one this integration listed moments earlier in the same run, so failing to
+ * resolve it means the product itself was rejected by `writeProducts`, not that
+ * the provider named something we had never seen.
+ *
+ * And there is no relink pass for the same reason: a feature cannot arrive
+ * before its parent. `externalProductId` is still stored, for the warning and
+ * the data browser, but `relinkOrphansForFunction("catalog")` deliberately does
+ * not look at this table. See the column's comment in the schema.
+ */
+export async function writeProductFeatures(
+  integrationId: string,
+  records: readonly CollectedRecord[],
+  externalToInternal: Map<string, string>
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  let written = 0;
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    const externalProductId = externalRefs?.product;
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "productFeature",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    // Rejected rather than warned, as it is everywhere a name is required. A
+    // feature with no name cannot be rendered and cannot be told apart from the
+    // others in a list, and unlike a price it is not something a provider is
+    // expected to leave out — Stripe will not create a feature without one, so a
+    // blank name here means the mapping is wrong rather than the data thin.
+    const name = normalize(
+      mapped.fields["name"] ?? null,
+      maxLengthOf("productFeature", "name")
+    );
+    if (name === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "productFeature",
+        reason: "Name is required",
+        fieldName: "name",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const productId = await resolveAssociation(
+      integrationId,
+      "product",
+      externalProductId,
+      externalToInternal
+    );
+
+    if (externalProductId !== undefined && productId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "productFeature",
+        reason: `Product '${externalProductId}' not found; feature saved without a link`,
+        fieldName: "associatedProductId",
+        severity: "warning",
+      });
+    }
+
+    const data = {
+      name,
+      lookupKey: normalize(
+        mapped.fields["lookupKey"] ?? null,
+        maxLengthOf("productFeature", "lookupKey")
+      ),
+      externalFeatureId: normalize(
+        mapped.fields["externalFeatureId"] ?? null,
+        maxLengthOf("productFeature", "externalFeatureId")
+      ),
+      productId,
+      externalProductId: externalProductId ?? null,
+      // Required rather than decorative: `resolveTargetField` validates
+      // `customFields.*` for every object, so without this call a rule writing
+      // one would save cleanly in the editor and then silently do nothing.
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+    };
+
+    await prisma.productFeature.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+    });
+
+    written += 1;
+  }
+
+  return { written, issues };
+}
+
+// ---------------------------------------------------------------------------
 // Agreements
 // ---------------------------------------------------------------------------
 
@@ -1139,14 +1257,26 @@ export async function writeRecordsForFunction(
 
     case "catalog": {
       const products = await writeProducts(integrationId, at("product"));
+      // Both children resolve against the *same* product index, and each is
+      // passed the map rather than a copy so a feature benefits from the
+      // database lookups the offerings pass already cached.
       const offerings = await writeOfferings(
         integrationId,
         at("offering"),
         products.externalToInternal
       );
+      const features = await writeProductFeatures(
+        integrationId,
+        at("productFeature"),
+        products.externalToInternal
+      );
       return {
-        counts: { product: products.written, offering: offerings.written },
-        issues: [...products.issues, ...offerings.issues],
+        counts: {
+          product: products.written,
+          offering: offerings.written,
+          productFeature: features.written,
+        },
+        issues: [...products.issues, ...offerings.issues, ...features.issues],
       };
     }
 

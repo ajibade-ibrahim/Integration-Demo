@@ -38,6 +38,10 @@ const OBJECT_LABELS: Record<string, [singular: string, plural: string]> = {
   contact: ["contact", "contacts"],
   product: ["product", "products"],
   offering: ["offering", "offerings"],
+  // Spelled out because the fallback below would pluralize the union member
+  // itself and report "3 productFeatures", which is visibly wrong rather than
+  // subtly wrong — and this is the screen a user reads to check the sync.
+  productFeature: ["feature", "features"],
   agreement: ["agreement", "agreements"],
   subscription: ["subscription", "subscriptions"],
 };
