@@ -37,12 +37,14 @@ erDiagram
     Integration ||--o{ Contact : "syncs"
     Integration ||--o{ Product : "syncs"
     Integration ||--o{ Offering : "syncs"
+    Integration ||--o{ ProductFeature : "syncs"
     Integration ||--o{ Agreement : "syncs"
     Integration ||--o{ Subscription : "syncs"
     Integration ||--o{ SyncRun : "audited by"
 
     Customer |o--o{ Contact : "employs, link nullable"
     Product |o--o{ Offering : "priced by, link nullable"
+    Product |o--o{ ProductFeature : "includes, link nullable"
 
     Customer |o--o{ Agreement : "agreed to, link nullable"
     Offering |o--o{ Agreement : "sold under, link nullable"
@@ -189,6 +191,19 @@ erDiagram
         datetime updatedAt
     }
 
+    ProductFeature {
+        string id PK
+        string integrationId FK
+        string externalSourceId "the *attachment* id (prodft_…), not the feature id"
+        string name "required; denormalized from the feature definition"
+        string lookupKey "the stable key code gates on — indexed"
+        string externalFeatureId "provider feature id (feat_…), shared across rows"
+        string productId FK "resolved internal parent, nullable"
+        string externalProductId "from the request URL, not the payload"
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
     Agreement {
         string id PK
         string integrationId FK
@@ -322,6 +337,63 @@ Two relationships carry the design load:
 
 ---
 
+## `ProductFeature`: an attachment, not a feature
+
+One row is Stripe's **`ProductFeature`** (`prodft_…`) — the statement *this
+product includes this feature* — and not the feature itself. Stripe's
+Entitlements API has three objects and only this one is synced:
+
+| Object | Endpoint | Synced? |
+|---|---|---|
+| `Feature` (`feat_…`) | `GET /v1/entitlements/features` | No — read once per sync, to ask whether the list is empty |
+| `ProductFeature` (`prodft_…`) | `GET /v1/products/{id}/features` | **Yes** |
+| `ActiveEntitlement` (`ent_…`) | `GET /v1/entitlements/active_entitlements?customer=…` | No |
+
+The feature's own `id`, `name` and `lookup_key` are **denormalized onto every
+attachment**. So the same feature on three products is three rows, each
+carrying `feat_…` in `externalFeatureId` — and grouping them is a query rather
+than a join.
+
+That is the decision worth understanding, because the alternative was
+structural. A `Feature` table would have made `ProductFeature` this schema's
+first many-to-many join row: two *required* parents and a resolution policy
+unlike any other association here. Denormalizing collapses it into a plain
+single-parent child, identical in shape to `Offering`, and there is no new
+association machinery anywhere in the system as a result.
+
+What the omission costs is exactly one thing: a feature attached to no product
+is invisible. The sandbox seeds one (`beta-sandbox`) so that this stays a
+checked claim rather than a remembered one — `fixtures:verify` asserts it
+appears nowhere. And adding the standalone object later is additive: a new
+table, a new target object and a relink pass, touching no column here and
+requiring no backfill, because the feature's id is already on every row.
+
+**Entitlements are product-scoped, not price-scoped.** There is no
+`/v1/prices/{id}/features` — the endpoint does not exist — so all five prices on
+Platform grant identical features, and the route from a price to its features is
+`Offering → Product → ProductFeature`. That is why nothing links an offering to
+a feature directly.
+
+### Two things about the parent link
+
+**The product id does not come from the payload.** A `ProductFeature` response
+carries no `product` field at all; the id comes from the URL the handler just
+requested. This is the only association in the system built that way, and it is
+the only one whose failure is silent — every other parent id is read from the
+record, so a wrong one produces a null or an unresolved warning. A handler that
+lost track here would link every row to the wrong product and report success.
+`tests/unit/stripe-product-feature.test.ts` pins that the injected id wins even
+over a `product` key on the record.
+
+**There is no relink pass, deliberately.** `Offering` keeps
+`externalProductId` *and* a `relinkOrphanedOfferings` pass, because a price can
+arrive before its product. A product feature cannot: the handler builds its URL
+from a product it listed moments earlier in the same run. So an unresolved
+product here does not mean "not yet synced" — it means the product was
+*rejected*, which no later run repairs on its own. The column is still stored,
+for the warning and the data browser, and `db:check` reports the count as
+expected-zero rather than expected-small.
+
 ## The identity layer, and why it hangs off `User`
 
 Everything above is scoped by `Integration`. These four are not, and the reason
@@ -424,10 +496,11 @@ a draft id.
 | Parent | Child | On parent delete |
 |---|---|---|
 | `User` | `Integration`, `IntegrationDraft`, `CustomerAccount`, `IdentityResolutionRun` | `Cascade` |
-| `Integration` | `IntegrationFunction`, `OAuthToken`, `FieldMapping`, `DiscoveredField`, `Customer`, `Contact`, `Product`, `Offering`, `Agreement`, `Subscription`, `SyncRun` | `Cascade` |
+| `Integration` | `IntegrationFunction`, `OAuthToken`, `FieldMapping`, `DiscoveredField`, `Customer`, `Contact`, `Product`, `Offering`, `ProductFeature`, `Agreement`, `Subscription`, `SyncRun` | `Cascade` |
 | `Customer` | `Contact` | `SetNull` — the contact survives, unlinked |
 | `Customer` | `Agreement` | `SetNull` — the agreement survives, unlinked |
 | `Product` | `Offering` | `SetNull` — the price survives, unlinked |
+| `Product` | `ProductFeature` | `SetNull` — the row survives, unlinked |
 | `Offering` | `Agreement` | `SetNull` — the agreement survives, unlinked |
 | `Agreement` | `Subscription` | `Cascade` — see below; the one exception |
 | `Customer` | `IdentityAssertion` (both sides) | `Cascade` — a verdict about a row that no longer exists is not a verdict |
@@ -471,7 +544,7 @@ place.
 | `User` | `email` | The stable handle the demo looks the user up by. |
 | `Customer` | `(integrationId, externalSourceId)` | The upsert key. Re-running a sync updates rather than duplicates. |
 | `Contact` | `(integrationId, externalSourceId)` | Same. |
-| `Product`, `Offering`, `Agreement`, `Subscription` | `(integrationId, externalSourceId)` | Same — every synced table is keyed this way, which is what `findByExternalId` relies on. |
+| `Product`, `Offering`, `ProductFeature`, `Agreement`, `Subscription` | `(integrationId, externalSourceId)` | Same — every synced table is keyed this way, which is what `findByExternalId` relies on. |
 | `Subscription` | `agreementId` | **Also unique on its own.** One detail row per agreement, not many: the unique is what makes it an extension rather than a collection, and what stops a re-sync inserting a second. |
 | `IntegrationFunction` | `(integrationId, functionName)` | A function is declared once per integration. |
 | `FieldMapping` | `(integrationId, functionName, targetObject, targetFieldPath)` | One rule per target field. Function and target object are part of the identity, because two functions on one integration can write to the same object. |
@@ -515,7 +588,7 @@ the source of truth.
 |---|---|---|
 | `Integration.status` | `pending_authorization`, `active`, `expired`, `requires_reauthorization`, `error` | `isIntegrationStatus` |
 | `Customer.type`, `CustomerAccount.type` | `prospect`, `customer`, `partner`, `vendor`, or null | `isCustomerType` |
-| `FieldMapping.targetObject` | `customer`, `contact`, `product`, `offering`, `agreement`, `subscription` | `isTargetObject` |
+| `FieldMapping.targetObject` | `customer`, `contact`, `product`, `offering`, `productFeature`, `agreement`, `subscription` | `isTargetObject` |
 | `Offering.interval` | `day`, `week`, `month`, `year`, `one_time`, or null | `isBillingInterval` |
 | `Agreement.agreementType` | `subscription`, `order_form`, `contract`, `deal` — **never null** | `isAgreementType` |
 | `Agreement.status` | `draft`, `trialing`, `active`, `past_due`, `paused`, `canceled`, `expired`, or null | `isAgreementStatus` |

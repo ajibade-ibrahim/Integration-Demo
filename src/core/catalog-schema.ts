@@ -90,7 +90,62 @@ const OFFERING_SCHEMA: ObjectSchema = {
   ],
 };
 
+// ---------------------------------------------------------------------------
+// Product feature
+// ---------------------------------------------------------------------------
+
+/**
+ * A feature a product includes — Stripe's `ProductFeature` attachment.
+ *
+ * Deliberately thin, because the object it comes from is thin. A Stripe
+ * ProductFeature is an id plus a nested `entitlement_feature` of three fields,
+ * and those three are what these columns hold. There is no amount, no quantity
+ * and no expiry: Stripe's entitlements are boolean and product-scoped, and
+ * offering a `limit` field here would invite users to map something no provider
+ * on the catalog side sends.
+ *
+ * `lookupKey` is the field with a reason to exist beyond display. `name` is what
+ * a catalog page renders and a merchant can rename at will; the lookup key is
+ * what application code gates on, and it is what Stripe's own ActiveEntitlement
+ * carries *instead of* a name.
+ */
+const PRODUCT_FEATURE_SCHEMA: ObjectSchema = {
+  object: "productFeature",
+  // "Feature" rather than "Product feature": the qualifier exists to keep the
+  // union member honest about what a row is, but a user reading the mapping
+  // editor is looking at a product's features and does not need telling twice.
+  label: "Feature",
+  fields: [
+    // Required, and unlike a price this is never synthesized — a Stripe feature
+    // always has a name, because the API will not create one without it.
+    { name: "name", label: "Name", kind: "string", required: true, maxLength: 255 },
+    {
+      name: "lookupKey",
+      label: "Lookup key",
+      kind: "string",
+      maxLength: 255,
+    },
+    {
+      name: "externalFeatureId",
+      label: "Feature ID (provider's own)",
+      kind: "string",
+      maxLength: 255,
+    },
+    // Derived by the sync engine, exactly as `offering.associatedProductId` is —
+    // and here the id does not even appear in the record Stripe returns; the
+    // handler injects it from the URL it called. Offering it as a mapping target
+    // would invite users to map a foreign id into a field holding our UUIDs.
+    {
+      name: "associatedProductId",
+      label: "Associated product",
+      kind: "string",
+      readOnly: true,
+    },
+  ],
+};
+
 export const CATALOG_SCHEMA = {
   product: PRODUCT_SCHEMA,
   offering: OFFERING_SCHEMA,
+  productFeature: PRODUCT_FEATURE_SCHEMA,
 } as const;

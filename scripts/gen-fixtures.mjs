@@ -1,5 +1,6 @@
 /**
- * Splices the catalog and agreement fixtures into the Stripe fixture file.
+ * Splices the catalog, entitlement and agreement fixtures into the Stripe
+ * fixture file.
  *
  * A generator rather than a hand-edited JSON blob because every subscription
  * here has to reference a price created earlier in the same run, and the
@@ -9,7 +10,11 @@
  * Idempotent: re-running replaces the block it added last time rather than
  * appending a second copy.
  *
- * Run with `node scripts/gen-agreement-fixtures.mjs`, then seed with
+ * Renamed from `gen-agreement-fixtures.mjs` when it acquired the entitlement
+ * block: it seeds the whole catalog now, and a name claiming otherwise is how
+ * someone ends up writing a second generator beside it.
+ *
+ * Run with `npm run fixtures:gen`, then seed with
  * `stripe fixtures scripts/stripe-sandbox-fixtures.json`.
  */
 
@@ -86,6 +91,17 @@ const prices = [
     currency: "usd",
     recurring: { interval: "month" },
   }),
+  // Metered, which is the *only* thing Stripe says about a line that our
+  // `itemType` column can record. Everything else it returns is an
+  // undifferentiated item, so without this price no fixture ever produces a
+  // non-null line type and the whole `plan | add_on | usage` union goes
+  // unexercised against real data.
+  post("price_api_calls_metered", "/v1/prices", {
+    product: ref("prod_integrations"),
+    unit_amount: 2,
+    currency: "usd",
+    recurring: { interval: "month", usage_type: "metered" },
+  }),
   // Non-USD, so the symbol comes from Intl rather than a hardcoded dollar sign.
   post("price_platform_gbp", "/v1/prices", {
     product: ref("prod_platform"),
@@ -128,6 +144,67 @@ const prices = [
   }),
 ];
 
+// --- Catalog: entitlement features and their attachments -------------------
+
+// Two objects, not one. A feature is a *definition* and lives on the account;
+// attaching it to a product is a separate call that creates a separate object
+// (`prodft_...`), and it is the attachment that this integration syncs. The
+// split is the reason `feat_api_access` below can appear on two products
+// without the fixture file repeating its name or its lookup key.
+const features = [
+  post("feat_api_access", "/v1/entitlements/features", {
+    name: "API access",
+    lookup_key: "api-access",
+    metadata: { surface: "public" },
+  }),
+  post("feat_premium_support", "/v1/entitlements/features", {
+    name: "Premium support",
+    lookup_key: "premium-support",
+  }),
+  // No metadata and a lookup key that differs from a slug of the name, so
+  // nothing downstream can get away with deriving one from the other.
+  post("feat_advanced_reporting", "/v1/entitlements/features", {
+    name: "Advanced reporting",
+    lookup_key: "reporting-v2",
+  }),
+  // Attached to nothing, deliberately. It must appear nowhere in our data:
+  // a standalone Feature table is out of scope, and this fixture is what makes
+  // that omission observable rather than merely claimed. If a feature ever
+  // shows up here with no product, something started syncing definitions.
+  post("feat_unattached", "/v1/entitlements/features", {
+    name: "Beta sandbox",
+    lookup_key: "beta-sandbox",
+  }),
+];
+
+const attachments = [
+  // Two features on one product: the ordinary case, and the one that proves the
+  // per-product page is read past its first row.
+  post("prodft_platform_api", `/v1/products/${ref("prod_platform")}/features`, {
+    entitlement_feature: ref("feat_api_access"),
+  }),
+  post(
+    "prodft_platform_reporting",
+    `/v1/products/${ref("prod_platform")}/features`,
+    { entitlement_feature: ref("feat_advanced_reporting") }
+  ),
+  post("prodft_support_premium", `/v1/products/${ref("prod_support")}/features`, {
+    entitlement_feature: ref("feat_premium_support"),
+  }),
+  // The same feature on a second product. Two rows sharing one
+  // `externalFeatureId`, which is the case that would have been a join row if a
+  // Feature table existed — and the case that breaks if anything keys a row on
+  // the feature id instead of the attachment id.
+  post(
+    "prodft_integrations_api",
+    `/v1/products/${ref("prod_integrations")}/features`,
+    { entitlement_feature: ref("feat_api_access") }
+  ),
+  // `prod_seats` gets none, which is not an omission: it is the empty-page case,
+  // and the only fixture that proves the fan-out tolerates a product with
+  // nothing attached rather than throwing or skipping the rest.
+];
+
 // --- A card, so one subscription bills automatically -----------------------
 
 const payment = [
@@ -153,15 +230,22 @@ const subscriptions = [
     items: [{ price: ref("price_platform_monthly") }],
     metadata: { contract_ref: "ACME-2026-01" },
   }),
-  // Three priced lines on one subscription, only the first of which is linked.
-  // The fixture that must produce a warning rather than a tidy-looking row
-  // billing $49 when the customer is actually paying $86.50.
+  // Four priced lines on one subscription, only the first of which the
+  // agreement links. The fixture that must produce four AgreementItem rows
+  // rather than a tidy-looking single row billing $49 when the customer is
+  // actually paying considerably more.
+  //
+  // The metered line is last on purpose. It is the only one that produces a
+  // non-null `itemType`, so a positional bug that typed the *first* item
+  // would be invisible if it sat at position 0 — and `position` is exactly
+  // the field most likely to be got wrong once the list spans two fetches.
   post("sub_northwind_multi", "/v1/subscriptions", {
     customer: ref("cus_northwind"),
     items: [
       { price: ref("price_platform_monthly") },
       { price: ref("price_seats_monthly"), quantity: 25 },
       { price: ref("price_integrations_monthly") },
+      { price: ref("price_api_calls_metered") },
     ],
     ...invoiced,
   }),
@@ -228,7 +312,18 @@ const subscriptions = [
   ),
 ];
 
-const added = [...products, ...prices, ...payment, ...subscriptions];
+// Order is execution order for `stripe fixtures`, and two dependencies make it
+// load-bearing: a price names a product, and an attachment names both a product
+// and a feature. Catalog first, therefore, with the attachments after the
+// features they reference.
+const added = [
+  ...products,
+  ...prices,
+  ...features,
+  ...attachments,
+  ...payment,
+  ...subscriptions,
+];
 const addedNames = new Set(added.map((fixture) => fixture.name));
 
 // Drop any previously generated block, so this is a rewrite and not an append.

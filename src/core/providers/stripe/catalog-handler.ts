@@ -1,10 +1,12 @@
 /**
- * Stripe catalog sync handler — products, and the prices that sell them.
+ * Stripe catalog sync handler — products, the prices that sell them, and the
+ * features they include.
  *
- * Stripe's two resources map onto ours one for one: a `product` is a Product, a
- * `price` is an Offering. That is a happier fit than the identity side got —
- * there is no synthesis of a record that does not exist, as `synthesizeContact`
- * has to do — but three details still need handling here rather than downstream:
+ * Stripe's three resources map onto ours one for one: a `product` is a Product,
+ * a `price` is an Offering, a `ProductFeature` is a ProductFeature. That is a
+ * happier fit than the identity side got — there is no synthesis of a record
+ * that does not exist, as `synthesizeContact` has to do — but four details still
+ * need handling here rather than downstream:
  *
  * 1. **A price usually has no name.** `nickname` is optional and in practice
  *    usually null, while `Offering.name` is required, so an unnamed price would
@@ -17,9 +19,23 @@
  *    flattened and defaulted to `one_time` — a value, not a null, because "does
  *    not recur" is a fact and the writer reads null as "not told".
  *
- * 3. **Ordering.** Products are yielded before prices so an offering resolves
- *    its product against the index the product pages build, the same invariant
- *    customers-before-contacts keeps on the identity side.
+ * 3. **Ordering.** Products are yielded before prices, and prices before
+ *    features, so each child resolves its product against the index the product
+ *    pages build — the same invariant customers-before-contacts keeps on the
+ *    identity side.
+ *
+ * 4. **A feature's payload does not name its product.** Features are read from
+ *    `/v1/products/{id}/features`, a per-product sub-resource, and the response
+ *    carries no `product` field at all. The parent id comes from the URL, so
+ *    this handler retains the product ids it listed and hands each one to
+ *    `flattenProductFeature`. Lose track and every row is linked to the wrong
+ *    product with no error and no null to notice — the one genuinely new hazard
+ *    in this file.
+ *
+ *    That pass is also the only one that is conditional, on two counts: most
+ *    accounts define no entitlement features, and an integration may have no
+ *    mapping rule pointing at the object. Either way the fan-out is pure cost,
+ *    so both are checked before a single per-product request is made.
  *
  * Pagination is Stripe's cursor, with the same three terminating conditions the
  * identity handler documents — `has_more`, an absent cursor, and a cursor that
@@ -27,9 +43,12 @@
  * response rather than handed to us.
  *
  * Stripe has no field-selection parameter, so `ctx.requestedSourcePaths` is
- * unused; a mapped field cannot go missing because it was not requested.
+ * not used to *narrow* a request — a mapped field cannot go missing because it
+ * was not requested. It is read for one other thing: whether the features pass
+ * is worth running at all. See `fetchPages`.
  *
- * Docs: https://docs.stripe.com/api/products/list, .../prices/list
+ * Docs: https://docs.stripe.com/api/products/list, .../prices/list,
+ * .../product-feature/list
  */
 
 import type { RawRecord, TargetObject } from "../../types/common";
@@ -41,11 +60,14 @@ import type {
 } from "../../types/registry";
 import { asString, createProviderSession, type ProviderSession } from "../http";
 import {
+  entitlementFeaturesUrl,
   epochToIso,
   flattenPrice,
+  flattenProductFeature,
   listUrl,
   parseListPage,
   priceProductId,
+  productFeaturesUrl,
   stripePageSize,
   STRIPE_MAX_PAGES,
   type StripeResource,
@@ -94,6 +116,76 @@ async function* pageResource(
   }
 }
 
+/**
+ * Page the features attached to one product.
+ *
+ * A near-copy of `pageResource`'s cursor loop rather than a widening of it, and
+ * that is a deliberate trade. Sharing would mean teaching `pageResource` about
+ * a URL builder with a different signature *and* about a decorator that needs
+ * the parent id — two parameters that only one of its three callers would use.
+ * The three break conditions are the part that matters and they are identical
+ * here, which is what the pagination property test checks across both loops.
+ *
+ * `productId` is closed over and passed to every record. See
+ * `flattenProductFeature`: the product id is not in the payload, so this
+ * function is the only thing that knows it.
+ */
+async function* pageProductFeatures(
+  session: ProviderSession,
+  productId: string
+): AsyncGenerator<SourcePage> {
+  const perPage = stripePageSize();
+
+  let cursor: string | undefined;
+  let pagesFetched = 0;
+
+  for (;;) {
+    const body = parseListPage(
+      await session.getJson(productFeaturesUrl(productId, perPage, cursor))
+    );
+
+    yield {
+      object: "productFeature",
+      records: body.records.map((record: RawRecord) => ({
+        ...record,
+        ...flattenProductFeature(record, productId),
+      })),
+    };
+
+    pagesFetched += 1;
+    if (pagesFetched >= STRIPE_MAX_PAGES) break;
+
+    if (!body.hasMore) break;
+    if (body.lastId === undefined || body.lastId === cursor) break;
+    cursor = body.lastId;
+  }
+}
+
+/**
+ * Whether this account defines any entitlement features at all.
+ *
+ * One request that decides whether the next N are worth making. Most Stripe
+ * accounts do not use Entitlements, and for those the per-product fan-out is
+ * pure cost: one request per product, every sync, to discover nothing. The
+ * feature *definitions* endpoint is flat and listable, so `limit=1` answers it.
+ *
+ * This is a behavioural contract rather than an optimization, which is why
+ * `tests/integration/stripe-catalog.test.ts` asserts the request *count* and not
+ * just the output: a refactor that made the probe always return true would pass
+ * every output assertion while quietly restoring the cost it exists to remove.
+ *
+ * A failure here is not swallowed. If the probe cannot be read the run should
+ * fail loudly through the session's normal policy rather than silently deciding
+ * the account has no features — "we could not ask" and "the answer is no" must
+ * not produce the same sync.
+ */
+async function accountUsesEntitlements(
+  session: ProviderSession
+): Promise<boolean> {
+  const body = parseListPage(await session.getJson(entitlementFeaturesUrl(1)));
+  return body.records.length > 0;
+}
+
 export const stripeCatalogHandler: SyncHandler = {
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(ctx, "Stripe", STRIPE_SESSION_OPTIONS);
@@ -101,22 +193,79 @@ export const stripeCatalogHandler: SyncHandler = {
     // Products first, in full, before any price is yielded. Prices resolve
     // their product through the index the engine builds from these pages, and
     // a price that arrives first is kept but left unlinked until a later run.
-    yield* pageResource(session, "products", "product", withCreatedAt);
+    //
+    // Their ids are retained as they stream past, because a feature's own
+    // payload does not name the product it belongs to — see
+    // `flattenProductFeature` — and the features pass below has no other way to
+    // know which products to ask about. Collected here in the `for await` rather
+    // than by widening `pageResource`, which stays a pure pass-through.
+    const productIds: string[] = [];
+    for await (const page of pageResource(
+      session,
+      "products",
+      "product",
+      withCreatedAt
+    )) {
+      for (const record of page.records) {
+        const id = asString(record["id"]);
+        if (id !== undefined) productIds.push(id);
+      }
+      yield page;
+    }
 
     yield* pageResource(session, "prices", "offering", flattenPrice);
+
+    // Features last, and only if two separate things are true. Ordering
+    // matters for the same reason it does for prices — a feature resolves its
+    // product against the index the product pages built.
+    //
+    // The cheaper condition is asked first, because it costs no requests at
+    // all. Stripe has no field-selection parameter, so `requestedSourcePaths`
+    // is unused for the purpose it was designed for — but it answers a second
+    // question exactly: does any mapping rule point at this object? If none
+    // does, every row fetched below would be collected, rejected by the writer
+    // for a missing name, and reported as a partial run. An integration
+    // connected before this object existed keeps the rules it was connected
+    // with, so that is the ordinary state of every existing integration rather
+    // than an edge case — until someone presses "Reset to suggested" in the
+    // mapping editor and picks up the three shipped defaults.
+    //
+    // Deliberately *not* applied to products or prices. There the fetch is two
+    // requests whatever the rules say, and skipping it would make an empty
+    // mapping indistinguishable from an empty catalog. Here the fetch is one
+    // request per product, which is what makes the asymmetry worth having.
+    const featuresAreMapped =
+      (ctx.requestedSourcePaths.get("productFeature") ?? []).length > 0;
+
+    if (featuresAreMapped && (await accountUsesEntitlements(session))) {
+      for (const productId of productIds) {
+        yield* pageProductFeatures(session, productId);
+      }
+    }
   },
 
   externalIdOf(record: RawRecord): string | undefined {
-    // Both objects carry Stripe's own `id`, and unlike the identity handler
-    // there is no synthesized record to tell apart from a real one — every row
-    // here came off the wire.
+    // Every object here carries Stripe's own `id` — `prod_…`, `price_…`,
+    // `prodft_…` — and unlike the identity handler there is no synthesized
+    // record to tell apart from a real one. Note it is the *attachment's* id
+    // that keys a feature row, not the feature definition's: the same feature on
+    // two products is two rows, and keying on `feat_…` would make the second
+    // overwrite the first.
     return asString(record["id"]);
   },
 
   externalRefsOf(record: RawRecord, object: TargetObject): ExternalRefs {
-    // A product is a root; only an offering hangs off one.
-    if (object !== "offering") return {};
-    return { product: priceProductId(record) };
+    // A product is a root; an offering and a feature each hang off one.
+    switch (object) {
+      case "offering":
+        return { product: priceProductId(record) };
+      case "productFeature":
+        // Read from `product_id`, which `flattenProductFeature` injected from
+        // the request URL. There is no field on the payload to read instead.
+        return { product: asString(record["product_id"]) };
+      default:
+        return {};
+    }
   },
 };
 

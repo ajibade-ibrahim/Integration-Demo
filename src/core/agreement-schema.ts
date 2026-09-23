@@ -24,7 +24,11 @@
  */
 
 import type { ObjectSchema } from "./object-schema";
-import { AGREEMENT_STATUSES, AGREEMENT_TYPES } from "./types/common";
+import {
+  AGREEMENT_ITEM_TYPES,
+  AGREEMENT_STATUSES,
+  AGREEMENT_TYPES,
+} from "./types/common";
 
 // ---------------------------------------------------------------------------
 // Agreement
@@ -147,7 +151,61 @@ const SUBSCRIPTION_SCHEMA: ObjectSchema = {
   ],
 };
 
+// ---------------------------------------------------------------------------
+// Agreement item
+// ---------------------------------------------------------------------------
+
+/**
+ * One priced line on an agreement.
+ *
+ * The third object under this function and the first that is **many per source
+ * record**: a subscription yields one agreement, one subscription and as many
+ * items as it has lines. Everything above resolves one table per target object
+ * from one record; this one fans out, which is why the Stripe handler maps its
+ * page differently for this object alone.
+ *
+ * Note what is *not* here. No name — a line is described by the offering it
+ * points at, and a copied one could only drift. No amount and no total: the
+ * offering holds the money, and a subscription's true total is the provider's
+ * to state rather than ours to sum. This object is the *selection*, not the
+ * thing selected.
+ */
+const AGREEMENT_ITEM_SCHEMA: ObjectSchema = {
+  object: "agreementItem",
+  // "Line item" rather than "Agreement item": the qualifier keeps the union
+  // member honest about which table a row lands in, and a user reading the
+  // mapping editor is already inside the Agreement function.
+  label: "Line item",
+  fields: [
+    { name: "quantity", label: "Quantity", kind: "number" },
+    // The provider's own ordering, not a rank. See the column comment.
+    { name: "position", label: "Position", kind: "number" },
+    {
+      name: "itemType",
+      label: "Line type",
+      kind: "enum",
+      enumValues: AGREEMENT_ITEM_TYPES,
+      maxLength: 20,
+    },
+    // Both derived by the engine from the provider's own ids, as every other
+    // association id on this function is.
+    {
+      name: "associatedAgreementId",
+      label: "Associated agreement",
+      kind: "string",
+      readOnly: true,
+    },
+    {
+      name: "associatedOfferingId",
+      label: "Associated offering",
+      kind: "string",
+      readOnly: true,
+    },
+  ],
+};
+
 export const AGREEMENT_OBJECT_SCHEMA = {
   agreement: AGREEMENT_SCHEMA,
   subscription: SUBSCRIPTION_SCHEMA,
+  agreementItem: AGREEMENT_ITEM_SCHEMA,
 } as const;

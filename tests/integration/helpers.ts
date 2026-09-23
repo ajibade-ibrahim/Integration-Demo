@@ -59,8 +59,10 @@ export async function collect(
     contact: [],
     product: [],
     offering: [],
+    productFeature: [],
     agreement: [],
     subscription: [],
+    agreementItem: [],
   };
 
   for await (const page of handler.fetchPages(ctx)) {

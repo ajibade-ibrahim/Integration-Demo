@@ -98,6 +98,20 @@ export const stripeCatalogDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "active", targetObject: "offering", targetFieldPath: "active", transform: "none" },
   { sourceFieldPath: "billing_scheme", targetObject: "offering", targetFieldPath: "customFields.billing_scheme", transform: "none" },
   { sourceFieldPath: "recurring.usage_type", targetObject: "offering", targetFieldPath: "customFields.usage_type", transform: "none" },
+
+  // --- productFeature ---
+  // All three synthesized by `flattenProductFeature`, and not out of
+  // convenience: `name` and `lookup_key` live inside `entitlement_feature` on
+  // the wire, so the raw paths would be two segments deep, and `feature_id`
+  // shares a segment name with the attachment's own `id`. Mapping the raw
+  // `id` instead would store the `prodft_…` where the `feat_…` belongs, which
+  // is exactly the confusion `externalFeatureId` exists to prevent.
+  //
+  // No default for `associatedProductId`: it is `readOnly` and derived by the
+  // engine from `product_id`, as `offering.associatedProductId` is.
+  { sourceFieldPath: "feature_name", targetObject: "productFeature", targetFieldPath: "name", transform: "trim" },
+  { sourceFieldPath: "lookup_key", targetObject: "productFeature", targetFieldPath: "lookupKey", transform: "trim" },
+  { sourceFieldPath: "feature_id", targetObject: "productFeature", targetFieldPath: "externalFeatureId", transform: "none" },
 ];
 
 /**
@@ -139,4 +153,22 @@ export const stripeAgreementDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "collection_method", targetObject: "subscription", targetFieldPath: "collectionMethod", transform: "none" },
   { sourceFieldPath: "quantity", targetObject: "subscription", targetFieldPath: "quantity", transform: "none" },
   { sourceFieldPath: "item_count", targetObject: "subscription", targetFieldPath: "itemCount", transform: "none" },
+
+  // --- agreementItem ---
+  // `quantity` is the item's own field, read raw: a subscription item really
+  // does carry one, unlike the subscription above whose `quantity` is
+  // synthesized from its first item. The other two are synthesized, and both
+  // for reasons the raw payload cannot supply — `position` is the caller's
+  // index across the completed item list, and `item_type` is a reading of
+  // `price.recurring.usage_type` that resolves to nothing at all unless the
+  // line is metered.
+  //
+  // No defaults for `associatedAgreementId` or `associatedOfferingId`: both
+  // are `readOnly` and derived by the engine from the refs. The agreement one
+  // matters most — the item's own `subscription` field is right there and
+  // mapping it would look correct while bypassing the injection that keeps a
+  // line from reassigning itself to another agreement.
+  { sourceFieldPath: "quantity", targetObject: "agreementItem", targetFieldPath: "quantity", transform: "none" },
+  { sourceFieldPath: "position", targetObject: "agreementItem", targetFieldPath: "position", transform: "none" },
+  { sourceFieldPath: "item_type", targetObject: "agreementItem", targetFieldPath: "itemType", transform: "none" },
 ];

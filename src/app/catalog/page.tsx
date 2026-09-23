@@ -9,6 +9,19 @@ import { Empty, Table, Td } from "../data-table";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Which tab is showing.
+ *
+ * A union resolved once rather than a pair of booleans. Two booleans for three
+ * tabs has a fourth state that cannot happen and that a reader has to prove
+ * cannot happen; the next tab would make that eight.
+ */
+type View = "products" | "offerings" | "features";
+
+function viewFrom(tab: string | undefined): View {
+  return tab === "offerings" || tab === "features" ? tab : "products";
+}
+
 export default async function CatalogPage({
   searchParams,
 }: {
@@ -17,22 +30,26 @@ export default async function CatalogPage({
   bootstrap();
 
   const { tab } = await searchParams;
-  const showOfferings = tab === "offerings";
+  const view = viewFrom(tab);
 
-  const { products, offerings, totals } = await loadCatalog(
+  const { products, offerings, features, totals } = await loadCatalog(
     await currentUserId()
   );
+
+  const empty =
+    totals.products === 0 && totals.offerings === 0 && totals.features === 0;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Catalog</h1>
         <p className="mt-1 text-slate-600">
-          Products and their offerings, as your integrations synced them.
+          Products, their offerings, and the features they include — as your
+          integrations synced them.
         </p>
       </div>
 
-      {totals.products === 0 && totals.offerings === 0 ? (
+      {empty ? (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
           <p className="text-slate-600">Nothing synced yet.</p>
           <p className="mt-1 text-sm text-slate-500">
@@ -49,11 +66,20 @@ export default async function CatalogPage({
       ) : (
         <>
           <div className="flex gap-2">
-            <Tab href="/catalog" active={!showOfferings}>
+            <Tab href="/catalog" active={view === "products"}>
               Products ({totals.products})
             </Tab>
-            <Tab href="/catalog?tab=offerings" active={showOfferings}>
+            <Tab href="/catalog?tab=offerings" active={view === "offerings"}>
               Offerings ({totals.offerings})
+            </Tab>
+            {/*
+              Shown even at zero, unlike a tab that hid itself when empty. Most
+              Stripe accounts define no entitlements, and "Features (0)" is the
+              answer to "did the feature sync work?" — a missing tab would leave
+              that indistinguishable from a build without the feature in it.
+            */}
+            <Tab href="/catalog?tab=features" active={view === "features"}>
+              Features ({totals.features})
             </Tab>
           </div>
 
@@ -72,7 +98,23 @@ export default async function CatalogPage({
             </p>
           )}
 
-          {showOfferings ? (
+          {/*
+            Worded more strongly than the offering warning above, because it
+            means something worse. A feature&apos;s product id comes from the URL
+            the sync just called, so the product was listed in the same run — it
+            failing to resolve means the product was rejected, and no later sync
+            fixes that on its own.
+          */}
+          {totals.unlinkedFeatures > 0 && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              {totals.unlinkedFeatures} feature
+              {totals.unlinkedFeatures === 1 ? "" : "s"} could not be linked to
+              their product, although the sync read them from that product.
+              Check the latest run report for a rejected product.
+            </p>
+          )}
+
+          {view === "offerings" ? (
             <Table headers={["Offering", "Price", "Product", "Active", "Source"]}>
               {offerings.map((row) => {
                 const price = formatOfferingPrice(row);
@@ -81,15 +123,10 @@ export default async function CatalogPage({
                     <Td className="font-medium">{row.name}</Td>
                     <Td>{price ?? <Empty />}</Td>
                     <Td>
-                      {row.productName !== null ? (
-                        row.productName
-                      ) : row.externalProductId !== null ? (
-                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">
-                          unresolved #{row.externalProductId}
-                        </span>
-                      ) : (
-                        <Empty />
-                      )}
+                      <ProductCell
+                        name={row.productName}
+                        externalId={row.externalProductId}
+                      />
                     </Td>
                     <Td>
                       <ActiveCell value={row.active} />
@@ -104,9 +141,57 @@ export default async function CatalogPage({
                 );
               })}
             </Table>
+          ) : view === "features" ? (
+            totals.features === 0 ? (
+              <p className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
+                No features synced. Stripe returns these only for accounts using
+                its Entitlements API — if yours does not, there is nothing here
+                to miss, and the sync skips the lookup entirely rather than
+                asking once per product.
+              </p>
+            ) : (
+              <Table headers={["Feature", "Lookup key", "Product", "Source"]}>
+                {features.map((row) => (
+                  <tr key={row.id} className="border-t border-slate-100">
+                    <Td className="font-medium">{row.name}</Td>
+                    <Td>
+                      {/*
+                        Monospaced because it is an identifier that code reads,
+                        not a label a person reads — which is the whole reason
+                        it is stored in its own column beside the name.
+                      */}
+                      {row.lookupKey !== null ? (
+                        <span className="font-mono text-xs">{row.lookupKey}</span>
+                      ) : (
+                        <Empty />
+                      )}
+                    </Td>
+                    <Td>
+                      <ProductCell
+                        name={row.productName}
+                        externalId={row.externalProductId}
+                      />
+                    </Td>
+                    <Td className="text-xs text-slate-400">
+                      {row.integrationLabel}
+                      <span className="ml-1 font-mono">
+                        #{row.externalSourceId}
+                      </span>
+                    </Td>
+                  </tr>
+                ))}
+              </Table>
+            )
           ) : (
             <Table
-              headers={["Product", "Description", "Offerings", "Active", "Source"]}
+              headers={[
+                "Product",
+                "Description",
+                "Offerings",
+                "Features",
+                "Active",
+                "Source",
+              ]}
             >
               {products.map((row) => (
                 <tr key={row.id} className="border-t border-slate-100">
@@ -115,6 +200,7 @@ export default async function CatalogPage({
                     {row.description ?? <Empty />}
                   </Td>
                   <Td>{row.offeringCount}</Td>
+                  <Td>{row.featureCount}</Td>
                   <Td>
                     <ActiveCell value={row.active} />
                   </Td>
@@ -132,6 +218,31 @@ export default async function CatalogPage({
       )}
     </div>
   );
+}
+
+/**
+ * The product a child row belongs to — resolved, unresolved, or never named.
+ *
+ * Three states and one renderer, shared by offerings and features because they
+ * hold the same two columns for the same reason. An "unresolved" badge that
+ * looked different on the two tabs would read as two different problems.
+ */
+function ProductCell({
+  name,
+  externalId,
+}: {
+  name: string | null;
+  externalId: string | null;
+}) {
+  if (name !== null) return <>{name}</>;
+  if (externalId !== null) {
+    return (
+      <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">
+        unresolved #{externalId}
+      </span>
+    );
+  }
+  return <Empty />;
 }
 
 /**

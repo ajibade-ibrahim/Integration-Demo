@@ -119,14 +119,16 @@ export const STRIPE_RESOURCES = [
 export type StripeResource = (typeof STRIPE_RESOURCES)[number];
 
 /**
- * A `/v1/<resource>` list URL with Stripe's cursor pagination applied.
+ * A paginated Stripe URL for any path, with the cursor parameters applied.
  *
- * One builder for every resource, because Stripe's list endpoints are uniform:
- * same `limit`, same `starting_after`, same envelope. Three near-identical URL
- * builders would be three places for the cursor parameter to be misspelled.
+ * Private, and the sole implementation of Stripe's pagination convention. It
+ * exists because `/v1/products/{id}/features` is not a top-level list resource
+ * and so cannot go through `listUrl`, while sharing every rule with it — same
+ * `limit`, same `starting_after`, same refusal to let a caller's filter clobber
+ * either.
  */
-export function listUrl(
-  resource: StripeResource,
+function paginatedUrl(
+  path: string,
   limit: number,
   startingAfter?: string,
   extra?: Readonly<Record<string, string>>
@@ -134,7 +136,7 @@ export function listUrl(
   // Concatenated, not `new URL(path, base)`: a leading-slash path replaces the
   // base's own path entirely, which would silently strip any prefix a mock or
   // proxy is mounted under.
-  const url = new URL(`${stripeApiBase().replace(/\/$/, "")}/v1/${resource}`);
+  const url = new URL(`${stripeApiBase().replace(/\/$/, "")}${path}`);
   url.searchParams.set("limit", String(limit));
   if (startingAfter !== undefined) {
     url.searchParams.set("starting_after", startingAfter);
@@ -146,6 +148,95 @@ export function listUrl(
     url.searchParams.set(key, value);
   }
   return url.toString();
+}
+
+/**
+ * A `/v1/<resource>` list URL with Stripe's cursor pagination applied.
+ *
+ * One builder for every resource, because Stripe's list endpoints are uniform:
+ * same `limit`, same `starting_after`, same envelope. Three near-identical URL
+ * builders would be three places for the cursor parameter to be misspelled.
+ *
+ * Still takes a `StripeResource` rather than a path, which is the whole point of
+ * keeping it as a wrapper: a typo cannot reach the wire as a 404.
+ */
+export function listUrl(
+  resource: StripeResource,
+  limit: number,
+  startingAfter?: string,
+  extra?: Readonly<Record<string, string>>
+): string {
+  return paginatedUrl(`/v1/${resource}`, limit, startingAfter, extra);
+}
+
+/**
+ * The features attached to one product.
+ *
+ * A per-product sub-resource rather than a filter on a list, which is why this
+ * cannot be a `listUrl` call: there is no `/v1/product_features?product=…`, and
+ * `?expand[]=features` on the product itself answers "This property cannot be
+ * expanded (features)". Reading features therefore costs one paginated request
+ * per product, and `accountUsesEntitlements` in the catalog handler exists to
+ * avoid paying it for the accounts that would learn nothing.
+ *
+ * The id is percent-encoded. Belt and braces for Stripe's own ids, which are
+ * alphanumeric — and load-bearing for anything a mock, proxy or fixture returns,
+ * because this is the first path segment in the system built from data rather
+ * than from a literal.
+ */
+export function productFeaturesUrl(
+  productId: string,
+  limit: number,
+  startingAfter?: string
+): string {
+  return paginatedUrl(
+    `/v1/products/${encodeURIComponent(productId)}/features`,
+    limit,
+    startingAfter
+  );
+}
+
+/**
+ * The account's feature *definitions* — one page, used only to ask whether
+ * there are any.
+ *
+ * This is the cheap answer to an expensive question. The per-product fan-out
+ * above costs one request per product to discover nothing at all on every
+ * account that does not use Entitlements, which is most of them. This endpoint
+ * is flat and listable, so a single request with `limit=1` settles it.
+ *
+ * Note what it deliberately is *not* used for: the definitions it returns are
+ * not synced. A `Feature` row would add only the ability to see a feature
+ * attached to no product, and `ProductFeature` already carries the feature's id
+ * and name denormalized onto every attachment.
+ */
+export function entitlementFeaturesUrl(limit: number): string {
+  return paginatedUrl("/v1/entitlements/features", limit);
+}
+
+/**
+ * The items on one subscription, as a filtered top-level list.
+ *
+ * Unlike `productFeaturesUrl` this is a real list endpoint with the parent as a
+ * query parameter, so the subscription id needs none of that builder's path
+ * encoding — `URLSearchParams` escapes it, and `paginatedUrl` already refuses
+ * to let `extra` clobber the cursor.
+ *
+ * Only reached when a subscription carries more items than Stripe inlines.
+ * `subscription.items.data` holds the first ten and sets `has_more` beyond
+ * that, so the common case costs nothing and a large subscription costs one
+ * request per extra page. Skipping this and trusting the inline list is the
+ * bug that would let the writer delete a subscription's eleventh line onwards
+ * on every sync — see the completeness obligation on `SyncHandler`.
+ */
+export function subscriptionItemsUrl(
+  subscriptionId: string,
+  limit: number,
+  startingAfter?: string
+): string {
+  return paginatedUrl("/v1/subscription_items", limit, startingAfter, {
+    subscription: subscriptionId,
+  });
 }
 
 /** Back-compat alias for the customers list, which several call sites name. */
@@ -397,6 +488,49 @@ export function priceProductId(price: RawRecord): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
+// Product feature
+// ---------------------------------------------------------------------------
+
+/**
+ * Flatten one `ProductFeature` into a mappable record.
+ *
+ * Two things make this unlike `flattenPrice`, and both are why it exists.
+ *
+ * **1. The parent id is not in the payload.** A ProductFeature response is
+ * `{ id, object, livemode, entitlement_feature: { id, name, lookup_key } }` —
+ * there is no `product` field anywhere in it. The product id comes from *the URL
+ * the caller just requested*, which is why this takes a second argument where
+ * `flattenPrice` takes one. A caller that loses track of which product it was
+ * fetching links every row to the wrong product **silently**: no error, no null,
+ * nothing to notice, just a catalog that is confidently wrong. The argument is
+ * required rather than optional precisely so that losing track is a type error.
+ *
+ * It is also injected *last* and unconditionally, so a record carrying a
+ * misleading `product` or `product_id` key of its own cannot win. The URL is the
+ * only authority here.
+ *
+ * **2. The interesting fields are one level down.** `name` and `lookup_key`
+ * belong to the nested feature definition rather than to the attachment, so they
+ * are lifted to the top level — a mapping rule is one path, as it is for
+ * `interval`. They are renamed rather than passed through: `name` at the top
+ * level of a record whose `id` is a `prodft_…` would read as the attachment's
+ * name, which is not a thing that exists.
+ */
+export function flattenProductFeature(
+  feature: RawRecord,
+  productId: string
+): RawRecord {
+  const definition = asRecord(feature["entitlement_feature"]);
+
+  return {
+    feature_name: asString(definition?.["name"]),
+    lookup_key: asString(definition?.["lookup_key"]),
+    feature_id: asString(definition?.["id"]),
+    product_id: productId,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Agreement
 // ---------------------------------------------------------------------------
 
@@ -436,12 +570,36 @@ export function agreementStatusOf(subscription: RawRecord): string | undefined {
   return raw === undefined ? undefined : STRIPE_SUBSCRIPTION_STATUS[raw];
 }
 
-/** The subscription items list, which Stripe returns inline on each record. */
-function subscriptionItems(subscription: RawRecord): readonly RawRecord[] {
+/**
+ * The subscription items list, which Stripe returns inline on each record.
+ *
+ * **The first ten only.** Stripe paginates this list inside the subscription
+ * and sets `items.has_more` when there are more, so this is the complete list
+ * for the overwhelming majority of subscriptions and silently is not for a
+ * large one. `subscriptionItemsComplete` below is how a caller asks, and the
+ * agreement handler is obliged to finish the list before yielding any of it.
+ */
+export function subscriptionItems(
+  subscription: RawRecord
+): readonly RawRecord[] {
   const items = asRecord(subscription["items"]);
   return asArray(items?.["data"]).filter(
     (row): row is RawRecord => asRecord(row) !== undefined
   );
+}
+
+/**
+ * Whether the inlined item list is the whole of it.
+ *
+ * Reads `items.has_more` and defaults to **complete** when the field is
+ * missing, which is the right default for exactly one reason: Stripe always
+ * sends `has_more` on a list object, so an absent one means the payload is not
+ * a Stripe list — a fixture, a mock, or a hand-built record — and those carry
+ * everything they have. Defaulting the other way would make every test fixture
+ * trigger a pagination request against a URL no mock serves.
+ */
+export function subscriptionItemsComplete(subscription: RawRecord): boolean {
+  return asRecord(subscription["items"])?.["has_more"] !== true;
 }
 
 /**
@@ -607,6 +765,68 @@ export function subscriptionCustomerId(
   const bare = asString(raw);
   if (bare !== undefined) return bare;
   return asString(asRecord(raw)?.["id"]);
+}
+
+/**
+ * What kind of line an item is, when Stripe gives enough to say.
+ *
+ * It gives enough exactly once: a price whose `recurring.usage_type` is
+ * `metered` is a usage line, which is a fact rather than a reading. Everything
+ * else returns `undefined` and the column stays null.
+ *
+ * Not defaulted to `"plan"`, and this is the whole reason the function is one
+ * line long rather than three. Stripe's subscription items are
+ * undifferentiated — the base plan and a seat add-on are the same object with
+ * different prices, and "the first one is the plan" is a convention of how
+ * subscriptions are usually created, not something the API states. Writing
+ * `"plan"` on every non-metered line would fill the column with a guess and
+ * destroy the one thing it exists to record, which is whether the provider
+ * actually said. Chargebee and Stigg do say; Stripe does not.
+ */
+export function itemTypeOf(item: RawRecord): string | undefined {
+  const recurring = asRecord(asRecord(item["price"])?.["recurring"]);
+  return asString(recurring?.["usage_type"]) === "metered"
+    ? "usage"
+    : undefined;
+}
+
+/**
+ * The fields synthesized onto one subscription item before mapping.
+ *
+ * Two things make this unlike the flatteners above, and both are the reason it
+ * takes three arguments where `flattenSubscription` takes one.
+ *
+ * **`agreement_id` is injected by the caller, never read from the record.**
+ * Stripe's subscription item *does* carry a `subscription` field, which makes
+ * this stricter than `flattenProductFeature`'s version of the same rule rather
+ * than looser: there is a plausible-looking value right there in the payload
+ * and it is deliberately ignored. A record that could name its own parent is a
+ * record that could reassign itself to another agreement, and this is the one
+ * writer that deletes — a line that jumped agreements would take its former
+ * siblings with it. The caller holds the subscription it fetched these from;
+ * that is the only id with any authority.
+ *
+ * **`position` is the caller's index, not anything Stripe sends.** It counts
+ * across the *completed* list, including pages fetched separately, so it
+ * orders the lines the way the provider returned them.
+ */
+export function flattenAgreementItem(
+  item: RawRecord,
+  subscriptionId: string,
+  position: number
+): RawRecord {
+  const price = asRecord(item["price"]);
+  const itemType = itemTypeOf(item);
+
+  return {
+    agreement_id: subscriptionId,
+    offering_id: asString(price?.["id"]),
+    position,
+    // Omitted rather than null, as `flattenSubscription` does for an
+    // unrecognised status: no value means no mapping rule fires and the writer
+    // never sees something to warn about.
+    ...(itemType === undefined ? {} : { item_type: itemType }),
+  };
 }
 
 /** The price id a subscription's first item names, or undefined if it has none. */

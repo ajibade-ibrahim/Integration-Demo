@@ -23,7 +23,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { prisma } from "@/lib/prisma";
 import {
+  relinkOrphanedAgreementItems,
   relinkOrphanedAgreements,
+  writeAgreementItems,
   writeAgreements,
   writeCustomers,
   writeOfferings,
@@ -60,6 +62,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   const where = { where: { integrationId: INTEGRATION_ID } };
+  await prisma.agreementItem.deleteMany(where);
   await prisma.subscription.deleteMany(where);
   await prisma.agreement.deleteMany(where);
   await prisma.offering.deleteMany(where);
@@ -113,6 +116,23 @@ function subscriptionRecord(
         itemCount: "1",
         ...fields,
       },
+      customFields: {},
+      crossRefs: {},
+    } as MappedRecord,
+  };
+}
+
+function itemRecord(
+  externalSourceId: string,
+  refs: { agreement?: string; offering?: string },
+  fields: Record<string, string | null> = {}
+): CollectedRecord {
+  return {
+    externalSourceId,
+    externalRefs: refs,
+    mapped: {
+      object: "agreementItem",
+      fields: { quantity: "1", position: "0", ...fields },
       customFields: {},
       crossRefs: {},
     } as MappedRecord,
@@ -493,6 +513,377 @@ describe("the subscription half", () => {
   });
 });
 
+describe("writing line items", () => {
+  /** Write one agreement and hand back the index its items resolve through. */
+  async function seedAgreement(
+    externalSourceId = "sub_1"
+  ): Promise<Map<string, string>> {
+    await seedParents();
+    const agreements = await writeAgreements(INTEGRATION_ID, [
+      agreementRecord(externalSourceId, {
+        customer: "cus_1",
+        offering: "price_1",
+      }),
+    ]);
+    return agreements.externalToInternal;
+  }
+
+  it("links a line to its agreement and its offering", async () => {
+    const index = await seedAgreement();
+
+    const result = await writeAgreementItems(
+      INTEGRATION_ID,
+      [itemRecord("si_1", { agreement: "sub_1", offering: "price_1" })],
+      index
+    );
+
+    expect(result.written).toBe(1);
+    expect(result.issues).toEqual([]);
+
+    const row = await prisma.agreementItem.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+      include: { agreement: true, offering: true },
+    });
+    expect(row.agreement.externalSourceId).toBe("sub_1");
+    expect(row.offering?.externalSourceId).toBe("price_1");
+    expect(row.quantity).toBe(1);
+    expect(row.position).toBe(0);
+    // Unset, because the default rules map `item_type` and Stripe sends none
+    // for a licensed line. Null here means "the provider did not say".
+    expect(row.itemType).toBeNull();
+  });
+
+  it("rejects a line with no id", async () => {
+    const index = await seedAgreement();
+
+    const result = await writeAgreementItems(
+      INTEGRATION_ID,
+      [itemRecord("", { agreement: "sub_1" })],
+      index
+    );
+
+    expect(result.written).toBe(0);
+    expect(result.issues[0]?.severity).toBe("rejected");
+  });
+
+  it("rejects a line whose agreement was not written", async () => {
+    // The required-FK case, and the one place this family breaks the house
+    // pattern on purpose: every other unresolvable parent keeps the row.
+    // There is no row to keep here — the column is required and the foreign
+    // key cascades, so a line with no agreement is a quantity about nothing.
+    const index = await seedAgreement();
+
+    const result = await writeAgreementItems(
+      INTEGRATION_ID,
+      [itemRecord("si_1", { agreement: "sub_MISSING", offering: "price_1" })],
+      index
+    );
+
+    expect(result.written).toBe(0);
+    expect(result.issues[0]?.severity).toBe("rejected");
+    expect(result.issues[0]?.fieldName).toBe("associatedAgreementId");
+    expect(
+      await prisma.agreementItem.count({ where: { integrationId: INTEGRATION_ID } })
+    ).toBe(0);
+  });
+
+  it("keeps a line whose offering did not resolve, and warns", async () => {
+    // The nullable edge, and the opposite answer: the catalog function may
+    // simply not be on this integration, and a line that knows its quantity
+    // and its position is worth keeping until it is.
+    const index = await seedAgreement();
+
+    const result = await writeAgreementItems(
+      INTEGRATION_ID,
+      [itemRecord("si_1", { agreement: "sub_1", offering: "price_GHOST" })],
+      index
+    );
+
+    expect(result.written).toBe(1);
+    expect(result.issues[0]?.severity).toBe("warning");
+    expect(result.issues[0]?.fieldName).toBe("associatedOfferingId");
+
+    const row = await prisma.agreementItem.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+    });
+    expect(row.offeringId).toBeNull();
+    // Retained, which is what makes the repair possible at all.
+    expect(row.externalOfferingId).toBe("price_GHOST");
+  });
+
+  it("relinks an offering that arrives later", async () => {
+    const index = await seedAgreement();
+    await writeAgreementItems(
+      INTEGRATION_ID,
+      [itemRecord("si_1", { agreement: "sub_1", offering: "price_LATE" })],
+      index
+    );
+
+    // The catalog function connects and the price shows up.
+    const products = await writeProducts(INTEGRATION_ID, [
+      {
+        externalSourceId: "prod_2",
+        mapped: {
+          object: "product",
+          fields: { name: "Seats" },
+          customFields: {},
+          crossRefs: {},
+        } as MappedRecord,
+      },
+    ]);
+    await writeOfferings(
+      INTEGRATION_ID,
+      [
+        {
+          externalSourceId: "price_LATE",
+          externalRefs: { product: "prod_2" },
+          mapped: {
+            object: "offering",
+            fields: { name: "$10/seat" },
+            customFields: {},
+            crossRefs: {},
+          } as MappedRecord,
+        },
+      ],
+      products.externalToInternal
+    );
+
+    expect(await relinkOrphanedAgreementItems(INTEGRATION_ID)).toBe(1);
+
+    const row = await prisma.agreementItem.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+      include: { offering: true },
+    });
+    expect(row.offering?.externalSourceId).toBe("price_LATE");
+  });
+
+  it("warns and leaves the type unset for a word it does not know", async () => {
+    // The policy every enum on this function gets: a line whose type we
+    // cannot read is still a line. Null already means "the provider did not
+    // say", so an unreadable value lands in exactly the right state.
+    const index = await seedAgreement();
+
+    const result = await writeAgreementItems(
+      INTEGRATION_ID,
+      [
+        itemRecord(
+          "si_1",
+          { agreement: "sub_1", offering: "price_1" },
+          { itemType: "overage" }
+        ),
+      ],
+      index
+    );
+
+    expect(result.written).toBe(1);
+    expect(result.issues.map((i) => i.fieldName)).toEqual(["itemType"]);
+    expect(
+      (await prisma.agreementItem.findFirstOrThrow({
+        where: { integrationId: INTEGRATION_ID },
+      })).itemType
+    ).toBeNull();
+  });
+
+  it("stores a type the provider did give, case-insensitively", async () => {
+    const index = await seedAgreement();
+
+    await writeAgreementItems(
+      INTEGRATION_ID,
+      [
+        itemRecord(
+          "si_1",
+          { agreement: "sub_1", offering: "price_1" },
+          { itemType: "Add_On" }
+        ),
+      ],
+      index
+    );
+
+    expect(
+      (await prisma.agreementItem.findFirstOrThrow({
+        where: { integrationId: INTEGRATION_ID },
+      })).itemType
+    ).toBe("add_on");
+  });
+
+  it("is idempotent across runs", async () => {
+    const index = await seedAgreement();
+    const records = [
+      itemRecord("si_1", { agreement: "sub_1", offering: "price_1" }),
+      itemRecord(
+        "si_2",
+        { agreement: "sub_1", offering: "price_1" },
+        { position: "1", quantity: "25" }
+      ),
+    ];
+
+    await writeAgreementItems(INTEGRATION_ID, records, index);
+    await writeAgreementItems(INTEGRATION_ID, records, new Map(index));
+
+    // Two rows, not four — and crucially the second run's reconciliation did
+    // not delete the rows the second run had just written.
+    expect(
+      await prisma.agreementItem.count({ where: { integrationId: INTEGRATION_ID } })
+    ).toBe(2);
+  });
+});
+
+/**
+ * The reconciliation matrix — the only place in this system where a sync
+ * deletes a synced row.
+ *
+ * Four cases, and only the first deletes. The other three are the guard: an
+ * agreement is reconciled only if at least one of its lines was written this
+ * run, so an empty page, a rejected parent, a filtered-out subscription or a
+ * handler bug can none of them remove anything.
+ *
+ * Written before the writer was, because getting these backwards is not a
+ * failing test — it is a sync that quietly destroys a customer's line items
+ * and reports success.
+ */
+describe("reconciling line items", () => {
+  async function seedTwoLines(): Promise<Map<string, string>> {
+    await seedParents();
+    const agreements = await writeAgreements(INTEGRATION_ID, [
+      agreementRecord("sub_1", { customer: "cus_1", offering: "price_1" }),
+      agreementRecord("sub_2", { customer: "cus_1", offering: "price_1" }),
+    ]);
+    await writeAgreementItems(
+      INTEGRATION_ID,
+      [
+        itemRecord("si_plan", { agreement: "sub_1", offering: "price_1" }),
+        itemRecord(
+          "si_seats",
+          { agreement: "sub_1", offering: "price_1" },
+          { position: "1" }
+        ),
+        itemRecord("si_other", { agreement: "sub_2", offering: "price_1" }),
+      ],
+      agreements.externalToInternal
+    );
+    return agreements.externalToInternal;
+  }
+
+  const idsFor = async (externalSourceId: string): Promise<string[]> =>
+    (
+      await prisma.agreementItem.findMany({
+        where: {
+          integrationId: INTEGRATION_ID,
+          agreement: { externalSourceId },
+        },
+        select: { externalSourceId: true },
+        orderBy: { externalSourceId: "asc" },
+      })
+    ).map((r) => r.externalSourceId);
+
+  it("deletes a line the agreement no longer has", async () => {
+    // The add-on was removed at the provider. The whole point: without this,
+    // the line list says three where the subscription has two, and nothing on
+    // the row contradicts it.
+    const index = await seedTwoLines();
+
+    const result = await writeAgreementItems(
+      INTEGRATION_ID,
+      [itemRecord("si_plan", { agreement: "sub_1", offering: "price_1" })],
+      index
+    );
+
+    expect(await idsFor("sub_1")).toEqual(["si_plan"]);
+    // Reported, not silent. This is the one writer that can lose data, and a
+    // run whose numbers changed without saying why is the failure this
+    // codebase warns about everywhere else.
+    expect(result.issues.map((i) => i.severity)).toEqual(["warning"]);
+    expect(result.issues[0]?.reason).toContain("no longer on this agreement");
+  });
+
+  it("leaves another agreement's lines alone", async () => {
+    const index = await seedTwoLines();
+
+    await writeAgreementItems(
+      INTEGRATION_ID,
+      [itemRecord("si_plan", { agreement: "sub_1", offering: "price_1" })],
+      index
+    );
+
+    expect(await idsFor("sub_2")).toEqual(["si_other"]);
+  });
+
+  it("keeps every line when the run yielded none at all", async () => {
+    // The guard that matters most. A handler bug, a provider outage mid-page,
+    // or a subscription filtered out of this run all arrive here as an empty
+    // list — and an empty list must never be read as "this agreement has no
+    // lines any more".
+    const index = await seedTwoLines();
+
+    const result = await writeAgreementItems(INTEGRATION_ID, [], index);
+
+    expect(result.written).toBe(0);
+    expect(result.issues).toEqual([]);
+    expect(await idsFor("sub_1")).toEqual(["si_plan", "si_seats"]);
+    expect(await idsFor("sub_2")).toEqual(["si_other"]);
+  });
+
+  it("keeps every line when this run's lines were all rejected", async () => {
+    // Nothing written means nothing to reconcile against, so the guard holds
+    // here for the same reason — and this is the case that would otherwise
+    // turn a mapping mistake into data loss.
+    const index = await seedTwoLines();
+
+    const result = await writeAgreementItems(
+      INTEGRATION_ID,
+      [itemRecord("", { agreement: "sub_1", offering: "price_1" })],
+      index
+    );
+
+    expect(result.written).toBe(0);
+    expect(await idsFor("sub_1")).toEqual(["si_plan", "si_seats"]);
+  });
+
+  it("keeps every line of an agreement absent from this run", async () => {
+    // sub_2 is not mentioned. Reconciliation is per agreement and keyed on
+    // what was written, so an agreement nobody wrote a line for is not
+    // reconciled at all.
+    const index = await seedTwoLines();
+
+    await writeAgreementItems(
+      INTEGRATION_ID,
+      [
+        itemRecord("si_plan", { agreement: "sub_1", offering: "price_1" }),
+        itemRecord(
+          "si_seats",
+          { agreement: "sub_1", offering: "price_1" },
+          { position: "1" }
+        ),
+      ],
+      index
+    );
+
+    expect(await idsFor("sub_2")).toEqual(["si_other"]);
+  });
+
+  it("reports nothing when the lines are unchanged", async () => {
+    const index = await seedTwoLines();
+
+    const result = await writeAgreementItems(
+      INTEGRATION_ID,
+      [
+        itemRecord("si_plan", { agreement: "sub_1", offering: "price_1" }),
+        itemRecord(
+          "si_seats",
+          { agreement: "sub_1", offering: "price_1" },
+          { position: "1" }
+        ),
+      ],
+      index
+    );
+
+    // A steady-state sync must be quiet. A removal warning that fired every
+    // run would be the "warning that appears once and then goes quiet" problem
+    // in reverse — noise that trains people to ignore the real one.
+    expect(result.issues).toEqual([]);
+  });
+});
+
 describe("per-function dispatch", () => {
   it("writes the agreement before its subscription, whatever order they arrive in", async () => {
     // The collected map is built child-first on purpose. The dispatch reads
@@ -511,7 +902,11 @@ describe("per-function dispatch", () => {
       collected
     );
 
-    expect(result.counts).toEqual({ agreement: 1, subscription: 1 });
+    expect(result.counts).toEqual({
+      agreement: 1,
+      subscription: 1,
+      agreementItem: 0,
+    });
     const row = await prisma.subscription.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
       include: { agreement: true },
@@ -519,7 +914,7 @@ describe("per-function dispatch", () => {
     expect(row.agreement.externalSourceId).toBe("sub_1");
   });
 
-  it("counts both objects, and no others", async () => {
+  it("counts its own three objects, and no others", async () => {
     const collected = new Map<TargetObject, CollectedRecord[]>();
     collected.set("agreement", [agreementRecord("sub_1", {})]);
     collected.set("subscription", [subscriptionRecord("sub_1", "sub_1")]);
@@ -534,6 +929,7 @@ describe("per-function dispatch", () => {
     // run report should say for an agreement sync.
     expect(Object.keys(result.counts).sort()).toEqual([
       "agreement",
+      "agreementItem",
       "subscription",
     ]);
   });

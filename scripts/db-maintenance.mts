@@ -143,6 +143,18 @@ report(
   }),
   " — they relink when the product syncs"
 );
+// Expected to be *zero*, not merely small, which is why it is reported
+// separately from the offerings above rather than added to them. A feature's
+// product id comes from the URL the sync called, so the product was listed in
+// the same run; a non-zero figure means that product was rejected by the
+// writer, and there is no relink pass that will ever clear it.
+report(
+  "product features whose product did not resolve",
+  await prisma.productFeature.count({
+    where: { productId: null, externalProductId: { not: null } },
+  }),
+  " — expected zero; a non-zero count means a product was rejected"
+);
 // Two edges, reported separately. An agreement's customer comes from the
 // identity function and its offering from catalog, so a row can have either
 // half linked and the other not — and one combined figure would be wrong about
@@ -161,13 +173,31 @@ report(
   }),
   " — they relink when the catalog syncs"
 );
-// Not an unresolved association but the same class of thing: a fact about the
-// row that is only visible if something says it out loud. Only the first priced
-// item of a subscription is linked to an offering.
 report(
-  "subscriptions with more priced items than we linked",
-  await prisma.subscription.count({ where: { itemCount: { gt: 1 } } }),
-  " — only the first item is linked to an offering"
+  "line items whose offering did not resolve",
+  await prisma.agreementItem.count({
+    where: { offeringId: null, externalOfferingId: { not: null } },
+  }),
+  " — they relink when the catalog syncs"
+);
+// Not an unresolved association but the same class of thing: a fact about the
+// row that is only visible if something says it out loud.
+//
+// The provider's own count against the lines we actually stored. These agreed
+// on every row until one failed to write, which is the only way they can come
+// apart — so unlike the two above, this figure is expected to be zero and a
+// non-zero one means a rejected line, not a function waiting to be connected.
+const subscriptions = await prisma.subscription.findMany({
+  select: { itemCount: true, agreement: { select: { _count: { select: { items: true } } } } },
+});
+report(
+  "subscriptions whose stored line count differs from the provider's",
+  subscriptions.filter(
+    (s) => s.itemCount !== null && s.itemCount !== s.agreement._count.items
+  ).length,
+  " — expected zero once every integration has synced since line items" +
+    " existed; before that it counts rows that predate the table, and after" +
+    " it a difference means a line was rejected"
 );
 report(
   "customers not yet linked to an account",

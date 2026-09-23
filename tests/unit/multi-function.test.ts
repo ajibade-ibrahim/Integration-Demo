@@ -187,13 +187,22 @@ describe("the agreement function", () => {
   // Declaring it under billing is what produces a "subscription table" that
   // order forms and amendments later have to be retrofitted onto, so this pins
   // the declaration rather than trusting a comment to survive.
-  it("owns subscriptions, and billing does not", () => {
+  it("owns subscriptions and their lines, and billing does not", () => {
     expect(functionRegistry.require("agreement").dataModels).toEqual([
       "agreement",
       "subscription",
+      "agreementItem",
     ]);
     expect(functionRegistry.require("billing").dataModels).not.toContain(
       "subscription"
+    );
+    // Named `agreementItem` rather than `subscriptionItem` for the same
+    // reason: a line belongs to every agreement type — ContractLineItem,
+    // OrderItem, a HubSpot deal's line items — and naming it after the one
+    // type with a handler today is the discriminator mistake this function
+    // was built to avoid.
+    expect(functionRegistry.require("agreement").dataModels).not.toContain(
+      "subscriptionItem"
     );
   });
 

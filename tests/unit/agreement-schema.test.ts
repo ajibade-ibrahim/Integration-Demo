@@ -27,8 +27,10 @@ import {
 } from "@/core/object-schema";
 import { functionRegistry } from "@/core/registries/function-registry";
 import {
+  AGREEMENT_ITEM_TYPES,
   AGREEMENT_STATUSES,
   AGREEMENT_TYPES,
+  TARGET_OBJECTS,
   isAgreementStatus,
   isAgreementType,
 } from "@/core/types/common";
@@ -36,8 +38,9 @@ import type { FieldMappingRule } from "@/core/types/mapping";
 
 bootstrap();
 
-const fieldNames = (object: "agreement" | "subscription"): string[] =>
-  OBJECT_SCHEMAS[object].fields.map((f) => f.name);
+const fieldNames = (
+  object: "agreement" | "subscription" | "agreementItem"
+): string[] => OBJECT_SCHEMAS[object].fields.map((f) => f.name);
 
 describe("the agreement schema", () => {
   it("requires a name, because Stripe supplies none", () => {
@@ -142,13 +145,78 @@ describe("the subscription schema", () => {
   });
 });
 
+describe("the line-item schema", () => {
+  it("belongs to the agreement, not to the subscription", () => {
+    // The naming decision, pinned because it is the expensive one to reverse.
+    // Line items are the *primary* structure of three of the four agreement
+    // types — Salesforce ContractLineItem and OrderItem, HubSpot deal line
+    // items — and a subscription is the odd case where one offering link
+    // almost suffices. A `subscriptionItem` object would have to be migrated
+    // the day an order-form provider arrives.
+    expect(TARGET_OBJECTS).toContain("agreementItem");
+    expect(TARGET_OBJECTS).not.toContain("subscriptionItem");
+    expect(
+      OBJECT_SCHEMAS.agreementItem.fields.map((f) => f.name)
+    ).toContain("associatedAgreementId");
+  });
+
+  it("carries no amount and no total", () => {
+    // A line is the *selection*; the offering it points at holds the money,
+    // and a subscription's true total is the provider's to state. A column
+    // here would be a second copy that drifts, and a computed total would be
+    // confidently wrong the moment a line failed to link.
+    for (const field of ["amountMinor", "currency", "total", "price"]) {
+      expect(fieldNames("agreementItem"), field).not.toContain(field);
+    }
+  });
+
+  it("has no name, for the same reason the subscription has none", () => {
+    expect(fieldNames("agreementItem")).not.toContain("name");
+    expect(
+      OBJECT_SCHEMAS.agreementItem.fields.filter((f) => f.required === true)
+    ).toEqual([]);
+  });
+
+  it("types the line only with words a provider could actually say", () => {
+    const type = OBJECT_SCHEMAS.agreementItem.fields.find(
+      (f) => f.name === "itemType"
+    );
+    expect(type?.kind).toBe("enum");
+    expect(type?.enumValues).toEqual(AGREEMENT_ITEM_TYPES);
+    // Not required, and that is the load-bearing half. Stripe does not
+    // distinguish a plan from an add-on, so null means "not told" — and a
+    // required column would force every Stripe line to claim something.
+    expect(type?.required).toBeUndefined();
+  });
+
+  it("keeps both association ids read-only", () => {
+    // The agreement one matters more here than anywhere else: the engine
+    // injects it from the subscription the line was fetched from, and a
+    // mappable field would let a rule point a line at another agreement —
+    // whose remaining lines reconciliation would then delete.
+    for (const field of ["associatedAgreementId", "associatedOfferingId"]) {
+      const def = OBJECT_SCHEMAS.agreementItem.fields.find(
+        (f) => f.name === field
+      );
+      expect(def?.readOnly, field).toBe(true);
+    }
+    expect(mappableFields("agreementItem").map((f) => f.name)).toEqual([
+      "quantity",
+      "position",
+      "itemType",
+    ]);
+  });
+});
+
 describe("write order", () => {
-  it("writes the agreement before its subscription", () => {
+  it("writes the agreement before both of its children", () => {
     // Not presentational and not merely efficient: `Subscription.agreementId`
-    // is a required column, so a child written first is rejected outright.
+    // and `AgreementItem.agreementId` are both required columns, so a child
+    // written first is rejected outright rather than saved unlinked.
     expect(objectsForFunction(AGREEMENT_FUNCTION)).toEqual([
       "agreement",
       "subscription",
+      "agreementItem",
     ]);
   });
 
@@ -196,11 +264,12 @@ describe("function scoping of agreement rules", () => {
     ).toEqual([...objectsForFunction(AGREEMENT_FUNCTION)].sort());
   });
 
-  it("accepts rules for both of its own objects", () => {
+  it("accepts rules for all three of its own objects", () => {
     expect(
       validateMappings(AGREEMENT_FUNCTION, [
         rule("agreement", "name"),
         rule("subscription", "currentPeriodEnd"),
+        rule("agreementItem", "quantity"),
       ]).valid
     ).toBe(true);
   });
@@ -232,10 +301,10 @@ describe("function scoping of agreement rules", () => {
     ).toBe(false);
   });
 
-  it("shows the editor both sections and nothing else", () => {
+  it("shows the editor all three sections and nothing else", () => {
     expect(
       schemasForFunction(AGREEMENT_FUNCTION).map((s) => s.label)
-    ).toEqual(["Agreement", "Subscription"]);
+    ).toEqual(["Agreement", "Subscription", "Line item"]);
   });
 
   it("offers no cross-reference targets", () => {

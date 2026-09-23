@@ -22,6 +22,8 @@ import { SALESFORCE_PROVIDER_NAME } from "./salesforce/provider";
 import { MOCK_PROVIDER_NAME } from "./mock/provider";
 import { METRIFOX_PROVIDER_NAME } from "./metrifox/provider";
 import { STRIPE_PROVIDER_NAME } from "./stripe/provider";
+import { chargebeeIdentityDefaults } from "./chargebee/defaults";
+import { CHARGEBEE_PROVIDER_NAME } from "./chargebee/provider";
 
 const DEFAULTS: Record<string, FieldMappingRule[]> = {
   [`identity:${HUBSPOT_PROVIDER_NAME}`]: hubspotIdentityDefaults,
@@ -29,6 +31,7 @@ const DEFAULTS: Record<string, FieldMappingRule[]> = {
   [`identity:${MOCK_PROVIDER_NAME}`]: mockIdentityDefaults,
   [`identity:${METRIFOX_PROVIDER_NAME}`]: metrifoxIdentityDefaults,
   [`identity:${STRIPE_PROVIDER_NAME}`]: stripeIdentityDefaults,
+  [`identity:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeIdentityDefaults,
   [`catalog:${STRIPE_PROVIDER_NAME}`]: stripeCatalogDefaults,
   [`agreement:${STRIPE_PROVIDER_NAME}`]: stripeAgreementDefaults,
 };

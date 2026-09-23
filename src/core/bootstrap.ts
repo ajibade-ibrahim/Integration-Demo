@@ -62,6 +62,11 @@ import {
   STRIPE_CATALOG_SCOPES,
   STRIPE_PROVIDER_NAME,
 } from "./providers/stripe/provider";
+import {
+  chargebeeProvider,
+  CHARGEBEE_IDENTITY_SCOPES,
+  CHARGEBEE_PROVIDER_NAME,
+} from "./providers/chargebee/provider";
 
 import { metrifoxIdentityHandler } from "./providers/metrifox/identity-handler";
 import { metrifoxFieldDiscovery } from "./providers/metrifox/discovery";
@@ -69,6 +74,8 @@ import { stripeIdentityHandler } from "./providers/stripe/identity-handler";
 import { stripeAgreementHandler } from "./providers/stripe/agreement-handler";
 import { stripeCatalogHandler } from "./providers/stripe/catalog-handler";
 import { stripeFieldDiscovery } from "./providers/stripe/discovery";
+import { chargebeeIdentityHandler } from "./providers/chargebee/identity-handler";
+import { chargebeeFieldDiscovery } from "./providers/chargebee/discovery";
 import { mockIdentityHandler } from "./providers/mock/identity-handler";
 import { mockFieldDiscovery } from "./providers/mock/discovery";
 import { hubspotIdentityHandler } from "./providers/hubspot/identity-handler";
@@ -103,6 +110,7 @@ export function bootstrap(): void {
   // they register unconditionally.
   registerProvider(metrifoxProvider);
   registerProvider(stripeProvider);
+  registerProvider(chargebeeProvider);
   if (isMockEnabled()) registerProvider(mockProvider);
 
   // --- functions ---------------------------------------------------------
@@ -122,6 +130,7 @@ export function bootstrap(): void {
     [SALESFORCE_PROVIDER_NAME, SALESFORCE_IDENTITY_SCOPES],
     [METRIFOX_PROVIDER_NAME, METRIFOX_IDENTITY_SCOPES],
     [STRIPE_PROVIDER_NAME, STRIPE_IDENTITY_SCOPES],
+    [CHARGEBEE_PROVIDER_NAME, CHARGEBEE_IDENTITY_SCOPES],
   ];
   if (isMockEnabled()) {
     identityScopes.push([MOCK_PROVIDER_NAME, MOCK_IDENTITY_SCOPES]);
@@ -158,7 +167,7 @@ export function bootstrap(): void {
     label: "Catalog",
     description:
       "Products and the offerings that price them — what is for sale, at what amount, on what billing interval.",
-    dataModels: ["product", "offering"],
+    dataModels: ["product", "offering", "productFeature"],
     scopesByProvider: scopeMap(catalogScopes),
   });
 
@@ -183,11 +192,19 @@ export function bootstrap(): void {
   // new table rather than an ALTER against every row already stored.
   //
   // What was expensive to retrofit is unchanged and is now built: the
-  // `agreement_type` discriminator and the foreign-key shape. The twelve-object
-  // zoom-in (items, terms, amendments, acceptance, renewals, concessions) is
-  // still additive and still unbuilt — modelling amendments before anything
-  // reads them would be the opposite mistake. `Subscription.itemCount` is the
-  // marker for where `agreement_item` goes when something needs it.
+  // `agreement_type` discriminator and the foreign-key shape.
+  //
+  // `agreementItem` is the third object, and it is what `Subscription.itemCount`
+  // was the marker for. It hangs off `agreement` rather than `subscription`
+  // because line items belong to every type and are the *primary* structure of
+  // three of them — Salesforce ContractLineItem and OrderItem, HubSpot deal
+  // line items, and an order form that is little more than a header plus its
+  // lines. Only Stripe has a handler today, so only subscriptions produce
+  // them; the table is shaped for the other three regardless.
+  //
+  // The rest of the twelve-object zoom-in (terms, amendments, acceptance,
+  // renewals, concessions) is still additive and still unbuilt — modelling
+  // amendments before anything reads them would be the opposite mistake.
   const agreementScopes: Array<[string, readonly string[]]> = [
     [HUBSPOT_PROVIDER_NAME, HUBSPOT_AGREEMENT_SCOPES],
     [SALESFORCE_PROVIDER_NAME, SALESFORCE_AGREEMENT_SCOPES],
@@ -203,7 +220,7 @@ export function bootstrap(): void {
     label: "Agreement",
     description:
       "Subscriptions, order forms and contracts — what the customer agreed to, on what terms, and when it changes.",
-    dataModels: ["agreement", "subscription"],
+    dataModels: ["agreement", "subscription", "agreementItem"],
     scopesByProvider: scopeMap(agreementScopes),
   });
 
@@ -303,6 +320,17 @@ export function bootstrap(): void {
 
   registerSyncHandler(IDENTITY_FUNCTION, STRIPE_PROVIDER_NAME, stripeIdentityHandler);
   registerFieldDiscovery(IDENTITY_FUNCTION, STRIPE_PROVIDER_NAME, stripeFieldDiscovery);
+
+  registerSyncHandler(
+    IDENTITY_FUNCTION,
+    CHARGEBEE_PROVIDER_NAME,
+    chargebeeIdentityHandler
+  );
+  registerFieldDiscovery(
+    IDENTITY_FUNCTION,
+    CHARGEBEE_PROVIDER_NAME,
+    chargebeeFieldDiscovery
+  );
 
   // The same discoverer serves all three functions: it switches on the target
   // object rather than the function, so registering it repeatedly is not a
