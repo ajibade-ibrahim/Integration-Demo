@@ -16,6 +16,7 @@ import fc from "fast-check";
 
 import { prisma } from "@/lib/prisma";
 import {
+  writeAgreementItems,
   writeAgreements,
   writeContacts,
   writeCustomers,
@@ -302,6 +303,115 @@ describe("Property: agreements keep both parents across a re-sync", () => {
       { numRuns: 20 }
     );
   });
+
+  it("re-resolves line items from the database, and does not reconcile them away", async () => {
+    // Two properties in one run, because they are the same property from
+    // opposite sides. A line item resolves *both* an agreement and an
+    // offering through the cold-index fallback — and it is also the only
+    // record that deletes its siblings, so the run that fails to resolve them
+    // is the run that removes them. If the fallback ever broke, this would
+    // not merely unlink rows; it would empty the table.
+    await fc.assert(
+      fc.asyncProperty(externalIds, async (ids) => {
+        const scope = { where: { integrationId: INTEGRATION_ID } };
+        await prisma.agreementItem.deleteMany(scope);
+        await prisma.agreement.deleteMany(scope);
+        await prisma.offering.deleteMany(scope);
+        await prisma.product.deleteMany(scope);
+        await prisma.customer.deleteMany(scope);
+
+        const products = await writeProducts(INTEGRATION_ID, [
+          {
+            externalSourceId: "prod-1",
+            mapped: {
+              object: "product",
+              fields: { name: "Product" },
+              customFields: {},
+              crossRefs: {},
+            },
+          },
+        ]);
+        await writeOfferings(
+          INTEGRATION_ID,
+          ids.map((id) => ({
+            externalSourceId: `price-${id}`,
+            externalRefs: { product: "prod-1" },
+            mapped: {
+              object: "offering" as const,
+              fields: { name: `Offering ${id}`, amountMinor: "4900" },
+              customFields: {},
+              crossRefs: {},
+            },
+          })),
+          products.externalToInternal
+        );
+
+        const agreements = await writeAgreements(
+          INTEGRATION_ID,
+          ids.map((id) => ({
+            externalSourceId: `sub-${id}`,
+            externalRefs: {},
+            mapped: {
+              object: "agreement" as const,
+              fields: { name: `Agreement ${id}`, agreementType: "subscription" },
+              customFields: {},
+              crossRefs: {},
+            },
+          }))
+        );
+
+        const items = ids.map((id) => ({
+          externalSourceId: `si-${id}`,
+          externalRefs: { agreement: `sub-${id}`, offering: `price-${id}` },
+          mapped: {
+            object: "agreementItem" as const,
+            fields: { quantity: "1", position: "0" },
+            customFields: {},
+            crossRefs: {},
+          },
+        }));
+
+        await writeAgreementItems(
+          INTEGRATION_ID,
+          items,
+          agreements.externalToInternal
+        );
+
+        // The cold run. Both indexes empty, which is what every sync after
+        // the first looks like for this object — its agreement index is
+        // rebuilt each run, but its offering index is never populated at all,
+        // because offerings belong to another function entirely.
+        const second = await writeAgreementItems(
+          INTEGRATION_ID,
+          items,
+          new Map()
+        );
+
+        // Nothing removed. A reconciliation pass that ran on rows it had
+        // failed to resolve would report deletions here.
+        expect(second.issues).toEqual([]);
+
+        const rows = await prisma.agreementItem.findMany({
+          where: { integrationId: INTEGRATION_ID },
+          select: {
+            externalOfferingId: true,
+            offering: { select: { externalSourceId: true } },
+            agreement: { select: { externalSourceId: true } },
+          },
+        });
+
+        expect(rows).toHaveLength(ids.length);
+        for (const row of rows) {
+          expect(row.offering?.externalSourceId).toBe(row.externalOfferingId);
+          // The parent link survived, which for a required FK means the row
+          // survived at all.
+          expect(row.agreement.externalSourceId).toMatch(/^sub-/);
+        }
+      }),
+      { numRuns: 20 }
+    );
+  });
+
   it("keeps product-feature associations after a re-sync with an empty index", async () => {
     await fc.assert(
       fc.asyncProperty(externalIds, async (ids) => {

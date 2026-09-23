@@ -44,6 +44,10 @@ const OBJECT_LABELS: Record<string, [singular: string, plural: string]> = {
   productFeature: ["feature", "features"],
   agreement: ["agreement", "agreements"],
   subscription: ["subscription", "subscriptions"],
+  // Spelled out for the same reason as `productFeature` above — and here the
+  // fallback would also lose the space, reporting "8 agreementItems" on the
+  // screen a user reads to check the sync.
+  agreementItem: ["line item", "line items"],
 };
 
 /**

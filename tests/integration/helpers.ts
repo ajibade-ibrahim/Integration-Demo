@@ -62,6 +62,7 @@ export async function collect(
     productFeature: [],
     agreement: [],
     subscription: [],
+    agreementItem: [],
   };
 
   for await (const page of handler.fetchPages(ctx)) {

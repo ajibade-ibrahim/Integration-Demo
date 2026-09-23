@@ -2,7 +2,10 @@ import Link from "next/link";
 
 import { bootstrap } from "@/core/bootstrap";
 import { currentUserId } from "@/lib/current-user";
-import { loadAgreements } from "@/core/repositories/agreement-repository";
+import {
+  loadAgreements,
+  type AgreementItemRow,
+} from "@/core/repositories/agreement-repository";
 import { Empty, Table, Td } from "../data-table";
 
 export const dynamic = "force-dynamic";
@@ -68,17 +71,19 @@ export default async function AgreementsPage() {
           )}
 
           {/*
-            The multi-item caveat, stated where someone can act on it. Only the
-            first priced line of a subscription is linked to an offering, so a
-            subscription billing for a plan plus 25 seats shows the plan's price
-            alone. Saying nothing would make that look like the whole amount.
+            The multi-item caveat, narrowed to what is still true. Every line
+            is stored now and listed under the agreement's name — what has not
+            changed is that the Price column reads the *one* offering the
+            agreement links, so a plan plus 25 seats still shows the plan's
+            price. Saying nothing would make that look like the whole amount.
           */}
           {totals.multiItem > 0 && (
             <Notice>
               {totals.multiItem} subscription
               {totals.multiItem === 1 ? " carries" : "s carry"} more than one
-              priced item. Only the first is linked to an offering, so the price
-              shown is that item&apos;s and not the total.
+              priced line. Expand the agreement&apos;s name to see them all —
+              the Price column shows only the line the agreement links, not the
+              total.
             </Notice>
           )}
 
@@ -97,11 +102,7 @@ export default async function AgreementsPage() {
               <tr key={row.id} className="border-t border-slate-100">
                 <Td className="font-medium">
                   {row.name}
-                  {row.itemCount !== null && row.itemCount > 1 && (
-                    <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-normal text-amber-800">
-                      {row.itemCount} items
-                    </span>
-                  )}
+                  <ItemsCell items={row.items} itemCount={row.itemCount} />
                 </Td>
                 <Td className="text-slate-600">
                   {row.agreementType.replace("_", " ")}
@@ -151,6 +152,77 @@ export default async function AgreementsPage() {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * The agreement's priced lines, disclosed on demand.
+ *
+ * A `<details>` element rather than a click handler, which keeps this page a
+ * server component — the whole route renders without shipping any JavaScript,
+ * and one expandable cell is not worth giving that up for.
+ *
+ * Nothing is shown for a single-line agreement. That is the overwhelming
+ * majority of them, and a disclosure triangle revealing the same offering
+ * already named in the Price column would be noise on every row to serve the
+ * few that have something to say.
+ *
+ * No total, deliberately. Summing the lines needs each one's price times its
+ * quantity, and a line whose offering did not resolve has no price — so the
+ * sum would silently under-report exactly when something is already wrong.
+ * The provider's own API is where a trustworthy total comes from.
+ */
+function ItemsCell({
+  items,
+  itemCount,
+}: {
+  items: AgreementItemRow[];
+  itemCount: number | null;
+}) {
+  if (items.length < 2) {
+    // The one case worth a word even with nothing to disclose: the provider
+    // said there were lines and we stored none, which means they were
+    // rejected. Silence here would read as a single-line subscription.
+    if (itemCount !== null && itemCount > items.length) {
+      return (
+        <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-normal text-amber-800">
+          {itemCount} lines reported, {items.length} stored
+        </span>
+      );
+    }
+    return null;
+  }
+
+  return (
+    <details className="mt-1 font-normal">
+      <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-800">
+        {items.length} lines
+      </summary>
+      <ul className="mt-1 space-y-0.5">
+        {items.map((item) => (
+          <li key={item.id} className="text-xs text-slate-600">
+            <LinkCell
+              name={item.offeringName}
+              externalId={item.externalOfferingId}
+            />
+            {item.quantity !== null && item.quantity > 1 && (
+              <span className="ml-1 text-slate-500">× {item.quantity}</span>
+            )}
+            {/*
+              Rendered only when the provider actually typed the line. Stripe
+              does not, so this is absent on every Stripe row today — and an
+              "add-on" badge inferred from position would be the guess the
+              column exists to avoid.
+            */}
+            {item.itemType !== null && (
+              <span className="ml-1 rounded bg-slate-100 px-1 py-0.5 text-slate-600">
+                {item.itemType.replace("_", " ")}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

@@ -153,4 +153,22 @@ export const stripeAgreementDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "collection_method", targetObject: "subscription", targetFieldPath: "collectionMethod", transform: "none" },
   { sourceFieldPath: "quantity", targetObject: "subscription", targetFieldPath: "quantity", transform: "none" },
   { sourceFieldPath: "item_count", targetObject: "subscription", targetFieldPath: "itemCount", transform: "none" },
+
+  // --- agreementItem ---
+  // `quantity` is the item's own field, read raw: a subscription item really
+  // does carry one, unlike the subscription above whose `quantity` is
+  // synthesized from its first item. The other two are synthesized, and both
+  // for reasons the raw payload cannot supply — `position` is the caller's
+  // index across the completed item list, and `item_type` is a reading of
+  // `price.recurring.usage_type` that resolves to nothing at all unless the
+  // line is metered.
+  //
+  // No defaults for `associatedAgreementId` or `associatedOfferingId`: both
+  // are `readOnly` and derived by the engine from the refs. The agreement one
+  // matters most — the item's own `subscription` field is right there and
+  // mapping it would look correct while bypassing the injection that keeps a
+  // line from reassigning itself to another agreement.
+  { sourceFieldPath: "quantity", targetObject: "agreementItem", targetFieldPath: "quantity", transform: "none" },
+  { sourceFieldPath: "position", targetObject: "agreementItem", targetFieldPath: "position", transform: "none" },
+  { sourceFieldPath: "item_type", targetObject: "agreementItem", targetFieldPath: "itemType", transform: "none" },
 ];

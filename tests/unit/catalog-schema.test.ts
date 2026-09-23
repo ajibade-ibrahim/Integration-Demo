@@ -177,6 +177,7 @@ describe("function scoping of mapping rules", () => {
     expect(schemasForFunction("agreement").map((s) => s.object)).toEqual([
       "agreement",
       "subscription",
+      "agreementItem",
     ]);
     expect(schemasForFunction("usage")).toEqual([]);
   });

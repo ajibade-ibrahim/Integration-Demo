@@ -78,6 +78,12 @@ export const TARGET_OBJECTS = [
   "productFeature",
   "agreement",
   "subscription",
+  // A line on an agreement, not on a subscription — the name is the design.
+  // Salesforce has ContractLineItem, OrderItem and QuoteLineItem, and HubSpot
+  // models what a deal sold as line items; a subscription is the odd case
+  // where one offering link almost suffices. Naming this `subscriptionItem`
+  // would be the discriminator mistake `productFeature` avoided, one table up.
+  "agreementItem",
 ] as const;
 
 export type TargetObject = (typeof TARGET_OBJECTS)[number];
@@ -177,6 +183,37 @@ export function isAgreementStatus(v: unknown): v is AgreementStatus {
   return (
     typeof v === "string" &&
     (AGREEMENT_STATUSES as readonly string[]).includes(v)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Agreement item type
+// ---------------------------------------------------------------------------
+
+/**
+ * What kind of line an agreement item is, for providers that say.
+ *
+ * Most do not, and the column is nullable for that reason: null means "not
+ * told", never "plan". Stripe's subscription items are undifferentiated — the
+ * first is the base plan by convention alone — so its handler writes `usage`
+ * for a metered price and leaves everything else unset rather than guessing.
+ * Chargebee and Stigg both type their items first-class, which is what this
+ * union is waiting for.
+ *
+ * The three members are subscription-shaped, and knowingly so: they are the
+ * vocabulary of the only provider with a handler today. A contract line is
+ * none of the three and will stay null until an order-form provider arrives
+ * with a word of its own — at which point adding a member here is a line,
+ * exactly as `AGREEMENT_TYPES` argues for its own unbuilt three.
+ */
+export const AGREEMENT_ITEM_TYPES = ["plan", "add_on", "usage"] as const;
+
+export type AgreementItemType = (typeof AGREEMENT_ITEM_TYPES)[number];
+
+export function isAgreementItemType(v: unknown): v is AgreementItemType {
+  return (
+    typeof v === "string" &&
+    (AGREEMENT_ITEM_TYPES as readonly string[]).includes(v)
   );
 }
 

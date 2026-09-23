@@ -300,3 +300,64 @@ export const STRIPE_SUBSCRIPTION_FIELDS: DiscoveredFieldDef[] = [
     type: "string",
   },
 ];
+
+/**
+ * Line-item fields — one priced line on a subscription.
+ *
+ * The three synthesized paths lead, as they do for offerings and features, and
+ * the raw ones follow labelled as such. Two of them are worth reading the
+ * labels on before mapping.
+ *
+ * `subscription` is the item's own field and is offered, but it is **not** how
+ * the line finds its agreement: the engine uses the synthesized `agreement_id`,
+ * injected from the subscription this item was actually fetched from. They
+ * agree today. Mapping the raw one anyway would work right up until they did
+ * not, and this is the writer that deletes — a line that reassigned itself
+ * would take its former siblings with it.
+ *
+ * `price.recurring.usage_type` is what `item_type` is read from, offered raw
+ * for anyone who wants Stripe's own word rather than our three-member
+ * vocabulary — the same courtesy `raw_status` extends on the agreement.
+ */
+export const STRIPE_AGREEMENT_ITEM_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Line item ID", type: "string" },
+  {
+    path: "position",
+    label: "Position in the item list (synthesized; 0 is the linked line)",
+    type: "number",
+  },
+  {
+    path: "item_type",
+    label: "Line type (synthesized; 'usage' for a metered price, else unset)",
+    type: "string",
+  },
+  {
+    path: "agreement_id",
+    label: "Subscription ID (synthesized from the fetch, not the record)",
+    type: "string",
+  },
+  {
+    path: "offering_id",
+    label: "Price ID (synthesized from price.id)",
+    type: "string",
+  },
+  { path: "quantity", label: "Quantity", type: "number" },
+  { path: "price.id", label: "Price ID (raw)", type: "string" },
+  {
+    path: "price.unit_amount",
+    label: "Unit amount, minor units (raw)",
+    type: "number",
+  },
+  { path: "price.currency", label: "Currency (raw)", type: "string" },
+  {
+    path: "price.recurring.usage_type",
+    label: "Usage type — licensed or metered (raw)",
+    type: "string",
+  },
+  {
+    path: "subscription",
+    label: "Subscription ID (raw — prefer agreement_id)",
+    type: "string",
+  },
+  { path: "created", label: "Created (Unix epoch seconds, raw)", type: "number" },
+];

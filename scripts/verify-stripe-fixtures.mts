@@ -93,27 +93,28 @@ for (const offering of offerings) {
   );
 }
 
-const productFeatures = catalog.get("productFeature") ?? [];
-
-console.log(`\n=== features: ${productFeatures.length} attachments ===\n`);
-console.log("feature_name".padEnd(22), "lookup_key".padEnd(18), "feature_id".padEnd(22), "product");
-for (const feature of productFeatures) {
-  console.log(
-    str(feature["feature_name"]).slice(0, 21).padEnd(22),
-    str(feature["lookup_key"]).slice(0, 17).padEnd(18),
-    str(feature["feature_id"]).slice(0, 21).padEnd(22),
-    str(feature["product_id"])
-  );
-}
-
+const productFeatures = catalog.get("productFeature") ?? [];
+
+console.log(`\n=== features: ${productFeatures.length} attachments ===\n`);
+console.log("feature_name".padEnd(22), "lookup_key".padEnd(18), "feature_id".padEnd(22), "product");
+for (const feature of productFeatures) {
+  console.log(
+    str(feature["feature_name"]).slice(0, 21).padEnd(22),
+    str(feature["lookup_key"]).slice(0, 17).padEnd(18),
+    str(feature["feature_id"]).slice(0, 21).padEnd(22),
+    str(feature["product_id"])
+  );
+}
+
 // --- Agreements ------------------------------------------------------------
 
 const agreementRecords = await collect(stripeAgreementHandler);
 const agreements = agreementRecords.get("agreement") ?? [];
 const subscriptions = agreementRecords.get("subscription") ?? [];
+const items = agreementRecords.get("agreementItem") ?? [];
 
 console.log(
-  `\n=== agreement: ${agreements.length} agreements, ${subscriptions.length} subscriptions ===\n`
+  `\n=== agreement: ${agreements.length} agreements, ${subscriptions.length} subscriptions, ${items.length} line items ===\n`
 );
 console.log(
   "agreement_name".padEnd(26),
@@ -207,7 +208,51 @@ const checks: Array<[string, boolean, string]> = [
   [
     "a multi-item subscription exists",
     agreements.some((a) => Number(a["item_count"]) > 1),
-    "must produce a warning, not a tidy single-offering row",
+    "the add-on case — a plan plus the things added to it",
+  ],
+  [
+    "every reported line was actually yielded",
+    agreements.every(
+      (a) =>
+        items.filter((i) => i["agreement_id"] === a["id"]).length ===
+        Number(a["item_count"])
+    ),
+    "the provider's count against the handler's output. A shortfall means a " +
+      "truncated list — which the writer would then read as lines to delete",
+  ],
+  [
+    "no line claims an agreement that was not yielded",
+    items.every((i) =>
+      agreements.some((a) => a["id"] === i["agreement_id"])
+    ),
+    "a line that reassigned itself would have its real siblings deleted",
+  ],
+  [
+    "line positions run 0..n-1 within each subscription",
+    agreements.every((a) => {
+      const positions = items
+        .filter((i) => i["agreement_id"] === a["id"])
+        .map((i) => Number(i["position"]))
+        .sort((x, y) => x - y);
+      return positions.every((p, index) => p === index);
+    }),
+    "a gap or a repeat means the index restarted across a fetch boundary",
+  ],
+  [
+    "a metered line typed itself as usage",
+    items.some((i) => i["item_type"] === "usage"),
+    "the only line type Stripe gives enough to state",
+  ],
+  [
+    "the licensed lines left their type unset",
+    items.some((i) => i["item_type"] === undefined),
+    "Stripe does not distinguish a plan from an add-on, and guessing 'plan' " +
+      "would destroy the one fact the column records",
+  ],
+  [
+    "a line carries a quantity above one",
+    items.some((i) => Number(i["quantity"]) > 1),
+    "the 25 seats — the add-on case in its plainest form",
   ],
   [
     "a quantity above one exists",
@@ -230,56 +275,56 @@ const checks: Array<[string, boolean, string]> = [
     offerings.some((o) => o["active"] === false),
     "the catalog page's inactive badge",
   ],
-  [
-    "features came back at all",
-    productFeatures.length > 0,
-    "the probe short-circuited on a seeded account, or the fan-out stopped " +
-      "running — the two failures that look identical from the output alone",
-  ],
-  [
-    "every feature resolved a product",
-    productFeatures.length > 0 &&
-      productFeatures.every((f) => String(f["product_id"] ?? "").startsWith("prod_")),
-    "the id comes from the request URL, not the payload; a blank one means " +
-      "the handler lost track of which product it was fetching",
-  ],
-  [
-    "one feature is attached to two products",
-    (() => {
-      const byFeature = new Map<string, Set<string>>();
-      for (const f of productFeatures) {
-        const id = str(f["feature_id"]);
-        const products = byFeature.get(id) ?? new Set<string>();
-        products.add(str(f["product_id"]));
-        byFeature.set(id, products);
-      }
-      return [...byFeature.values()].some((products) => products.size > 1);
-    })(),
-    "api-access on both Platform and Integrations — two rows sharing one " +
-      "feature id, the case a Feature table would have made a join row",
-  ],
-  [
-    "a product with no features produced no rows",
-    !productFeatures.some((f) => str(f["product_id"]).includes("seats")),
-    "Additional Seats is seeded with none; a row here means the parent id is " +
-      "being taken from the wrong place",
-  ],
-  [
-    "the unattached feature appears nowhere",
-    !productFeatures.some((f) => str(f["lookup_key"]) === "beta-sandbox"),
-    "a standalone Feature table is out of scope by design, and this is what " +
-      "makes that observable rather than merely claimed",
-  ],
-  [
-    "a lookup key differs from a slug of the name",
-    productFeatures.some(
-      (f) =>
-        str(f["lookup_key"]) === "reporting-v2" &&
-        str(f["feature_name"]) === "Advanced reporting"
-    ),
-    "the column exists because the two are independent; deriving one from " +
-      "the other would pass every test where they happen to agree",
-  ],
+  [
+    "features came back at all",
+    productFeatures.length > 0,
+    "the probe short-circuited on a seeded account, or the fan-out stopped " +
+      "running — the two failures that look identical from the output alone",
+  ],
+  [
+    "every feature resolved a product",
+    productFeatures.length > 0 &&
+      productFeatures.every((f) => String(f["product_id"] ?? "").startsWith("prod_")),
+    "the id comes from the request URL, not the payload; a blank one means " +
+      "the handler lost track of which product it was fetching",
+  ],
+  [
+    "one feature is attached to two products",
+    (() => {
+      const byFeature = new Map<string, Set<string>>();
+      for (const f of productFeatures) {
+        const id = str(f["feature_id"]);
+        const products = byFeature.get(id) ?? new Set<string>();
+        products.add(str(f["product_id"]));
+        byFeature.set(id, products);
+      }
+      return [...byFeature.values()].some((products) => products.size > 1);
+    })(),
+    "api-access on both Platform and Integrations — two rows sharing one " +
+      "feature id, the case a Feature table would have made a join row",
+  ],
+  [
+    "a product with no features produced no rows",
+    !productFeatures.some((f) => str(f["product_id"]).includes("seats")),
+    "Additional Seats is seeded with none; a row here means the parent id is " +
+      "being taken from the wrong place",
+  ],
+  [
+    "the unattached feature appears nowhere",
+    !productFeatures.some((f) => str(f["lookup_key"]) === "beta-sandbox"),
+    "a standalone Feature table is out of scope by design, and this is what " +
+      "makes that observable rather than merely claimed",
+  ],
+  [
+    "a lookup key differs from a slug of the name",
+    productFeatures.some(
+      (f) =>
+        str(f["lookup_key"]) === "reporting-v2" &&
+        str(f["feature_name"]) === "Advanced reporting"
+    ),
+    "the column exists because the two are independent; deriving one from " +
+      "the other would pass every test where they happen to agree",
+  ],
 ];
 
 console.log("\n=== branches ===\n");

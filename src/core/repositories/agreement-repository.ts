@@ -22,6 +22,25 @@ import { prisma } from "@/lib/prisma";
 import { priceLabel } from "../price-format";
 import { readJsonObject } from "./json-column";
 
+/**
+ * One priced line, as the page renders it.
+ *
+ * No price and no line total, and that is a decision rather than an omission:
+ * an item is the *selection*, the offering it points at holds the money, and a
+ * subscription's true total is the provider's to state. Summing our lines here
+ * would produce a confident number that is wrong the moment a line failed to
+ * link — and this page has no way to know it did.
+ */
+export interface AgreementItemRow {
+  id: string;
+  offeringName: string | null;
+  /** The provider's own price id, present even when the link is unresolved. */
+  externalOfferingId: string | null;
+  quantity: number | null;
+  /** plan | add_on | usage, or null where the provider did not say. */
+  itemType: string | null;
+}
+
 export interface AgreementRow {
   id: string;
   externalSourceId: string;
@@ -46,7 +65,16 @@ export interface AgreementRow {
   trialEndsAt: Date | null;
   cancelAtPeriodEnd: boolean | null;
   quantity: number | null;
+  /**
+   * The provider's own count of priced lines, which is not the same fact as
+   * `items.length`. That one is how many we stored; this one is how many it
+   * said there were, and the two differing is how a rejected line becomes
+   * visible instead of silently shortening the list.
+   */
   itemCount: number | null;
+
+  /** Every priced line, in the provider's own order. */
+  items: AgreementItemRow[];
 
   customFields: Record<string, string>;
   integrationLabel: string;
@@ -62,7 +90,13 @@ export interface AgreementPage {
     unlinkedCustomers: number;
     /** Agreements that named an offering we could not resolve. */
     unlinkedOfferings: number;
-    /** Subscriptions carrying more priced lines than the one we linked. */
+    /**
+     * Subscriptions carrying more than one priced line.
+     *
+     * No longer a warning that data is missing — every line is stored now —
+     * but still worth counting, because `Agreement.offeringId` links one of
+     * them and the Price column shows that one's price rather than the total.
+     */
     multiItem: number;
   };
 }
@@ -99,6 +133,20 @@ export async function loadAgreements(
             },
           },
           subscription: true,
+          // Ordered by the provider's own sequence rather than by name or
+          // price, because the order a subscription lists its lines in is
+          // information — the base plan first, the things added to it after.
+          // Nulls last, which is where Postgres puts them ascending.
+          items: {
+            orderBy: { position: "asc" },
+            select: {
+              id: true,
+              externalOfferingId: true,
+              quantity: true,
+              itemType: true,
+              offering: { select: { name: true } },
+            },
+          },
         },
       }),
       prisma.agreement.count({ where: scope }),
@@ -150,6 +198,14 @@ export async function loadAgreements(
       cancelAtPeriodEnd: row.subscription?.cancelAtPeriodEnd ?? null,
       quantity: row.subscription?.quantity ?? null,
       itemCount: row.subscription?.itemCount ?? null,
+
+      items: row.items.map((item) => ({
+        id: item.id,
+        offeringName: item.offering?.name ?? null,
+        externalOfferingId: item.externalOfferingId,
+        quantity: item.quantity,
+        itemType: item.itemType,
+      })),
 
       customFields: readJsonObject(row.customFields),
       integrationLabel: row.integration.instanceLabel,

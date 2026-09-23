@@ -251,6 +251,29 @@ export type ExternalRefs = Readonly<Partial<Record<TargetObject, string>>>;
  * Provider-specific fetching. Every object streams page by page — buffering an
  * entire org before mapping buys nothing and risks exhausting memory on large
  * tenants.
+ *
+ * **One obligation, and it is the only place in this interface where an
+ * omission destroys data rather than merely losing it.**
+ *
+ * > A handler that yields any `agreementItem` for an agreement must yield
+ * > **all** of that agreement's items, or fail. A partial list licenses
+ * > `writeAgreementItems` to delete the remainder.
+ *
+ * Every other object here is written by upsert, so a record a handler fails to
+ * yield simply keeps its previous value — the known gap that lets a detached
+ * `ProductFeature` linger. Agreement items are the exception: they are
+ * reconciled, because a removed add-on that lingers makes the line list wrong
+ * in a way nothing else on the row contradicts. That trade only holds while
+ * "the handler yielded every line" is true, so it is stated here as a contract
+ * rather than left as a property of whichever provider happened to be first.
+ *
+ * Meeting it is provider-specific work. Stripe inlines only the first ten
+ * subscription items and sets `items.has_more` beyond that, so its handler
+ * pages `/v1/subscription_items` to finish the list. A provider whose items
+ * are a separate association — Salesforce `ContractLineItem`, HubSpot deal
+ * line items — must page that association to exhaustion. Failing the run is
+ * always the correct answer to a list that cannot be completed: a failed sync
+ * costs a retry, and a successful one that deleted live lines costs the data.
  */
 export interface SyncHandler {
   fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage>;

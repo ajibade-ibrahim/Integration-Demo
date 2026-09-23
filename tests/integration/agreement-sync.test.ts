@@ -294,12 +294,17 @@ describe("an agreement sync, end to end", () => {
       where: { integrationId: INTEGRATION_ID },
     });
 
-    // Two rows from one source record, and both are counted. The same thing
-    // happens for Stripe identity, whose contacts are derived from its
+    // Three rows from one source record, and all three are counted. The same
+    // thing happens for Stripe identity, whose contacts are derived from its
     // customers — so the run report is at least consistent about it.
+    //
+    // The item count is the one that need not match: a subscription yields one
+    // agreement and one subscription however many lines it carries, and this
+    // fixture carries one.
     expect(readJsonCounts(run.recordCountsJson)).toEqual({
       agreement: 1,
       subscription: 1,
+      agreementItem: 1,
     });
   });
 
@@ -337,12 +342,18 @@ describe("two parents, resolved independently", () => {
     // Warnings, not rejections: an agreement with no links is still a real
     // agreement, and dropping it would lose the name, status and dates too.
     expect(first.status).toBe("success");
-    expect(first.issues.map((i) => i.severity)).toEqual(["warning", "warning"]);
-    // One per unresolved half, and nothing else — the fixture carries a single
-    // priced item, so there is no item-count warning to confuse this with.
-    expect(first.issues.map((i) => i.fieldName).sort()).toEqual([
-      "associatedCustomerId",
-      "associatedOfferingId",
+    expect(first.issues.every((i) => i.severity === "warning")).toBe(true);
+    // One per unresolved half, plus the line item's own unresolved offering.
+    // Three rather than two, and the third is not noise: the agreement's
+    // offering link and its line's are separate columns that repair
+    // separately, so a report naming only one of them would understate what
+    // is dangling.
+    expect(
+      first.issues.map((i) => `${i.targetObject}.${i.fieldName}`).sort()
+    ).toEqual([
+      "agreement.associatedCustomerId",
+      "agreement.associatedOfferingId",
+      "agreementItem.associatedOfferingId",
     ]);
 
     const dangling = await prisma.agreement.findFirstOrThrow({
@@ -380,6 +391,16 @@ describe("two parents, resolved independently", () => {
     });
     expect(linked.customer?.name).toBe("Acme");
     expect(linked.offering?.externalSourceId).toBe("price_monthly");
+
+    // The line repaired itself too, through its own relink pass rather than
+    // the agreement's. Asserted separately because they are separate columns
+    // and a single pass repairing only one of them would still let this
+    // agreement look fully linked.
+    const item = await prisma.agreementItem.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+      include: { offering: true },
+    });
+    expect(item.offering?.externalSourceId).toBe("price_monthly");
   });
 
   it("warns about each unresolved half separately", async () => {
@@ -522,6 +543,142 @@ describe("the subscription half", () => {
         where: { integrationId: INTEGRATION_ID },
       })
     ).toBe(0);
+    // Two cascades deep — the item hangs off the agreement, which hangs off
+    // the integration — so this is the one that would survive a `SetNull`
+    // written where a `Cascade` belongs.
+    expect(
+      await prisma.agreementItem.count({
+        where: { integrationId: INTEGRATION_ID },
+      })
+    ).toBe(0);
+  });
+});
+
+/**
+ * The completeness contract, asserted on the wire.
+ *
+ * `SyncHandler` obliges a handler that yields any line for an agreement to
+ * yield *all* of them, and `writeAgreementItems` deletes on the strength of
+ * that. Stripe inlines only the first ten items, so meeting the obligation
+ * means a second request — and the assertion has to be the **request count**,
+ * not just the resulting rows. A handler that silently returned the inlined
+ * ten would produce a plausible-looking set of rows here and quietly delete
+ * every line past the tenth on the next sync.
+ */
+describe("completing a truncated item list", () => {
+  const SUBSCRIPTION_ITEMS = "https://api.stripe.com/v1/subscription_items";
+
+  function item(id: string, position: number) {
+    return {
+      id,
+      object: "subscription_item",
+      price: PRICE,
+      quantity: position + 1,
+      current_period_start: 1_699_000_000,
+      current_period_end: 1_701_678_400,
+    };
+  }
+
+  it("makes no extra request when Stripe says the list is whole", async () => {
+    let itemRequests = 0;
+    server.use(
+      http.get(SUBSCRIPTIONS, () => listing([subscription()])),
+      http.get(SUBSCRIPTION_ITEMS, () => {
+        itemRequests += 1;
+        return listing([]);
+      })
+    );
+    await connect(["agreement"]);
+
+    await executeSync(INTEGRATION_ID, {
+      clock: createFakeClock(1_700_000_000_000),
+    });
+
+    // The common case, and it must stay free. Paying a request per
+    // subscription to re-read a list already in hand would make this feature
+    // cost more than the sync it rides on.
+    expect(itemRequests).toBe(0);
+    expect(
+      await prisma.agreementItem.count({ where: { integrationId: INTEGRATION_ID } })
+    ).toBe(1);
+  });
+
+  it("pages for the rest when Stripe says there are more", async () => {
+    let itemRequests = 0;
+    const inlined = [item("si_0", 0), item("si_1", 1)];
+
+    server.use(
+      http.get(SUBSCRIPTIONS, () =>
+        listing([
+          subscription({
+            items: { object: "list", has_more: true, data: inlined },
+          }),
+        ])
+      ),
+      http.get(SUBSCRIPTION_ITEMS, ({ request }) => {
+        itemRequests += 1;
+        const url = new URL(request.url);
+        // The filter is what keeps this from returning another
+        // subscription's lines, so it is asserted rather than assumed.
+        expect(url.searchParams.get("subscription")).toBe("sub_acme");
+        // Resumed after the last inlined item, not from the top — otherwise
+        // the first two would arrive twice.
+        expect(url.searchParams.get("starting_after")).toBe("si_1");
+        return listing([item("si_2", 2)]);
+      })
+    );
+    await connect(["agreement"]);
+
+    await executeSync(INTEGRATION_ID, {
+      clock: createFakeClock(1_700_000_000_000),
+    });
+
+    expect(itemRequests).toBe(1);
+
+    const rows = await prisma.agreementItem.findMany({
+      where: { integrationId: INTEGRATION_ID },
+      orderBy: { position: "asc" },
+    });
+    // All three, and positioned across the join rather than restarting at
+    // zero for the fetched page.
+    expect(rows.map((r) => r.externalSourceId)).toEqual([
+      "si_0",
+      "si_1",
+      "si_2",
+    ]);
+    expect(rows.map((r) => r.position)).toEqual([0, 1, 2]);
+  });
+
+  it("fails the run rather than syncing a list it could not complete", async () => {
+    // The direction this has to fail in. A failed sync costs a retry; a
+    // successful one that stored a truncated list has the next run delete the
+    // lines it did not see.
+    server.use(
+      http.get(SUBSCRIPTIONS, () =>
+        listing([
+          subscription({
+            items: {
+              object: "list",
+              has_more: true,
+              data: [item("si_0", 0)],
+            },
+          }),
+        ])
+      ),
+      http.get(SUBSCRIPTION_ITEMS, () =>
+        HttpResponse.json({ error: { message: "boom" } }, { status: 500 })
+      )
+    );
+    await connect(["agreement"]);
+
+    const result = await executeSync(INTEGRATION_ID, {
+      clock: createFakeClock(1_700_000_000_000),
+    });
+
+    expect(result.status).toBe("failed");
+    expect(
+      await prisma.agreementItem.count({ where: { integrationId: INTEGRATION_ID } })
+    ).toBe(0);
   });
 });
 
@@ -543,6 +700,7 @@ describe("the other functions still sync alongside it", () => {
       productFeature: 0,
       agreement: 1,
       subscription: 1,
+      agreementItem: 1,
     });
   });
 });

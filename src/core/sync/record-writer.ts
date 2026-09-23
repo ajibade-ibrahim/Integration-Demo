@@ -30,6 +30,7 @@
 
 import { prisma } from "@/lib/prisma";
 import {
+  isAgreementItemType,
   isAgreementStatus,
   isAgreementType,
   isBillingInterval,
@@ -1200,6 +1201,259 @@ export async function relinkOrphanedAgreements(
 }
 
 // ---------------------------------------------------------------------------
+// Agreement items
+// ---------------------------------------------------------------------------
+
+/**
+ * Write an agreement's priced lines, and remove the ones that are gone.
+ *
+ * **This is the only writer in the system that deletes.** Everything else is
+ * upsert-only, and the gaps that leaves are documented rather than repaired: a
+ * `ProductFeature` detached at Stripe stays until the integration is deleted,
+ * because absence is not observable from a list we only ever add to. Items are
+ * the exception, and the reason is worth stating precisely — a removed add-on
+ * that lingers does not merely go stale, it makes the line list *wrong*, and
+ * nothing else on the agreement contradicts it. A reader would see four lines
+ * on a three-line subscription and have no way to tell which was the ghost.
+ *
+ * Two guards make that affordable, and they fail in opposite directions on
+ * purpose.
+ *
+ * **The handler's obligation.** `SyncHandler` requires that a handler yielding
+ * any item for an agreement yields *all* of them, or fails. Stripe's inlines
+ * only the first ten and pages `/v1/subscription_items` for the rest; a
+ * handler that truncated instead would have this function delete every line
+ * past the tenth, every run. That contract is the load-bearing one and it
+ * lives where implementers will read it.
+ *
+ * **This function's own guard**, which assumes the obligation is broken
+ * anyway: reconcile an agreement only if **at least one of its items was
+ * successfully written this run**. A subscription always has a line, so the
+ * guard costs nothing in the normal case — and it means an empty page, a
+ * rejected parent, a subscription filtered out of this run, or a handler bug
+ * that yields nothing can none of them delete a thing. The destructive
+ * direction is closed; the harmless one, a stale row surviving an extra run,
+ * is left open deliberately.
+ */
+export async function writeAgreementItems(
+  integrationId: string,
+  records: readonly CollectedRecord[],
+  agreementIndex: Map<string, string>
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  let written = 0;
+
+  // One per model, never shared: the index is keyed by the provider's id
+  // alone, so a single map for both parents would let a subscription id
+  // collide with a price id. See `resolveAssociation`.
+  const offeringIndex = new Map<string, string>();
+
+  // Our internal agreement id → the internal ids of its items written this
+  // run. Only agreements appearing as keys here are reconciled, and only
+  // against the ids in their set, which is the guard in its entirety.
+  const writtenByAgreement = new Map<string, Set<string>>();
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "agreementItem",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const externalAgreementId = externalRefs?.agreement;
+    const agreementId = await resolveAssociation(
+      integrationId,
+      "agreement",
+      externalAgreementId,
+      agreementIndex
+    );
+
+    // Rejected rather than warned, as it is for `writeSubscriptions`: the
+    // column is required and the foreign key cascades, so there is no row to
+    // save. Both come off one source record in one run with agreements
+    // written first, so an unresolvable parent means the parent was itself
+    // rejected — and dropping the child is then the consistent answer.
+    if (agreementId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreementItem",
+        reason:
+          externalAgreementId === undefined
+            ? "Line item claims no agreement; nothing to attach it to"
+            : `Agreement '${externalAgreementId}' was not written; line item dropped`,
+        fieldName: "associatedAgreementId",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const externalOfferingId = externalRefs?.offering;
+    const offeringId = await resolveAssociation(
+      integrationId,
+      "offering",
+      externalOfferingId,
+      offeringIndex
+    );
+
+    if (externalOfferingId !== undefined && offeringId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreementItem",
+        reason: `Offering '${externalOfferingId}' not found; line item saved without a link`,
+        fieldName: "associatedOfferingId",
+        severity: "warning",
+      });
+    }
+
+    // Warned and left unset, the policy every enum on this function gets: a
+    // line whose type we cannot read is still a line, and a wrong type is
+    // worse than a missing one. Null already means "the provider did not
+    // say", so an unreadable value lands in exactly the right state.
+    const rawItemType = normalize(mapped.fields["itemType"] ?? null);
+    let itemType: string | null = null;
+    if (rawItemType !== null) {
+      const candidate = rawItemType.toLowerCase();
+      if (isAgreementItemType(candidate)) {
+        itemType = candidate;
+      } else {
+        issues.push({
+          sourceRecordId: externalSourceId,
+          targetObject: "agreementItem",
+          reason: `Unrecognised line type '${rawItemType}'; left unset`,
+          fieldName: "itemType",
+          severity: "warning",
+        });
+      }
+    }
+
+    const data = {
+      agreementId,
+      offeringId,
+      externalOfferingId: externalOfferingId ?? null,
+      quantity: parseInteger(mapped.fields["quantity"] ?? null),
+      position: parseInteger(mapped.fields["position"] ?? null),
+      itemType,
+      // Required rather than decorative: `resolveTargetField` validates
+      // `customFields.*` for every object, so without this call a rule
+      // writing one saves cleanly in the editor and silently does nothing.
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+    };
+
+    const row = await prisma.agreementItem.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+      select: { id: true },
+    });
+
+    const seen = writtenByAgreement.get(agreementId) ?? new Set<string>();
+    seen.add(row.id);
+    writtenByAgreement.set(agreementId, seen);
+
+    written += 1;
+  }
+
+  issues.push(...(await reconcileAgreementItems(integrationId, writtenByAgreement)));
+
+  return { written, issues };
+}
+
+/**
+ * Delete the lines an agreement no longer has.
+ *
+ * Runs only over agreements that produced at least one written item, which is
+ * the guard described above — an agreement absent from this map keeps every
+ * row it has, whatever the reason for its absence.
+ *
+ * Reported rather than silent. A run that removed rows should name the
+ * agreement and the count, because this is the one place a sync can lose data
+ * and "the numbers changed and nothing said why" is the failure this codebase
+ * warns about everywhere else. `warning` rather than a new severity: the
+ * union is `"warning" | "rejected"`, only `rejected` degrades a run to
+ * `partial`, and a correct reconciliation is not a partial run.
+ */
+async function reconcileAgreementItems(
+  integrationId: string,
+  writtenByAgreement: ReadonlyMap<string, Set<string>>
+): Promise<RecordIssue[]> {
+  const issues: RecordIssue[] = [];
+
+  for (const [agreementId, keptIds] of writtenByAgreement) {
+    const { count } = await prisma.agreementItem.deleteMany({
+      where: {
+        integrationId,
+        agreementId,
+        id: { notIn: [...keptIds] },
+      },
+    });
+
+    if (count > 0) {
+      issues.push({
+        sourceRecordId: agreementId,
+        targetObject: "agreementItem",
+        reason: `${count} line item${count === 1 ? "" : "s"} no longer on this agreement; removed`,
+        severity: "warning",
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Retry the offering links agreement items were written without.
+ *
+ * The offering edge only. There is deliberately no agreement counterpart, for
+ * `writeSubscriptions`' reason: that FK is required, so an unlinked item row
+ * cannot exist to be repaired.
+ *
+ * Worth having where `writeProductFeatures` has none, and the difference is
+ * instructive. A feature's product id comes from the URL the sync just called,
+ * so it cannot arrive before its parent. An item's *offering* comes from the
+ * agreement function, and the catalog function may not be on this integration
+ * at all — the same situation `Agreement.offeringId` is in, repaired the same
+ * way.
+ */
+export async function relinkOrphanedAgreementItems(
+  integrationId: string
+): Promise<number> {
+  const orphans = await prisma.agreementItem.findMany({
+    where: {
+      integrationId,
+      offeringId: null,
+      externalOfferingId: { not: null },
+    },
+    select: { id: true, externalOfferingId: true },
+  });
+
+  let relinked = 0;
+  for (const orphan of orphans) {
+    if (orphan.externalOfferingId === null) continue;
+
+    const offering = await findByExternalId(
+      integrationId,
+      "offering",
+      orphan.externalOfferingId
+    );
+
+    if (offering !== null) {
+      await prisma.agreementItem.update({
+        where: { id: orphan.id },
+        data: { offeringId: offering.id },
+      });
+      relinked += 1;
+    }
+  }
+  return relinked;
+}
+
+// ---------------------------------------------------------------------------
 // Per-function dispatch
 // ---------------------------------------------------------------------------
 
@@ -1288,17 +1542,30 @@ export async function writeRecordsForFunction(
       // behaves this way for Stripe, whose contacts are derived from its
       // customers, so the run report is consistent about it.
       const agreements = await writeAgreements(integrationId, at("agreement"));
+      // Both children resolve against the *same* agreement index, and each is
+      // passed the map rather than a copy so the items benefit from any
+      // database lookups the subscriptions pass already cached.
       const subscriptions = await writeSubscriptions(
         integrationId,
         at("subscription"),
+        agreements.externalToInternal
+      );
+      const items = await writeAgreementItems(
+        integrationId,
+        at("agreementItem"),
         agreements.externalToInternal
       );
       return {
         counts: {
           agreement: agreements.written,
           subscription: subscriptions.written,
+          agreementItem: items.written,
         },
-        issues: [...agreements.issues, ...subscriptions.issues],
+        issues: [
+          ...agreements.issues,
+          ...subscriptions.issues,
+          ...items.issues,
+        ],
       };
     }
 
@@ -1326,7 +1593,12 @@ export async function relinkOrphansForFunction(
     case "catalog":
       return relinkOrphanedOfferings(integrationId);
     case "agreement":
-      return relinkOrphanedAgreements(integrationId);
+      // Summed across both tables. Each answers "how many rows changed", and
+      // the caller wants the total for the function rather than a breakdown.
+      return (
+        (await relinkOrphanedAgreements(integrationId)) +
+        (await relinkOrphanedAgreementItems(integrationId))
+      );
     default:
       return 0;
   }

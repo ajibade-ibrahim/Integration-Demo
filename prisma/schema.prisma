@@ -112,6 +112,7 @@ model Integration {
   productFeatures  ProductFeature[]
   agreements       Agreement[]
   subscriptions    Subscription[]
+  agreementItems   AgreementItem[]
   syncRuns         SyncRun[]
 
   @@index([userId])
@@ -416,8 +417,9 @@ model Offering {
 
   customFields String @default("{}")
 
-  updatedAt  DateTime    @updatedAt
-  agreements Agreement[]
+  updatedAt      DateTime        @updatedAt
+  agreements     Agreement[]
+  agreementItems AgreementItem[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
@@ -557,6 +559,12 @@ model Agreement {
 
   /// Resolved internal offering, and the provider's own price id beside it.
   /// Same shape and same reason: `catalog` may not be on this integration yet.
+  ///
+  /// The offering of whichever line the handler nominated — position 0 for
+  /// Stripe. It is a convenience, not the whole truth: `items` holds every
+  /// priced line, and a handler that declines to nominate one leaves this null
+  /// rather than picking arbitrarily. On a twelve-line contract no line is
+  /// primary, and this column should be empty there.
   offeringId         String?
   offering           Offering? @relation(fields: [offeringId], references: [id], onDelete: SetNull)
   externalOfferingId String?
@@ -574,6 +582,7 @@ model Agreement {
   updatedAt DateTime @updatedAt
 
   subscription Subscription?
+  items        AgreementItem[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
@@ -618,9 +627,10 @@ model Subscription {
   collectionMethod String?
   quantity         Int?
 
-  /// How many priced lines the subscription carries. Only the first is linked to
-  /// an offering, so a count above one is the only thing on the row saying the
-  /// rest exist.
+  /// How many priced lines the subscription carries, as the provider reported
+  /// it. Kept after `AgreementItem` arrived rather than dropped as redundant:
+  /// this is the provider's count and `agreement.items` is ours, and the two
+  /// disagreeing is the signal that a line failed to write.
   itemCount Int?
 
   customFields String @default("{}")
@@ -631,6 +641,86 @@ model Subscription {
   @@index([integrationId])
   /// Renewal and churn questions are date-ranged over one integration.
   @@index([integrationId, currentPeriodEnd])
+}
+
+/// One priced line on an agreement — the base plan, a seat count, an add-on.
+///
+/// The row is the *selection*, not the thing selected: what it bills for is the
+/// Offering it points at, which already holds the money. Nothing here is
+/// computed and there is deliberately no amount column — a subscription's true
+/// total is the provider's to state, not ours to sum.
+///
+/// Hung off `Agreement` rather than `Subscription`, and that is the whole
+/// design. Line items are not a subscription quirk: Salesforce has
+/// `ContractLineItem`, `OrderItem` and `QuoteLineItem`, HubSpot models what a
+/// deal sold as line items, and an order form is essentially a header plus its
+/// lines. A subscription is the odd case, the one where a single offering link
+/// almost suffices — which is why this table was missing for so long.
+///
+/// **This is the only synced table whose rows are deleted.** The writer
+/// reconciles an agreement's lines against what the handler just yielded, so a
+/// removed add-on does not linger. See `writeAgreementItems` for the two
+/// guards that make that safe, and `SyncHandler` for the completeness
+/// obligation they rest on.
+model AgreementItem {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider-assigned id — Stripe's `si_…`. The upsert key, and what
+  /// reconciliation compares against.
+  externalSourceId String
+
+  /// Required and Cascade, for `Subscription`'s reason one level down: this
+  /// line extends exactly one agreement and is not salvageable without it.
+  /// Consequently there is no `externalAgreementId` and no relink pass on this
+  /// edge — both rows come off one source record in one run, so "arrived
+  /// before its parent" cannot happen.
+  agreementId String
+  agreement   Agreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+
+  /// What this line bills for. Nullable and SetNull with the provider's own id
+  /// retained beside it, exactly as `Agreement.offeringId` is and for the same
+  /// reason: `catalog` may not be on this integration yet.
+  offeringId         String?
+  offering           Offering? @relation(fields: [offeringId], references: [id], onDelete: SetNull)
+  externalOfferingId String?
+
+  quantity Int?
+
+  /// The provider's own ordering of its lines, nothing more. It is *not* a
+  /// rank and position 0 is not "the important one" — on a twelve-line
+  /// contract no line is primary. It happens to be the line
+  /// `Agreement.offeringId` points at, because that is how the Stripe handler
+  /// picks one; a provider whose handler picks none leaves that column null
+  /// and this one still orders the lines correctly.
+  position Int?
+
+  /// AgreementItemType: plan | add_on | usage. Null means the provider did not
+  /// say, never "plan".
+  ///
+  /// Stripe's items are undifferentiated — the first one is the base plan by
+  /// convention only — so it writes `usage` for a metered price and nothing
+  /// otherwise. Chargebee and Stigg both type their items first-class, and
+  /// this column is here so that adding one of them is a handler rather than
+  /// an ALTER against rows that cannot say what they are.
+  ///
+  /// The three members are subscription-shaped, and deliberately so: they are
+  /// the vocabulary of the only provider with a handler. A contract line is
+  /// none of the three and will leave this null until an order-form provider
+  /// arrives with a word of its own.
+  itemType String?
+
+  /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
+  customFields String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  /// Both the join and the reconciliation predicate.
+  @@index([agreementId])
+  @@index([offeringId])
 }
 
 // ---------------------------------------------------------------------------
