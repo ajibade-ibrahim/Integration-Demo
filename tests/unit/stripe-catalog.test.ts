@@ -183,10 +183,20 @@ describe("the catalog handler's record shape", () => {
     expect(stripeCatalogHandler.externalIdOf({})).toBeUndefined();
   });
 
-  it("gives an offering its product as parent, and a product none", () => {
-    expect(stripeCatalogHandler.externalRefsOf(price(), "offering")).toEqual({
-      product: "prod_1",
+  it("gives an offering its product as parent, a price its offering, and a product none", () => {
+    // In the 3-tier model, an offering is derived from the product with product_id set.
+    expect(
+      stripeCatalogHandler.externalRefsOf(
+        { id: "prod_1", product_id: "prod_1" },
+        "offering"
+      )
+    ).toEqual({ product: "prod_1" });
+
+    // A price references its parent offering via the product field (priceProductId).
+    expect(stripeCatalogHandler.externalRefsOf(price(), "price")).toEqual({
+      offering: "prod_1",
     });
+
     // A product is a root record, so it claims no references at all — an empty
     // map rather than a map with an empty value. Returning an id here would try
     // to link a product to itself.

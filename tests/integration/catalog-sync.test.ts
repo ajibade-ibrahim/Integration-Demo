@@ -156,23 +156,26 @@ describe("a catalog sync, end to end", () => {
     expect(result.recordCounts).toEqual({
       product: 1,
       offering: 1,
+      price: 1,
       productFeature: 0,
     });
 
     const offering = await prisma.offering.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
-      include: { product: true },
+      include: { product: true, prices: true },
     });
 
     // The whole chain in one assertion: Stripe's nested `recurring.interval`
     // and null `nickname` arrived as a flat interval and a synthesized name,
-    // the default rules mapped them, and the writer parsed the amount as an
-    // integer and linked the product.
-    expect(offering.name).toBe("$49/month");
-    expect(offering.amountMinor).toBe(4900);
-    expect(offering.currency).toBe("usd");
-    expect(offering.interval).toBe("month");
+    // the default rules mapped them, and the writer linked product→offering→price.
+    expect(offering.name).toBe("Widget");
     expect(offering.product?.name).toBe("Widget");
+
+    const price = offering.prices[0];
+    expect(price?.name).toBe("$49/month");
+    expect(price?.amountMinor).toBe(4900);
+    expect(price?.currency).toBe("usd");
+    expect(price?.interval).toBe("month");
   });
 
   it("records per-object counts on the run, with no customer key", async () => {
@@ -193,6 +196,7 @@ describe("a catalog sync, end to end", () => {
     expect(readJsonCounts(run.recordCountsJson)).toEqual({
       product: 1,
       offering: 1,
+      price: 1,
       productFeature: 0,
     });
   });
@@ -210,11 +214,17 @@ describe("a catalog sync, end to end", () => {
 
     expect(await prisma.product.count({ where: { integrationId: INTEGRATION_ID } })).toBe(1);
     expect(await prisma.offering.count({ where: { integrationId: INTEGRATION_ID } })).toBe(1);
+    expect(await prisma.price.count({ where: { integrationId: INTEGRATION_ID } })).toBe(1);
   });
 
-  it("keeps an offering whose product Stripe did not return, and links it later", async () => {
-    // Run one: prices only. An archived or filtered product genuinely does not
-    // come back, so this is not a contrived case.
+  it("keeps a price whose offering's product Stripe did not return, and links it later", async () => {
+    // Run one: prices only, no products. An archived or filtered product
+    // genuinely does not come back, so this is not a contrived case.
+    //
+    // In the 3-tier model the handler synthesizes offerings from product
+    // records, so with no products there is no offering row — only the price
+    // record arrives, orphaned against the offering that would have been created
+    // had the product come back. The run stays green (warning, not partial).
     server.use(
       http.get(PRODUCTS, () => listing([])),
       http.get(PRICES, () => listing([PRICE]))
@@ -227,14 +237,18 @@ describe("a catalog sync, end to end", () => {
     // `partial` is reserved for rejected records; a warning keeps the run green.
     expect(first.status).toBe("success");
     expect(first.issues.map((i) => i.severity)).toEqual(["warning"]);
-    expect(
-      (await prisma.offering.findFirstOrThrow({
-        where: { integrationId: INTEGRATION_ID },
-      })).productId
-    ).toBeNull();
 
-    // Run two: the product appears, and the relink pass catches up without the
-    // offering itself having changed.
+    // No offering yet — it is synthesised from the product which did not arrive.
+    expect(await prisma.offering.count({ where: { integrationId: INTEGRATION_ID } })).toBe(0);
+    // The price is retained with no offering link, so it can be linked later.
+    const orphanPrice = await prisma.price.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+    });
+    expect(orphanPrice.offeringId).toBeNull();
+    expect(orphanPrice.externalOfferingId).toBe("prod_widget");
+
+    // Run two: the product appears. The offering is synthesised, and the relink
+    // pass connects the orphaned price to it without the price itself changing.
     server.resetHandlers();
     server.use(
       http.get(PRODUCTS, () => listing([PRODUCT])),
@@ -244,9 +258,10 @@ describe("a catalog sync, end to end", () => {
 
     const offering = await prisma.offering.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
-      include: { product: true },
+      include: { product: true, prices: true },
     });
     expect(offering.product?.externalSourceId).toBe("prod_widget");
+    expect(offering.prices[0]?.externalSourceId).toBe("price_monthly");
   });
 
   it("refuses to run a function with no mappings rather than reporting success", async () => {
@@ -337,6 +352,7 @@ describe("identity still syncs the way it did", () => {
       contact: 1,
       product: 1,
       offering: 1,
+      price: 1,
       productFeature: 0,
     });
   });

@@ -38,12 +38,58 @@ export const CHARGEBEE_CONTACT_FIELDS: readonly DiscoveredFieldDef[] = [
   { path: "customer_name", label: "Customer Name", type: "string" },
 ];
 
+export const CHARGEBEE_PRODUCT_FIELDS: readonly DiscoveredFieldDef[] = [
+  { path: "id", label: "Item Family ID", type: "string" },
+  { path: "name", label: "Family Name", type: "string" },
+  { path: "description", label: "Description", type: "string" },
+  { path: "status", label: "Status", type: "string" },
+];
+
+export const CHARGEBEE_OFFERING_FIELDS: readonly DiscoveredFieldDef[] = [
+  { path: "id", label: "Item ID", type: "string" },
+  { path: "name", label: "Item Name", type: "string" },
+  { path: "description", label: "Description", type: "string" },
+  { path: "type", label: "Item Type", type: "string" },
+  { path: "item_family_id", label: "Item Family ID", type: "string" },
+  { path: "status", label: "Status", type: "string" },
+];
+
+export const CHARGEBEE_PRICE_FIELDS: readonly DiscoveredFieldDef[] = [
+  { path: "id", label: "Item Price ID", type: "string" },
+  { path: "price_name", label: "Price Name", type: "string" },
+  { path: "item_id", label: "Item ID", type: "string" },
+  { path: "price", label: "Price Amount", type: "number" },
+  { path: "currency_code", label: "Currency Code", type: "string" },
+  { path: "period", label: "Period Count", type: "number" },
+  { path: "period_unit", label: "Period Unit", type: "string" },
+  { path: "status", label: "Status", type: "string" },
+];
+
+export const CHARGEBEE_FEATURE_FIELDS: readonly DiscoveredFieldDef[] = [
+  { path: "id", label: "Feature Item ID", type: "string" },
+  { path: "feature_name", label: "Feature Name", type: "string" },
+  { path: "lookup_key", label: "Lookup Key", type: "string" },
+  { path: "product_id", label: "Product Family ID", type: "string" },
+];
+
 export const chargebeeFieldDiscovery: FieldDiscovery = {
   async discover(
     _ctx: Omit<HandlerContext, "requestedSourcePaths">,
     object: TargetObject
   ): Promise<readonly DiscoveredFieldDef[]> {
-    if (object === "contact") return [...CHARGEBEE_CONTACT_FIELDS];
-    return [...CHARGEBEE_CUSTOMER_FIELDS];
+    switch (object) {
+      case "contact":
+        return [...CHARGEBEE_CONTACT_FIELDS];
+      case "product":
+        return [...CHARGEBEE_PRODUCT_FIELDS];
+      case "offering":
+        return [...CHARGEBEE_OFFERING_FIELDS];
+      case "price":
+        return [...CHARGEBEE_PRICE_FIELDS];
+      case "productFeature":
+        return [...CHARGEBEE_FEATURE_FIELDS];
+      default:
+        return [...CHARGEBEE_CUSTOMER_FIELDS];
+    }
   },
 };

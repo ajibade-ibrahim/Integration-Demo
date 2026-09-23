@@ -122,13 +122,14 @@ export async function loadCatalog(
       }),
       prisma.offering.findMany({
         where: scope,
-        // By product, then by price: a catalog reads as a list of things with
-        // their tiers underneath, not as an alphabetical jumble of prices.
-        orderBy: [{ product: { name: "asc" } }, { amountMinor: "asc" }],
+        // By product, then by name: a catalog reads as a list of things with
+        // their tiers underneath.
+        orderBy: [{ product: { name: "asc" } }, { name: "asc" }],
         take,
         include: {
           integration: { select: { instanceLabel: true } },
           product: { select: { name: true } },
+          prices: true,
         },
       }),
       prisma.productFeature.findMany({
@@ -167,20 +168,23 @@ export async function loadCatalog(
       offeringCount: row._count.offerings,
       featureCount: row._count.features,
     })),
-    offerings: offerings.map((row) => ({
-      id: row.id,
-      externalSourceId: row.externalSourceId,
-      name: row.name,
-      amountMinor: row.amountMinor,
-      currency: row.currency,
-      interval: row.interval,
-      intervalCount: row.intervalCount,
-      active: row.active,
-      productName: row.product?.name ?? null,
-      externalProductId: row.externalProductId,
-      customFields: readJsonObject(row.customFields),
-      integrationLabel: row.integration.instanceLabel,
-    })),
+    offerings: offerings.map((row) => {
+      const primaryPrice = row.prices[0];
+      return {
+        id: row.id,
+        externalSourceId: row.externalSourceId,
+        name: row.name,
+        amountMinor: primaryPrice?.amountMinor ?? null,
+        currency: primaryPrice?.currency ?? null,
+        interval: primaryPrice?.interval ?? null,
+        intervalCount: primaryPrice?.intervalCount ?? null,
+        active: row.active,
+        productName: row.product?.name ?? null,
+        externalProductId: row.externalProductId,
+        customFields: readJsonObject(row.customFields),
+        integrationLabel: row.integration.instanceLabel,
+      };
+    }),
     features: features.map((row) => ({
       id: row.id,
       externalSourceId: row.externalSourceId,

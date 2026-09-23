@@ -251,7 +251,7 @@ describe("Property: agreements keep both parents across a re-sync", () => {
             externalRefs: { product: "prod-1" },
             mapped: {
               object: "offering" as const,
-              fields: { name: `Offering ${id}`, amountMinor: "4900" },
+              fields: { name: `Offering ${id}` },
               customFields: {},
               crossRefs: {},
             },
@@ -338,7 +338,7 @@ describe("Property: agreements keep both parents across a re-sync", () => {
             externalRefs: { product: "prod-1" },
             mapped: {
               object: "offering" as const,
-              fields: { name: `Offering ${id}`, amountMinor: "4900" },
+              fields: { name: `Offering ${id}` },
               customFields: {},
               crossRefs: {},
             },
