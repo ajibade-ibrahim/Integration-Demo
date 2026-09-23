@@ -126,10 +126,14 @@ export async function loadAgreements(
           offering: {
             select: {
               name: true,
-              amountMinor: true,
-              currency: true,
-              interval: true,
-              intervalCount: true,
+              prices: {
+                select: {
+                  amountMinor: true,
+                  currency: true,
+                  interval: true,
+                  intervalCount: true,
+                },
+              },
             },
           },
           subscription: true,
@@ -165,33 +169,35 @@ export async function loadAgreements(
     ]);
 
   return {
-    agreements: agreements.map((row) => ({
-      id: row.id,
-      externalSourceId: row.externalSourceId,
-      name: row.name,
-      agreementType: row.agreementType,
-      status: row.status,
-      effectiveDate: row.effectiveDate,
-      endDate: row.endDate,
-      currency: row.currency,
+    agreements: agreements.map((row) => {
+      const primaryPrice = row.offering?.prices[0];
+      return {
+        id: row.id,
+        externalSourceId: row.externalSourceId,
+        name: row.name,
+        agreementType: row.agreementType,
+        status: row.status,
+        effectiveDate: row.effectiveDate,
+        endDate: row.endDate,
+        currency: row.currency,
 
-      customerName: row.customer?.name ?? null,
-      externalCustomerId: row.externalCustomerId,
-      offeringName: row.offering?.name ?? null,
-      externalOfferingId: row.externalOfferingId,
+        customerName: row.customer?.name ?? null,
+        externalCustomerId: row.externalCustomerId,
+        offeringName: row.offering?.name ?? null,
+        externalOfferingId: row.externalOfferingId,
 
-      // Formatted from the offering rather than stored on the agreement: the
-      // price belongs to what was sold, and duplicating it here would be a
-      // second copy to keep in step.
-      price:
-        row.offering === null
-          ? undefined
-          : priceLabel({
-              amountMinor: row.offering.amountMinor,
-              currency: row.offering.currency,
-              interval: row.offering.interval,
-              intervalCount: row.offering.intervalCount,
-            }),
+        // Formatted from the offering's price rather than stored on the agreement: the
+        // price belongs to what was sold, and duplicating it here would be a
+        // second copy to keep in step.
+        price:
+          primaryPrice === undefined
+            ? undefined
+            : priceLabel({
+                amountMinor: primaryPrice.amountMinor,
+                currency: primaryPrice.currency,
+                interval: primaryPrice.interval,
+                intervalCount: primaryPrice.intervalCount,
+              }),
 
       currentPeriodEnd: row.subscription?.currentPeriodEnd ?? null,
       trialEndsAt: row.subscription?.trialEndsAt ?? null,
@@ -209,7 +215,8 @@ export async function loadAgreements(
 
       customFields: readJsonObject(row.customFields),
       integrationLabel: row.integration.instanceLabel,
-    })),
+      };
+    }),
     totals: {
       agreements: total,
       active,

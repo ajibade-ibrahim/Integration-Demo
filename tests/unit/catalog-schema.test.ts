@@ -49,6 +49,7 @@ describe("the catalog schema", () => {
     expect(objectsForFunction(CATALOG_FUNCTION)).toEqual([
       "product",
       "offering",
+      "price",
       "productFeature",
     ]);
   });
@@ -72,7 +73,7 @@ describe("the catalog schema", () => {
   });
 
   it("offers the billing intervals the writer accepts", () => {
-    const interval = OBJECT_SCHEMAS.offering.fields.find(
+    const interval = OBJECT_SCHEMAS.price.fields.find(
       (f) => f.name === "interval"
     );
     // The editor's dropdown and the writer's guard read the same list; if they
@@ -168,6 +169,7 @@ describe("function scoping of mapping rules", () => {
     expect(schemasForFunction(CATALOG_FUNCTION).map((s) => s.object)).toEqual([
       "product",
       "offering",
+      "price",
       "productFeature",
     ]);
     expect(schemasForFunction("identity").map((s) => s.object)).toEqual([

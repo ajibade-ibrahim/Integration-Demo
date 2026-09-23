@@ -124,7 +124,7 @@ export const OBJECT_SCHEMAS: Readonly<Record<TargetObject, ObjectSchema>> = {
  */
 const FUNCTION_OBJECTS: Readonly<Record<string, readonly TargetObject[]>> = {
   identity: ["customer", "contact"],
-  catalog: ["product", "offering", "productFeature"],
+  catalog: ["product", "offering", "price", "productFeature"],
   agreement: ["agreement", "subscription", "agreementItem"],
 };
 

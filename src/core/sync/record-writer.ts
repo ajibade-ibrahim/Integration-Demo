@@ -569,12 +569,18 @@ export async function writeProducts(
   return { written, issues, externalToInternal };
 }
 
+export interface OfferingWriteResult extends WriteOutcome {
+  /** Provider id -> our internal id, for resolving price associations. */
+  externalToInternal: Map<string, string>;
+}
+
 export async function writeOfferings(
   integrationId: string,
   records: readonly CollectedRecord[],
-  externalToInternal: Map<string, string>
-): Promise<WriteOutcome> {
+  externalToInternalProduct: Map<string, string>
+): Promise<OfferingWriteResult> {
   const issues: RecordIssue[] = [];
+  const externalToInternal = new Map<string, string>();
   let written = 0;
 
   for (const { externalSourceId, externalRefs, mapped } of records) {
@@ -589,10 +595,6 @@ export async function writeOfferings(
       continue;
     }
 
-    // Rejected rather than warned, as it is for a customer and a product: a
-    // price with no name is not something a catalog page can render, and a
-    // provider whose price records carry no name is expected to synthesize one
-    // in its handler rather than leave the writer to invent it.
     const name = normalize(
       mapped.fields["name"] ?? null,
       maxLengthOf("offering", "name")
@@ -608,16 +610,92 @@ export async function writeOfferings(
       continue;
     }
 
-    // Every field below is warned about and left unset rather than rejecting
-    // the row — the policy `customer.type` gets, for the same reason: an
-    // offering with an unreadable amount is still a real offering, and dropping
-    // it would lose the name, the currency and the interval along with it.
+    const productId = await resolveAssociation(
+      integrationId,
+      "product",
+      externalProductId,
+      externalToInternalProduct
+    );
+
+    if (externalProductId !== undefined && productId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "offering",
+        reason: `Product '${externalProductId}' not found; offering saved without a link`,
+        fieldName: "associatedProductId",
+        severity: "warning",
+      });
+    }
+
+    const data = {
+      name,
+      description: normalize(
+        mapped.fields["description"] ?? null,
+        maxLengthOf("offering", "description")
+      ),
+      productId,
+      externalProductId: externalProductId ?? null,
+      active: parseBoolean(mapped.fields["active"] ?? null),
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+    };
+
+    const row = await prisma.offering.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+      select: { id: true },
+    });
+
+    externalToInternal.set(externalSourceId, row.id);
+    written += 1;
+  }
+
+  return { written, issues, externalToInternal };
+}
+
+export async function writePrices(
+  integrationId: string,
+  records: readonly CollectedRecord[],
+  externalToInternalOffering: Map<string, string>
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  let written = 0;
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    const externalOfferingId = externalRefs?.offering;
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "price",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const name = normalize(
+      mapped.fields["name"] ?? null,
+      maxLengthOf("price", "name")
+    );
+    if (name === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "price",
+        reason: "Name is required",
+        fieldName: "name",
+        severity: "rejected",
+      });
+      continue;
+    }
+
     const rawAmount = mapped.fields["amountMinor"] ?? null;
     const amountMinor = parseInteger(rawAmount);
     if (rawAmount !== null && rawAmount.trim() !== "" && amountMinor === null) {
       issues.push({
         sourceRecordId: externalSourceId,
-        targetObject: "offering",
+        targetObject: "price",
         reason: `'${rawAmount}' is not a whole number of minor units; left unset`,
         fieldName: "amountMinor",
         severity: "warning",
@@ -633,7 +711,7 @@ export async function writeOfferings(
       } else {
         issues.push({
           sourceRecordId: externalSourceId,
-          targetObject: "offering",
+          targetObject: "price",
           reason: `Unrecognised billing interval '${rawInterval}'; left unset`,
           fieldName: "interval",
           severity: "warning",
@@ -641,31 +719,31 @@ export async function writeOfferings(
       }
     }
 
-    const productId = await resolveAssociation(
+    const offeringId = await resolveAssociation(
       integrationId,
-      "product",
-      externalProductId,
-      externalToInternal
+      "offering",
+      externalOfferingId,
+      externalToInternalOffering
     );
 
-    if (externalProductId !== undefined && productId === null) {
+    if (externalOfferingId !== undefined && offeringId === null) {
       issues.push({
         sourceRecordId: externalSourceId,
-        targetObject: "offering",
-        reason: `Product '${externalProductId}' not found; offering saved without a link`,
-        fieldName: "associatedProductId",
+        targetObject: "price",
+        reason: `Offering '${externalOfferingId}' not found; price saved without a link`,
+        fieldName: "associatedOfferingId",
         severity: "warning",
       });
     }
 
     const data = {
       name,
-      productId,
-      externalProductId: externalProductId ?? null,
+      offeringId,
+      externalOfferingId: externalOfferingId ?? null,
       amountMinor,
       currency: normalize(
         mapped.fields["currency"] ?? null,
-        maxLengthOf("offering", "currency")
+        maxLengthOf("price", "currency")
       ),
       interval,
       intervalCount: parseInteger(mapped.fields["intervalCount"] ?? null),
@@ -673,7 +751,7 @@ export async function writeOfferings(
       customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
     };
 
-    await prisma.offering.upsert({
+    await prisma.price.upsert({
       where: {
         integrationId_externalSourceId: { integrationId, externalSourceId },
       },
@@ -685,6 +763,39 @@ export async function writeOfferings(
   }
 
   return { written, issues };
+}
+
+export async function relinkOrphanedPrices(
+  integrationId: string
+): Promise<number> {
+  const orphans = await prisma.price.findMany({
+    where: {
+      integrationId,
+      offeringId: null,
+      externalOfferingId: { not: null },
+    },
+    select: { id: true, externalOfferingId: true },
+  });
+
+  let relinked = 0;
+  for (const orphan of orphans) {
+    if (orphan.externalOfferingId === null) continue;
+
+    const offering = await findByExternalId(
+      integrationId,
+      "offering",
+      orphan.externalOfferingId
+    );
+
+    if (offering !== null) {
+      await prisma.price.update({
+        where: { id: orphan.id },
+        data: { offeringId: offering.id },
+      });
+      relinked += 1;
+    }
+  }
+  return relinked;
 }
 
 /**
@@ -1511,13 +1622,15 @@ export async function writeRecordsForFunction(
 
     case "catalog": {
       const products = await writeProducts(integrationId, at("product"));
-      // Both children resolve against the *same* product index, and each is
-      // passed the map rather than a copy so a feature benefits from the
-      // database lookups the offerings pass already cached.
       const offerings = await writeOfferings(
         integrationId,
         at("offering"),
         products.externalToInternal
+      );
+      const prices = await writePrices(
+        integrationId,
+        at("price"),
+        offerings.externalToInternal
       );
       const features = await writeProductFeatures(
         integrationId,
@@ -1528,9 +1641,15 @@ export async function writeRecordsForFunction(
         counts: {
           product: products.written,
           offering: offerings.written,
+          price: prices.written,
           productFeature: features.written,
         },
-        issues: [...products.issues, ...offerings.issues, ...features.issues],
+        issues: [
+          ...products.issues,
+          ...offerings.issues,
+          ...prices.issues,
+          ...features.issues,
+        ],
       };
     }
 
@@ -1591,7 +1710,10 @@ export async function relinkOrphansForFunction(
     case "identity":
       return relinkOrphanedContacts(integrationId);
     case "catalog":
-      return relinkOrphanedOfferings(integrationId);
+      return (
+        (await relinkOrphanedOfferings(integrationId)) +
+        (await relinkOrphanedPrices(integrationId))
+      );
     case "agreement":
       // Summed across both tables. Each answers "how many rows changed", and
       // the caller wants the total for the function rather than a breakdown.

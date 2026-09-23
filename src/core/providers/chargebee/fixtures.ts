@@ -63,3 +63,84 @@ export const CHARGEBEE_FIXTURE_CUSTOMERS_PAGE_2 = {
     },
   ],
 };
+
+export const CHARGEBEE_FIXTURE_ITEM_FAMILIES_PAGE_1 = {
+  list: [
+    {
+      item_family: {
+        id: "cb_family_analytics",
+        name: "Analytics Suite",
+        description: "Suite for analytics products",
+        status: "active",
+        created_at: 1672531200,
+      },
+    },
+  ],
+};
+
+export const CHARGEBEE_FIXTURE_ITEMS_PAGE_1 = {
+  list: [
+    {
+      item: {
+        id: "cb_item_analytics_pro",
+        name: "Analytics Pro Plan",
+        description: "Pro plan for analytics",
+        type: "plan",
+        item_family_id: "cb_family_analytics",
+        status: "active",
+        created_at: 1672531200,
+      },
+    },
+    {
+      item: {
+        id: "cb_item_extra_seats",
+        name: "Extra Seats Addon",
+        type: "addon",
+        item_family_id: "cb_family_analytics",
+        status: "active",
+        created_at: 1672531200,
+      },
+    },
+    {
+      item: {
+        id: "cb_item_advanced_reports",
+        name: "Advanced Reports",
+        type: "feature",
+        item_family_id: "cb_family_analytics",
+        status: "active",
+        created_at: 1672531200,
+      },
+    },
+  ],
+};
+
+export const CHARGEBEE_FIXTURE_ITEM_PRICES_PAGE_1 = {
+  list: [
+    {
+      item_price: {
+        id: "cb_price_analytics_pro_monthly",
+        name: "Analytics Pro Monthly",
+        item_id: "cb_item_analytics_pro",
+        price: 9900,
+        currency_code: "USD",
+        period: 1,
+        period_unit: "month",
+        status: "active",
+        created_at: 1672531200,
+      },
+    },
+    {
+      item_price: {
+        id: "cb_price_analytics_pro_yearly",
+        name: "Analytics Pro Yearly",
+        item_id: "cb_item_analytics_pro",
+        price: 99000,
+        currency_code: "USD",
+        period: 1,
+        period_unit: "year",
+        status: "active",
+        created_at: 1672531200,
+      },
+    },
+  ],
+};

@@ -69,6 +69,7 @@ export const TARGET_OBJECTS = [
   "contact",
   "product",
   "offering",
+  "price",
   // Not `"feature"`, deliberately. This is Stripe's *attachment* of a feature
   // to a product, and `"feature"` is the name the standalone Feature object
   // should have if it is ever synced — a wrong discriminator is the expensive

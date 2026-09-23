@@ -83,32 +83,21 @@ export const stripeCatalogDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "name", targetObject: "product", targetFieldPath: "name", transform: "trim" },
   { sourceFieldPath: "description", targetObject: "product", targetFieldPath: "description", transform: "trim" },
   { sourceFieldPath: "active", targetObject: "product", targetFieldPath: "active", transform: "none" },
-  // `created_at` is synthesized from `created`; mapping `created` stores
-  // nothing, because epoch seconds do not survive the date parse.
-  { sourceFieldPath: "created_at", targetObject: "product", targetFieldPath: "customFields.created_at", transform: "none" },
 
   // --- offering ---
-  { sourceFieldPath: "offering_name", targetObject: "offering", targetFieldPath: "name", transform: "trim" },
-  { sourceFieldPath: "unit_amount", targetObject: "offering", targetFieldPath: "amountMinor", transform: "none" },
-  // Lowercased to match the ISO 4217 form the rest of the app compares against;
-  // Stripe returns it lowercase already, so this is belt and braces.
-  { sourceFieldPath: "currency", targetObject: "offering", targetFieldPath: "currency", transform: "lowercase" },
-  { sourceFieldPath: "interval", targetObject: "offering", targetFieldPath: "interval", transform: "none" },
-  { sourceFieldPath: "interval_count", targetObject: "offering", targetFieldPath: "intervalCount", transform: "none" },
+  { sourceFieldPath: "name", targetObject: "offering", targetFieldPath: "name", transform: "trim" },
+  { sourceFieldPath: "description", targetObject: "offering", targetFieldPath: "description", transform: "trim" },
   { sourceFieldPath: "active", targetObject: "offering", targetFieldPath: "active", transform: "none" },
-  { sourceFieldPath: "billing_scheme", targetObject: "offering", targetFieldPath: "customFields.billing_scheme", transform: "none" },
-  { sourceFieldPath: "recurring.usage_type", targetObject: "offering", targetFieldPath: "customFields.usage_type", transform: "none" },
+
+  // --- price ---
+  { sourceFieldPath: "offering_name", targetObject: "price", targetFieldPath: "name", transform: "trim" },
+  { sourceFieldPath: "unit_amount", targetObject: "price", targetFieldPath: "amountMinor", transform: "none" },
+  { sourceFieldPath: "currency", targetObject: "price", targetFieldPath: "currency", transform: "lowercase" },
+  { sourceFieldPath: "interval", targetObject: "price", targetFieldPath: "interval", transform: "none" },
+  { sourceFieldPath: "interval_count", targetObject: "price", targetFieldPath: "intervalCount", transform: "none" },
+  { sourceFieldPath: "active", targetObject: "price", targetFieldPath: "active", transform: "none" },
 
   // --- productFeature ---
-  // All three synthesized by `flattenProductFeature`, and not out of
-  // convenience: `name` and `lookup_key` live inside `entitlement_feature` on
-  // the wire, so the raw paths would be two segments deep, and `feature_id`
-  // shares a segment name with the attachment's own `id`. Mapping the raw
-  // `id` instead would store the `prodft_…` where the `feat_…` belongs, which
-  // is exactly the confusion `externalFeatureId` exists to prevent.
-  //
-  // No default for `associatedProductId`: it is `readOnly` and derived by the
-  // engine from `product_id`, as `offering.associatedProductId` is.
   { sourceFieldPath: "feature_name", targetObject: "productFeature", targetFieldPath: "name", transform: "trim" },
   { sourceFieldPath: "lookup_key", targetObject: "productFeature", targetFieldPath: "lookupKey", transform: "trim" },
   { sourceFieldPath: "feature_id", targetObject: "productFeature", targetFieldPath: "externalFeatureId", transform: "none" },

@@ -31,6 +31,12 @@ export const CHARGEBEE_IDENTITY_SCOPES = [
   "contacts:read",
 ] as const;
 
+export const CHARGEBEE_CATALOG_SCOPES = [
+  "item_families:read",
+  "items:read",
+  "item_prices:read",
+] as const;
+
 /** Cap on connect-time probe timeout. */
 const PROBE_TIMEOUT_MS = 15_000;
 

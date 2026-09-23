@@ -2,7 +2,7 @@
  * The catalog writers against a real database.
  *
  * The behaviour worth pinning is the association, because its failure mode is
- * quiet. A price can arrive before the product it belongs to — Stripe pages the
+ * quiet. A price can arrive before the offering it belongs to — Stripe pages the
  * two resources separately, and an archived or filtered product may simply not
  * come back on a given run. The writer keeps that offering rather than dropping
  * it, retains the provider's product id, and links it on a later run once the
@@ -18,7 +18,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
   relinkOrphanedOfferings,
+  relinkOrphanedPrices,
   writeOfferings,
+  writePrices,
   writeProductFeatures,
   writeProducts,
   writeRecordsForFunction,
@@ -51,6 +53,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  await prisma.price.deleteMany({ where: { integrationId: INTEGRATION_ID } });
   await prisma.offering.deleteMany({ where: { integrationId: INTEGRATION_ID } });
   await prisma.productFeature.deleteMany({
     where: { integrationId: INTEGRATION_ID },
@@ -93,6 +96,26 @@ function offeringRecord(
       object: "offering",
       fields: {
         name: `Offering ${externalSourceId}`,
+        ...fields,
+      },
+      customFields: {},
+      crossRefs: {},
+    } as MappedRecord,
+  };
+}
+
+function priceRecord(
+  externalSourceId: string,
+  externalOfferingId: string | undefined,
+  fields: Record<string, string | null> = {}
+): CollectedRecord {
+  return {
+    externalSourceId,
+    externalRefs: { offering: externalOfferingId },
+    mapped: {
+      object: "price",
+      fields: {
+        name: `Price ${externalSourceId}`,
         amountMinor: "4900",
         currency: "usd",
         interval: "month",
@@ -121,9 +144,6 @@ describe("writing products and offerings", () => {
       include: { product: true },
     });
     expect(row.product?.externalSourceId).toBe("prod_1");
-    expect(row.amountMinor).toBe(4900);
-    expect(row.currency).toBe("usd");
-    expect(row.interval).toBe("month");
   });
 
   it("keeps an offering whose product is missing, and says so", async () => {
@@ -149,7 +169,7 @@ describe("writing products and offerings", () => {
   });
 
   it("links an orphaned offering once its product arrives on a later run", async () => {
-    // Run one: the price, with no product.
+    // Run one: the offering, with no product.
     await writeOfferings(
       INTEGRATION_ID,
       [offeringRecord("price_1", "prod_late")],
@@ -210,6 +230,101 @@ describe("writing products and offerings", () => {
   });
 });
 
+describe("writing prices", () => {
+  it("links a price to the offering written in the same run", async () => {
+    const products = await writeProducts(INTEGRATION_ID, [productRecord("prod_1")]);
+    const offerings = await writeOfferings(
+      INTEGRATION_ID,
+      [offeringRecord("off_1", "prod_1")],
+      products.externalToInternal
+    );
+    const prices = await writePrices(
+      INTEGRATION_ID,
+      [priceRecord("price_1", "off_1")],
+      offerings.externalToInternal
+    );
+
+    expect(prices.written).toBe(1);
+    expect(prices.issues).toEqual([]);
+
+    const row = await prisma.price.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+      include: { offering: true },
+    });
+    expect(row.offering?.externalSourceId).toBe("off_1");
+    expect(row.amountMinor).toBe(4900);
+    expect(row.currency).toBe("usd");
+    expect(row.interval).toBe("month");
+  });
+
+  it("keeps a price whose offering is missing, and says so", async () => {
+    const prices = await writePrices(
+      INTEGRATION_ID,
+      [priceRecord("price_orphan", "off_absent")],
+      new Map()
+    );
+
+    expect(prices.written).toBe(1);
+    expect(prices.issues).toHaveLength(1);
+    expect(prices.issues[0]?.severity).toBe("warning");
+    expect(prices.issues[0]?.fieldName).toBe("associatedOfferingId");
+
+    const row = await prisma.price.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+    });
+    expect(row.offeringId).toBeNull();
+    expect(row.externalOfferingId).toBe("off_absent");
+  });
+
+  it("links an orphaned price once its offering arrives on a later run", async () => {
+    // Run one: the price, with no offering.
+    await writePrices(
+      INTEGRATION_ID,
+      [priceRecord("price_1", "off_late")],
+      new Map()
+    );
+
+    // Run two: the offering shows up.
+    const products = await writeProducts(INTEGRATION_ID, [productRecord("prod_1")]);
+    await writeOfferings(
+      INTEGRATION_ID,
+      [offeringRecord("off_late", "prod_1")],
+      products.externalToInternal
+    );
+    const relinked = await relinkOrphanedPrices(INTEGRATION_ID);
+
+    expect(relinked).toBe(1);
+
+    const row = await prisma.price.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+      include: { offering: true },
+    });
+    expect(row.offering?.externalSourceId).toBe("off_late");
+  });
+
+  it("finds an offering written by an earlier run, not just this one", async () => {
+    const products = await writeProducts(INTEGRATION_ID, [productRecord("prod_1")]);
+    await writeOfferings(
+      INTEGRATION_ID,
+      [offeringRecord("off_1", "prod_1")],
+      products.externalToInternal
+    );
+
+    const prices = await writePrices(
+      INTEGRATION_ID,
+      [priceRecord("price_1", "off_1")],
+      new Map() // Empty: nothing was written in "this run".
+    );
+
+    expect(prices.issues).toEqual([]);
+    const row = await prisma.price.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+      include: { offering: true },
+    });
+    expect(row.offering?.externalSourceId).toBe("off_1");
+  });
+});
+
 describe("catalog validation policy", () => {
   it("rejects a record with no provider id", async () => {
     const result = await writeProducts(INTEGRATION_ID, [
@@ -230,12 +345,23 @@ describe("catalog validation policy", () => {
     expect(result.issues[0]?.fieldName).toBe("name");
   });
 
-  it("warns and unsets an amount that is not a whole number", async () => {
-    // Not rejected: the offering still has a name, a currency and an interval
-    // worth keeping. Same policy `customer.type` gets.
-    const result = await writeOfferings(
+  it("rejects a nameless price", async () => {
+    const result = await writePrices(
       INTEGRATION_ID,
-      [offeringRecord("price_1", undefined, { amountMinor: "49.99" })],
+      [priceRecord("price_1", undefined, { name: null })],
+      new Map()
+    );
+    expect(result.written).toBe(0);
+    expect(result.issues[0]?.severity).toBe("rejected");
+    expect(result.issues[0]?.fieldName).toBe("name");
+  });
+
+  it("warns and unsets an amount that is not a whole number", async () => {
+    // Not rejected: the price still has a name, a currency and an interval
+    // worth keeping. Same policy `customer.type` gets.
+    const result = await writePrices(
+      INTEGRATION_ID,
+      [priceRecord("price_1", undefined, { amountMinor: "49.99" })],
       new Map()
     );
 
@@ -243,7 +369,7 @@ describe("catalog validation policy", () => {
     expect(result.issues[0]?.severity).toBe("warning");
     expect(result.issues[0]?.fieldName).toBe("amountMinor");
 
-    const row = await prisma.offering.findFirstOrThrow({
+    const row = await prisma.price.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
     });
     // Null, not 49 — truncating a major-unit price into the minor-unit column
@@ -252,27 +378,27 @@ describe("catalog validation policy", () => {
   });
 
   it("warns and unsets an unrecognised billing interval", async () => {
-    const result = await writeOfferings(
+    const result = await writePrices(
       INTEGRATION_ID,
-      [offeringRecord("price_1", undefined, { interval: "fortnight" })],
+      [priceRecord("price_1", undefined, { interval: "fortnight" })],
       new Map()
     );
 
     expect(result.written).toBe(1);
     expect(result.issues[0]?.fieldName).toBe("interval");
-    const row = await prisma.offering.findFirstOrThrow({
+    const row = await prisma.price.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
     });
     expect(row.interval).toBeNull();
   });
 
   it("keeps one_time as a value rather than treating it as absent", async () => {
-    await writeOfferings(
+    await writePrices(
       INTEGRATION_ID,
-      [offeringRecord("price_1", undefined, { interval: "one_time" })],
+      [priceRecord("price_1", undefined, { interval: "one_time" })],
       new Map()
     );
-    const row = await prisma.offering.findFirstOrThrow({
+    const row = await prisma.price.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
     });
     expect(row.interval).toBe("one_time");
@@ -299,7 +425,8 @@ describe("catalog validation policy", () => {
 describe("per-function dispatch", () => {
   it("writes the catalog in parent-then-child order from one call", async () => {
     const collected = new Map<TargetObject, CollectedRecord[]>([
-      ["offering", [offeringRecord("price_1", "prod_1")]],
+      ["price", [priceRecord("price_1", "off_1")]],
+      ["offering", [offeringRecord("off_1", "prod_1")]],
       ["product", [productRecord("prod_1")]],
     ]);
 
@@ -311,14 +438,15 @@ describe("per-function dispatch", () => {
       collected
     );
 
-    expect(result.counts).toEqual({ product: 1, offering: 1, productFeature: 0 });
+    expect(result.counts).toEqual({ product: 1, offering: 1, price: 1, productFeature: 0 });
     expect(result.issues).toEqual([]);
 
-    const row = await prisma.offering.findFirstOrThrow({
+    const row = await prisma.price.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
-      include: { product: true },
+      include: { offering: { include: { product: true } } },
     });
-    expect(row.product?.externalSourceId).toBe("prod_1");
+    expect(row.offering?.externalSourceId).toBe("off_1");
+    expect(row.offering?.product?.externalSourceId).toBe("prod_1");
   });
 
   it("reports only the objects its function writes", async () => {
@@ -331,6 +459,7 @@ describe("per-function dispatch", () => {
     // report should say for a catalog sync.
     expect(Object.keys(result.counts).sort()).toEqual([
       "offering",
+      "price",
       "product",
       "productFeature",
     ]);
@@ -585,9 +714,9 @@ describe("what the catalog page reads", () => {
     await writeOfferings(
       INTEGRATION_ID,
       [
-        offeringRecord("price_1", "prod_1"),
-        offeringRecord("price_2", "prod_1", { amountMinor: "9900" }),
-        offeringRecord("price_orphan", "prod_gone"),
+        offeringRecord("off_1", "prod_1"),
+        offeringRecord("off_2", "prod_1"),
+        offeringRecord("off_orphan", "prod_gone"),
       ],
       index
     );
@@ -605,9 +734,31 @@ describe("what the catalog page reads", () => {
     });
     expect(page.products[0]?.offeringCount).toBe(2);
 
-    const orphan = page.offerings.find((o) => o.externalSourceId === "price_orphan");
+    const orphan = page.offerings.find((o) => o.externalSourceId === "off_orphan");
     expect(orphan?.productName).toBeNull();
     expect(orphan?.externalProductId).toBe("prod_gone");
+  });
+
+  it("surfaces price fields from the primary price on the catalog offering row", async () => {
+    const products = await writeProducts(INTEGRATION_ID, [productRecord("prod_1")]);
+    const offerings = await writeOfferings(
+      INTEGRATION_ID,
+      [offeringRecord("off_1", "prod_1")],
+      products.externalToInternal
+    );
+    await writePrices(
+      INTEGRATION_ID,
+      [priceRecord("price_1", "off_1")],
+      offerings.externalToInternal
+    );
+
+    const page = await loadCatalog(USER_ID);
+    const row = page.offerings[0];
+
+    // The read model surfaces prices[0] as the primary price for display.
+    expect(row?.amountMinor).toBe(4900);
+    expect(row?.currency).toBe("usd");
+    expect(row?.interval).toBe("month");
   });
 
   it("scopes to the requesting user", async () => {

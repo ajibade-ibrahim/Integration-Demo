@@ -64,6 +64,7 @@ import {
 } from "./providers/stripe/provider";
 import {
   chargebeeProvider,
+  CHARGEBEE_CATALOG_SCOPES,
   CHARGEBEE_IDENTITY_SCOPES,
   CHARGEBEE_PROVIDER_NAME,
 } from "./providers/chargebee/provider";
@@ -74,6 +75,7 @@ import { stripeIdentityHandler } from "./providers/stripe/identity-handler";
 import { stripeAgreementHandler } from "./providers/stripe/agreement-handler";
 import { stripeCatalogHandler } from "./providers/stripe/catalog-handler";
 import { stripeFieldDiscovery } from "./providers/stripe/discovery";
+import { chargebeeCatalogHandler } from "./providers/chargebee/catalog-handler";
 import { chargebeeIdentityHandler } from "./providers/chargebee/identity-handler";
 import { chargebeeFieldDiscovery } from "./providers/chargebee/discovery";
 import { mockIdentityHandler } from "./providers/mock/identity-handler";
@@ -160,6 +162,7 @@ export function bootstrap(): void {
   // "catalog"])` is a real intersection rather than a formality.
   const catalogScopes: Array<[string, readonly string[]]> = [
     [STRIPE_PROVIDER_NAME, STRIPE_CATALOG_SCOPES],
+    [CHARGEBEE_PROVIDER_NAME, CHARGEBEE_CATALOG_SCOPES],
   ];
 
   registerFunction({
@@ -167,7 +170,7 @@ export function bootstrap(): void {
     label: "Catalog",
     description:
       "Products and the offerings that price them — what is for sale, at what amount, on what billing interval.",
-    dataModels: ["product", "offering", "productFeature"],
+    dataModels: ["product", "offering", "price", "productFeature"],
     scopesByProvider: scopeMap(catalogScopes),
   });
 
@@ -337,6 +340,17 @@ export function bootstrap(): void {
   // duplicate but the entries the (function, provider) key requires.
   registerSyncHandler(CATALOG_FUNCTION, STRIPE_PROVIDER_NAME, stripeCatalogHandler);
   registerFieldDiscovery(CATALOG_FUNCTION, STRIPE_PROVIDER_NAME, stripeFieldDiscovery);
+
+  registerSyncHandler(
+    CATALOG_FUNCTION,
+    CHARGEBEE_PROVIDER_NAME,
+    chargebeeCatalogHandler
+  );
+  registerFieldDiscovery(
+    CATALOG_FUNCTION,
+    CHARGEBEE_PROVIDER_NAME,
+    chargebeeFieldDiscovery
+  );
 
   // Stripe is the first provider to make `agreement` real. Its scopes were
   // declared long before this handler existed, so nothing about the picker,

@@ -190,15 +190,6 @@ export const stripeCatalogHandler: SyncHandler = {
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(ctx, "Stripe", STRIPE_SESSION_OPTIONS);
 
-    // Products first, in full, before any price is yielded. Prices resolve
-    // their product through the index the engine builds from these pages, and
-    // a price that arrives first is kept but left unlinked until a later run.
-    //
-    // Their ids are retained as they stream past, because a feature's own
-    // payload does not name the product it belongs to — see
-    // `flattenProductFeature` — and the features pass below has no other way to
-    // know which products to ask about. Collected here in the `for await` rather
-    // than by widening `pageResource`, which stays a pure pass-through.
     const productIds: string[] = [];
     for await (const page of pageResource(
       session,
@@ -206,34 +197,28 @@ export const stripeCatalogHandler: SyncHandler = {
       "product",
       withCreatedAt
     )) {
+      const offerings: RawRecord[] = [];
       for (const record of page.records) {
         const id = asString(record["id"]);
-        if (id !== undefined) productIds.push(id);
+        if (id !== undefined) {
+          productIds.push(id);
+          offerings.push({
+            id,
+            name: asString(record["name"]) ?? id,
+            description: asString(record["description"]),
+            active: record["active"] === true,
+            product_id: id,
+          });
+        }
       }
       yield page;
+      if (offerings.length > 0) {
+        yield { object: "offering", records: offerings };
+      }
     }
 
-    yield* pageResource(session, "prices", "offering", flattenPrice);
+    yield* pageResource(session, "prices", "price", flattenPrice);
 
-    // Features last, and only if two separate things are true. Ordering
-    // matters for the same reason it does for prices — a feature resolves its
-    // product against the index the product pages built.
-    //
-    // The cheaper condition is asked first, because it costs no requests at
-    // all. Stripe has no field-selection parameter, so `requestedSourcePaths`
-    // is unused for the purpose it was designed for — but it answers a second
-    // question exactly: does any mapping rule point at this object? If none
-    // does, every row fetched below would be collected, rejected by the writer
-    // for a missing name, and reported as a partial run. An integration
-    // connected before this object existed keeps the rules it was connected
-    // with, so that is the ordinary state of every existing integration rather
-    // than an edge case — until someone presses "Reset to suggested" in the
-    // mapping editor and picks up the three shipped defaults.
-    //
-    // Deliberately *not* applied to products or prices. There the fetch is two
-    // requests whatever the rules say, and skipping it would make an empty
-    // mapping indistinguishable from an empty catalog. Here the fetch is one
-    // request per product, which is what makes the asymmetry worth having.
     const featuresAreMapped =
       (ctx.requestedSourcePaths.get("productFeature") ?? []).length > 0;
 
@@ -245,23 +230,16 @@ export const stripeCatalogHandler: SyncHandler = {
   },
 
   externalIdOf(record: RawRecord): string | undefined {
-    // Every object here carries Stripe's own `id` — `prod_…`, `price_…`,
-    // `prodft_…` — and unlike the identity handler there is no synthesized
-    // record to tell apart from a real one. Note it is the *attachment's* id
-    // that keys a feature row, not the feature definition's: the same feature on
-    // two products is two rows, and keying on `feat_…` would make the second
-    // overwrite the first.
     return asString(record["id"]);
   },
 
   externalRefsOf(record: RawRecord, object: TargetObject): ExternalRefs {
-    // A product is a root; an offering and a feature each hang off one.
     switch (object) {
       case "offering":
-        return { product: priceProductId(record) };
+        return { product: asString(record["product_id"]) ?? asString(record["id"]) };
+      case "price":
+        return { offering: priceProductId(record) };
       case "productFeature":
-        // Read from `product_id`, which `flattenProductFeature` injected from
-        // the request URL. There is no field on the payload to read instead.
         return { product: asString(record["product_id"]) };
       default:
         return {};

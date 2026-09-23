@@ -192,3 +192,110 @@ function localPart(email: string): string {
   const at = email.indexOf("@");
   return at > 0 ? email.slice(0, at) : email;
 }
+
+// ---------------------------------------------------------------------------
+// Catalog V2 (Item Families, Items, Item Prices)
+// ---------------------------------------------------------------------------
+
+export function itemFamiliesUrl(
+  site: string,
+  limit: number,
+  offset?: string
+): string {
+  const base = chargebeeApiBase(site).replace(/\/$/, "");
+  const url = new URL(`${base}/api/v2/item_families`);
+  url.searchParams.set("limit", String(limit));
+  if (offset !== undefined && offset !== "") {
+    url.searchParams.set("next_offset", offset);
+  }
+  return url.toString();
+}
+
+export function itemsUrl(
+  site: string,
+  limit: number,
+  offset?: string
+): string {
+  const base = chargebeeApiBase(site).replace(/\/$/, "");
+  const url = new URL(`${base}/api/v2/items`);
+  url.searchParams.set("limit", String(limit));
+  if (offset !== undefined && offset !== "") {
+    url.searchParams.set("next_offset", offset);
+  }
+  return url.toString();
+}
+
+export function itemPricesUrl(
+  site: string,
+  limit: number,
+  offset?: string
+): string {
+  const base = chargebeeApiBase(site).replace(/\/$/, "");
+  const url = new URL(`${base}/api/v2/item_prices`);
+  url.searchParams.set("limit", String(limit));
+  if (offset !== undefined && offset !== "") {
+    url.searchParams.set("next_offset", offset);
+  }
+  return url.toString();
+}
+
+export interface ChargebeeListPage {
+  readonly records: readonly RawRecord[];
+  readonly nextOffset: string | undefined;
+}
+
+export function parseEnvelopePage(
+  json: unknown,
+  entityKey: string
+): ChargebeeListPage {
+  const body = asRecord(json);
+  const list = asArray(body?.["list"]);
+
+  const records: RawRecord[] = [];
+  for (const item of list) {
+    const record = asRecord(asRecord(item)?.[entityKey]);
+    if (record !== undefined) {
+      records.push(record);
+    }
+  }
+
+  const nextOffset = asString(body?.["next_offset"]);
+
+  return {
+    records,
+    nextOffset: nextOffset === "" ? undefined : nextOffset,
+  };
+}
+
+export function parseItemFamiliesPage(json: unknown): ChargebeeListPage {
+  return parseEnvelopePage(json, "item_family");
+}
+
+export function parseItemsPage(json: unknown): ChargebeeListPage {
+  return parseEnvelopePage(json, "item");
+}
+
+export function parseItemPricesPage(json: unknown): ChargebeeListPage {
+  return parseEnvelopePage(json, "item_price");
+}
+
+export function flattenItemPrice(itemPrice: RawRecord): RawRecord {
+  const periodUnit = asString(itemPrice["period_unit"])?.toLowerCase();
+  const period = itemPrice["period"];
+
+  let interval: string = "one_time";
+  if (periodUnit === "day" || periodUnit === "week" || periodUnit === "month" || periodUnit === "year") {
+    interval = periodUnit;
+  }
+
+  const name = asString(itemPrice["name"]) ?? asString(itemPrice["id"]) ?? "Price";
+  const createdAt = epochToIso(itemPrice["created_at"]);
+
+  return {
+    price_name: name,
+    offering_id: asString(itemPrice["item_id"]),
+    interval,
+    interval_count: typeof period === "number" ? period : 1,
+    ...(createdAt === undefined ? {} : { created_at: createdAt }),
+  };
+}
