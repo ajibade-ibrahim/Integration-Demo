@@ -102,10 +102,17 @@ describe("Chargebee Catalog API & Parsing", () => {
 
     const flattened = flattenItemPrice(itemPriceRecord);
     expect(flattened["price_name"]).toBe("Analytics Pro Monthly");
-    expect(flattened["price"]).toBe(9900);
-    expect(flattened["currency_code"]).toBe("USD");
     expect(flattened["interval"]).toBe("month");
     expect(flattened["interval_count"]).toBe(1);
+    expect(flattened).not.toHaveProperty("price");
+    expect(flattened).not.toHaveProperty("currency_code");
+
+    // The handler spreads the raw record first, so passthrough fields reach the
+    // mapper from the payload; flattenItemPrice only synthesizes what the payload
+    // cannot reach.
+    const merged = { ...itemPriceRecord, ...flattened };
+    expect(merged["price"]).toBe(9900);
+    expect(merged["currency_code"]).toBe("USD");
   });
 });
 
