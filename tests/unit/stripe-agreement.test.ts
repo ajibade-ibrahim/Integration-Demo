@@ -171,7 +171,7 @@ describe("flattenSubscription", () => {
     expect(flat["agreement_type"]).toBe("subscription");
     expect(flat["status"]).toBe("active");
     expect(flat["customer_id"]).toBe("cus_1");
-    expect(flat["offering_id"]).toBe("price_monthly");
+    expect(flat["offering_id"]).toBe("prod_widget");
     expect(flat["item_count"]).toBe(1);
   });
 
@@ -232,7 +232,7 @@ describe("flattenSubscription", () => {
     expect(flat["item_count"]).toBe(2);
     // The first item's price is the one linked, and its quantity is the one
     // carried — both stated so the arbitrariness is at least documented.
-    expect(flat["offering_id"]).toBe("price_monthly");
+    expect(flat["offering_id"]).toBe("prod_widget");
     expect(flat["quantity"]).toBe(1);
   });
 });
@@ -252,7 +252,7 @@ describe("reading the two ids", () => {
   });
 
   it("reads the offering id off the first item, and nothing when there are none", () => {
-    expect(subscriptionOfferingId(subscription())).toBe("price_monthly");
+    expect(subscriptionOfferingId(subscription())).toBe("prod_widget");
     expect(subscriptionOfferingId(bare())).toBeUndefined();
   });
 });
@@ -263,7 +263,7 @@ describe("the handler's references", () => {
     // agreement is an arrangement between a customer and something sold.
     expect(
       stripeAgreementHandler.externalRefsOf(subscription(), "agreement")
-    ).toEqual({ customer: "cus_1", offering: "price_monthly" });
+    ).toEqual({ customer: "cus_1", offering: "prod_widget" });
 
     expect(
       stripeAgreementHandler.externalRefsOf(subscription(), "subscription")

@@ -42,6 +42,7 @@ const licensedItem = {
   price: {
     id: "price_monthly",
     object: "price",
+    product: "prod_widget",
     unit_amount: 4900,
     currency: "usd",
     recurring: { interval: "month", usage_type: "licensed" },
@@ -187,10 +188,11 @@ describe("flattenAgreementItem", () => {
     );
   });
 
-  it("lifts the price id out as the offering reference", () => {
-    expect(flattenAgreementItem(licensedItem, "sub_1", 0)["offering_id"]).toBe(
-      "price_monthly"
-    );
+  it("reads both ids off the line's price", () => {
+    const flat = flattenAgreementItem(licensedItem, "sub_1", 0);
+
+    expect(flat["price_id"]).toBe("price_monthly");
+    expect(flat["offering_id"]).toBe("prod_widget");
   });
 
   it("takes the position from the argument, counting from zero", () => {

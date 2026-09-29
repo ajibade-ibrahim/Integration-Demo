@@ -232,7 +232,7 @@ describe("an agreement sync, end to end", () => {
     expect(agreement.agreementType).toBe("subscription");
     expect(agreement.status).toBe("active");
     expect(agreement.customer?.name).toBe("Acme");
-    expect(agreement.offering?.externalSourceId).toBe("price_monthly");
+    expect(agreement.offering?.externalSourceId).toBe("prod_widget");
     expect(agreement.subscription?.quantity).toBe(3);
     expect(agreement.subscription?.currentPeriodEnd?.toISOString()).toBe(
       new Date(1_701_678_400 * 1000).toISOString()
@@ -343,17 +343,19 @@ describe("two parents, resolved independently", () => {
     // agreement, and dropping it would lose the name, status and dates too.
     expect(first.status).toBe("success");
     expect(first.issues.every((i) => i.severity === "warning")).toBe(true);
-    // One per unresolved half, plus the line item's own unresolved offering.
-    // Three rather than two, and the third is not noise: the agreement's
-    // offering link and its line's are separate columns that repair
-    // separately, so a report naming only one of them would understate what
-    // is dangling.
+    // One per unresolved half, plus the line item's own unresolved offering
+    // and price. Four rather than two, and the extra two are not noise: the
+    // agreement's offering link, its line's offering link and its line's price
+    // link are separate columns that repair separately — the writer warns on
+    // the unresolved price independently of the offering it names — so a
+    // report naming only some of them would understate what is dangling.
     expect(
       first.issues.map((i) => `${i.targetObject}.${i.fieldName}`).sort()
     ).toEqual([
       "agreement.associatedCustomerId",
       "agreement.associatedOfferingId",
       "agreementItem.associatedOfferingId",
+      "agreementItem.associatedPriceId",
     ]);
 
     const dangling = await prisma.agreement.findFirstOrThrow({
@@ -364,7 +366,7 @@ describe("two parents, resolved independently", () => {
     // The provider's own ids are retained, which is what makes the repair
     // possible at all.
     expect(dangling.externalCustomerId).toBe("cus_acme");
-    expect(dangling.externalOfferingId).toBe("price_monthly");
+    expect(dangling.externalOfferingId).toBe("prod_widget");
 
     // Add the other two functions and sync again.
     await prisma.integrationFunction.createMany({
@@ -390,7 +392,7 @@ describe("two parents, resolved independently", () => {
       include: { customer: true, offering: true },
     });
     expect(linked.customer?.name).toBe("Acme");
-    expect(linked.offering?.externalSourceId).toBe("price_monthly");
+    expect(linked.offering?.externalSourceId).toBe("prod_widget");
 
     // The line repaired itself too, through its own relink pass rather than
     // the agreement's. Asserted separately because they are separate columns
@@ -400,7 +402,7 @@ describe("two parents, resolved independently", () => {
       where: { integrationId: INTEGRATION_ID },
       include: { offering: true },
     });
-    expect(item.offering?.externalSourceId).toBe("price_monthly");
+    expect(item.offering?.externalSourceId).toBe("prod_widget");
   });
 
   it("warns about each unresolved half separately", async () => {
@@ -520,7 +522,7 @@ describe("the subscription half", () => {
     const agreement = await prisma.agreement.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
     });
-    expect(agreement.externalOfferingId).toBe("price_monthly");
+    expect(agreement.externalOfferingId).toBe("prod_widget");
   });
 
   it("cascades away with its agreement", async () => {
@@ -697,6 +699,7 @@ describe("the other functions still sync alongside it", () => {
       contact: 1,
       product: 1,
       offering: 1,
+      price: 1,
       feature: 0,
       agreement: 1,
       subscription: 1,

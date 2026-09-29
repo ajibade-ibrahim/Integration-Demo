@@ -29,6 +29,7 @@ import {
   writeAgreements,
   writeCustomers,
   writeOfferings,
+  writePrices,
   writeProducts,
   writeRecordsForFunction,
   writeSubscriptions,
@@ -124,7 +125,7 @@ function subscriptionRecord(
 
 function itemRecord(
   externalSourceId: string,
-  refs: { agreement?: string; offering?: string },
+  refs: { agreement?: string; offering?: string; price?: string },
   fields: Record<string, string | null> = {}
 ): CollectedRecord {
   return {
@@ -163,7 +164,7 @@ async function seedParents(): Promise<void> {
       } as MappedRecord,
     },
   ]);
-  await writeOfferings(
+  const offerings = await writeOfferings(
     INTEGRATION_ID,
     [
       {
@@ -183,6 +184,31 @@ async function seedParents(): Promise<void> {
       },
     ],
     products.externalToInternal
+  );
+
+  // The money lives on the price now, not on the offering: the offering is what
+  // was sold and the price is what it bills at, so an agreement's displayed
+  // price is formatted from its line's price row.
+  await writePrices(
+    INTEGRATION_ID,
+    [
+      {
+        externalSourceId: "price_1",
+        externalRefs: { offering: "price_1" },
+        mapped: {
+          object: "price",
+          fields: {
+            name: "$49/month",
+            amountMinor: "4900",
+            currency: "usd",
+            interval: "month",
+          },
+          customFields: {},
+          crossRefs: {},
+        } as MappedRecord,
+      },
+    ],
+    offerings.externalToInternal
   );
 }
 
@@ -968,7 +994,7 @@ describe("what the agreements page reads", () => {
     expect(row?.price).toBeUndefined();
   });
 
-  it("formats the price from the linked offering", async () => {
+  it("formats the price from the line's linked price", async () => {
     await seedParents();
     const agreements = await writeAgreements(INTEGRATION_ID, [
       agreementRecord("sub_1", { customer: "cus_1", offering: "price_1" }),
@@ -976,6 +1002,17 @@ describe("what the agreements page reads", () => {
     await writeSubscriptions(
       INTEGRATION_ID,
       [subscriptionRecord("sub_1", "sub_1", { itemCount: "2" })],
+      agreements.externalToInternal
+    );
+    await writeAgreementItems(
+      INTEGRATION_ID,
+      [
+        itemRecord("si_1", {
+          agreement: "sub_1",
+          offering: "price_1",
+          price: "price_1",
+        }),
+      ],
       agreements.externalToInternal
     );
 

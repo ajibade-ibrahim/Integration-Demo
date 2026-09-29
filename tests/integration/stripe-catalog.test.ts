@@ -163,6 +163,11 @@ describe("Stripe catalog pagination", () => {
       "prod_3",
     ]);
     expect(byObject.offering.map((p) => p["id"])).toEqual([
+      "prod_1",
+      "prod_2",
+      "prod_3",
+    ]);
+    expect(byObject.price.map((p) => p["id"])).toEqual([
       "price_1",
       "price_2",
       "price_3",
@@ -182,7 +187,14 @@ describe("Stripe catalog pagination", () => {
     const { pages } = await collect(stripeCatalogHandler, ctx);
 
     const objects = pages.map((p) => p.object);
-    expect(objects).toEqual(["product", "product", "offering", "offering"]);
+    expect(objects).toEqual([
+      "product",
+      "offering",
+      "product",
+      "offering",
+      "price",
+      "price",
+    ]);
   });
 
   it("stops rather than repeating a cursor that does not advance", async () => {
@@ -232,7 +244,7 @@ describe("Stripe catalog record shape", () => {
     const { ctx } = testContext();
     const { byObject } = await collect(stripeCatalogHandler, ctx);
 
-    expect(byObject.offering[0]?.["offering_name"]).toBe("$49/month");
+    expect(byObject.price[0]?.["offering_name"]).toBe("$49/month");
   });
 
   it("keeps a nickname when the merchant set one", async () => {
@@ -243,7 +255,7 @@ describe("Stripe catalog record shape", () => {
     const { ctx } = testContext();
     const { byObject } = await collect(stripeCatalogHandler, ctx);
 
-    expect(byObject.offering[0]?.["offering_name"]).toBe("Team plan");
+    expect(byObject.price[0]?.["offering_name"]).toBe("Team plan");
   });
 
   it("flattens the interval and defaults a one-time price to one_time", async () => {
@@ -257,9 +269,9 @@ describe("Stripe catalog record shape", () => {
     const { ctx } = testContext();
     const { byObject } = await collect(stripeCatalogHandler, ctx);
 
-    expect(byObject.offering[0]?.["interval"]).toBe("month");
-    expect(byObject.offering[1]?.["interval"]).toBe("one_time");
-    expect(byObject.offering[1]?.["interval_count"]).toBe(1);
+    expect(byObject.price[0]?.["interval"]).toBe("month");
+    expect(byObject.price[1]?.["interval"]).toBe("one_time");
+    expect(byObject.price[1]?.["interval_count"]).toBe(1);
   });
 
   it("carries the product association on every price", async () => {
@@ -273,14 +285,14 @@ describe("Stripe catalog record shape", () => {
     const { ctx } = testContext();
     const { byObject } = await collect(stripeCatalogHandler, ctx);
 
-    const first = byObject.offering[0];
-    const second = byObject.offering[1];
+    const first = byObject.price[0];
+    const second = byObject.price[1];
     expect(first).toBeDefined();
     expect(second).toBeDefined();
     if (first === undefined || second === undefined) return;
 
-    expect(stripeCatalogHandler.externalRefsOf(first, "offering")).toEqual({ product: "prod_1" });
-    expect(stripeCatalogHandler.externalRefsOf(second, "offering")).toEqual({ product: "prod_2" });
+    expect(stripeCatalogHandler.externalRefsOf(first, "price")).toEqual({ offering: "prod_1" });
+    expect(stripeCatalogHandler.externalRefsOf(second, "price")).toEqual({ offering: "prod_2" });
   });
 
   it("converts the epoch created stamp on products as well as prices", async () => {
@@ -292,7 +304,7 @@ describe("Stripe catalog record shape", () => {
     const { byObject } = await collect(stripeCatalogHandler, ctx);
 
     expect(byObject.product[0]?.["created_at"]).toBe("2023-04-07T18:59:53.000Z");
-    expect(byObject.offering[0]?.["created_at"]).toBe("2023-04-07T18:59:53.000Z");
+    expect(byObject.price[0]?.["created_at"]).toBe("2023-04-07T18:59:53.000Z");
   });
 
   it("does not let a synthesized field shadow one Stripe actually sent", async () => {
@@ -306,7 +318,7 @@ describe("Stripe catalog record shape", () => {
     const { ctx } = testContext();
     const { byObject } = await collect(stripeCatalogHandler, ctx);
 
-    expect(byObject.offering[0]?.["interval"]).toBe("month");
+    expect(byObject.price[0]?.["interval"]).toBe("month");
   });
 });
 
@@ -545,8 +557,10 @@ describe("Stripe features", () => {
 
     expect(pages.map((page) => page.object)).toEqual([
       "product",
+      "offering",
       "product",
       "offering",
+      "price",
       "feature",
       "feature",
     ]);
@@ -656,7 +670,7 @@ describe("Stripe catalog field discovery", () => {
     expect(paths).not.toContain("delinquent");
   });
 
-  it("reads prices for the offering object, and offers the synthesized paths", async () => {
+  it("reads prices for the price object, and offers the synthesized paths", async () => {
     server.use(
       http.get(PRICES, () =>
         HttpResponse.json({
@@ -668,7 +682,7 @@ describe("Stripe catalog field discovery", () => {
     );
 
     const { ctx } = testContext();
-    const paths = (await stripeFieldDiscovery.discover(ctx, "offering")).map(
+    const paths = (await stripeFieldDiscovery.discover(ctx, "price")).map(
       (f) => f.path
     );
 
