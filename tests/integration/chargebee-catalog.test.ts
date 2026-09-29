@@ -184,6 +184,11 @@ describe("Chargebee features (item entitlements)", () => {
     expect(reports?.["feature_name"]).toBe("Advanced Reports");
     expect(reports?.["feature_id"]).toBe("cb_feat_advanced_reports");
 
+    // `metered` is read off the feature definition and carried onto every row
+    // of that definition, since the entitlement itself never states it.
+    expect(reports?.["feature_metered"]).toBe(false);
+    expect(dashPro?.["feature_metered"]).toBe(false);
+
     // The offering comes from the payload's own `item_id`.
     expect(
       byObject.feature.map((f) => chargebeeCatalogHandler.externalRefsOf(f, "feature"))
@@ -196,6 +201,48 @@ describe("Chargebee features (item entitlements)", () => {
     // The entitlement level travels with the row, for a custom-field mapping.
     expect([dashPro?.["value"], dashPro?.["name"]]).toEqual(["50", "Maximum"]);
     expect([dashSeats?.["value"], dashSeats?.["name"]]).toEqual(["1", "Minimum"]);
+  });
+
+  it("carries each definition's metered flag onto its entitlement rows", async () => {
+    // The flag lives on the feature definition, and the entitlement that
+    // attaches it to an item does not repeat it. The handler crosses the two so
+    // a mapped `feature.metered` has something to read.
+    server.use(
+      ...catalogEndpoints(),
+      http.get(FEATURES_ENDPOINT, () =>
+        HttpResponse.json({
+          list: [
+            { feature: { id: "cb_feat_usage", name: "API Calls", metered: true } },
+            { feature: { id: "cb_feat_flag", name: "SSO", metered: false } },
+          ],
+        })
+      ),
+      http.get(FEATURE_ENTITLEMENTS_ENDPOINT, ({ params }) => {
+        const id = String(params["featureId"]);
+        return HttpResponse.json({
+          list: [
+            {
+              item_entitlement: {
+                id: `ent-${id}`,
+                item_id: "cb_item_analytics_pro",
+                feature_id: id,
+                feature_name: id,
+              },
+            },
+          ],
+        });
+      })
+    );
+
+    const { ctx } = testContext({ ...CREDENTIALS, sources: FEATURES_MAPPED });
+    const { byObject } = await collect(chargebeeCatalogHandler, ctx);
+
+    expect(
+      byObject.feature.map((f) => [f["id"], f["feature_metered"]])
+    ).toEqual([
+      ["ent-cb_feat_usage", true],
+      ["ent-cb_feat_flag", false],
+    ]);
   });
 
   it("follows next_offset on both the feature list and each feature's entitlements", async () => {

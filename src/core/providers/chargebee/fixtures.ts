@@ -113,6 +113,7 @@ export const CHARGEBEE_FIXTURE_FEATURES_PAGE_1 = {
         name: "Advanced Reports",
         status: "active",
         type: "switch",
+        metered: false,
         levels: [],
         object: "feature",
       },
@@ -123,6 +124,7 @@ export const CHARGEBEE_FIXTURE_FEATURES_PAGE_1 = {
         name: "Dashboards",
         status: "active",
         type: "range",
+        metered: false,
         unit: "dashboard",
         levels: [
           { name: "Minimum", value: "1", is_unlimited: false, level: 0 },

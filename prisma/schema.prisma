@@ -471,6 +471,20 @@ model Feature {
   /// The provider's own feature definition id (`feat_…` on Stripe).
   externalFeatureId String?
 
+  /// Whether the feature's entitlement is consumed by measured usage rather
+  /// than granted as a fixed flag — Chargebee's `feature.metered`.
+  ///
+  /// Denormalized onto the attachment for the same reason `name` is: it lives
+  /// on the feature *definition*, and a row here is the attachment of that
+  /// definition to one offering.
+  ///
+  /// Nullable, for `Product.active`'s reason. Stripe's Entitlements API models
+  /// a feature as a bare flag with no quantity and no metered concept — metered
+  /// there is a property of a price, not a feature — so for Stripe the honest
+  /// answer is "we were not told", and `false` would be a claim the provider
+  /// never made.
+  isMetered Boolean?
+
   /// Resolved internal offering. Null when the provider gave us an offering id
   /// we could not resolve — the row is kept and a warning is recorded.
   offeringId String?

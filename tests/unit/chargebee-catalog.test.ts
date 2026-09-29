@@ -76,6 +76,7 @@ describe("Chargebee Catalog API & Parsing", () => {
       "cb_feat_advanced_reports",
       "cb_feat_dashboards",
     ]);
+    expect(features.records[0]?.["metered"]).toBe(false);
 
     const entitlements = parseItemEntitlementsPage(
       CHARGEBEE_FIXTURE_DASHBOARDS_ENTITLEMENTS

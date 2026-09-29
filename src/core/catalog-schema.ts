@@ -101,6 +101,11 @@ const FEATURE_SCHEMA: ObjectSchema = {
       maxLength: 255,
     },
     {
+      name: "isMetered",
+      label: "Is metered",
+      kind: "boolean",
+    },
+    {
       name: "associatedOfferingId",
       label: "Associated offering",
       kind: "string",

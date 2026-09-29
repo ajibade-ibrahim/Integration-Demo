@@ -933,6 +933,7 @@ export async function writeFeatures(
         mapped.fields["externalFeatureId"] ?? null,
         maxLengthOf("feature", "externalFeatureId")
       ),
+      isMetered: parseBoolean(mapped.fields["isMetered"] ?? null),
       offeringId,
       externalOfferingId: externalOfferingId ?? null,
       customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),

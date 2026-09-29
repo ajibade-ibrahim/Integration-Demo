@@ -71,11 +71,20 @@ export const CHARGEBEE_PRICE_FIELDS: readonly DiscoveredFieldDef[] = [
  * `name` is the *entitlement level's* label ("Maximum", "Available"), not the
  * feature's name — that is `feature_name`. `value` is the level's raw value
  * ("300", "true"), mappable into a custom field.
+ *
+ * `feature_metered` is synthesized by the handler from the feature definition,
+ * which is where Chargebee keeps `metered`; the entitlement itself does not
+ * carry it.
  */
 export const CHARGEBEE_FEATURE_FIELDS: readonly DiscoveredFieldDef[] = [
   { path: "id", label: "Item Entitlement ID", type: "string" },
   { path: "feature_id", label: "Feature ID", type: "string" },
   { path: "feature_name", label: "Feature Name", type: "string" },
+  {
+    path: "feature_metered",
+    label: "Metered (synthesized from the feature definition)",
+    type: "boolean",
+  },
   { path: "item_id", label: "Item ID (offering)", type: "string" },
   { path: "item_type", label: "Item Type", type: "string" },
   { path: "value", label: "Entitlement Value", type: "string" },

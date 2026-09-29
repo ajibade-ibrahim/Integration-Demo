@@ -137,4 +137,13 @@ export const chargebeeCatalogDefaults: readonly FieldMappingRule[] = [
     targetFieldPath: "externalFeatureId",
     transform: "none",
   },
+  // Chargebee keeps `metered` on the feature definition, not on the item
+  // entitlement that attaches it. The handler carries it across as
+  // `feature_metered`, so this is the source path rather than `metered`.
+  {
+    sourceFieldPath: "feature_metered",
+    targetObject: "feature",
+    targetFieldPath: "isMetered",
+    transform: "none",
+  },
 ];

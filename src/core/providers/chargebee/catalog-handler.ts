@@ -12,6 +12,11 @@
  * That pass is conditional, as Stripe's is: it runs only when a mapping rule
  * targets `feature`, and a site with no feature definitions costs the one list
  * request that says so.
+ *
+ * The definitions are read for more than their ids: `metered` is a property of
+ * the definition, so the handler carries it onto each of that definition's
+ * entitlement rows as the synthesized `feature_metered` the mapping layer
+ * targets.
  */
 
 import type { RawRecord, TargetObject } from "../../types/common";
@@ -158,7 +163,13 @@ export const chargebeeCatalogHandler: SyncHandler = {
 
     // Collected before the fan-out rather than interleaved with it, so a
     // feature page and an entitlement page never share an offset variable.
+    //
+    // `metered` is captured here and not at the entitlement, because it lives
+    // on the feature *definition*: the item entitlement that attaches the
+    // feature to an item never carries it. Capturing it now avoids a second
+    // read of the definition per entitlement.
     const featureIds: string[] = [];
+    const meteredByFeatureId = new Map<string, boolean>();
     for await (const records of pageList((next) =>
       session
         .getJson(featuresUrl(site, perPage, next))
@@ -166,18 +177,35 @@ export const chargebeeCatalogHandler: SyncHandler = {
     )) {
       for (const feature of records) {
         const id = asString(feature["id"]);
-        if (id !== undefined && id !== "") featureIds.push(id);
+        if (id === undefined || id === "") continue;
+        featureIds.push(id);
+        const metered = feature["metered"];
+        if (typeof metered === "boolean") meteredByFeatureId.set(id, metered);
       }
     }
 
     for (const featureId of featureIds) {
+      // Chargebee documents `metered` as required, but an absent one is left
+      // absent rather than written as `false`: only a real boolean is a claim
+      // the provider made, and the column is nullable precisely to hold the
+      // difference.
+      const metered = meteredByFeatureId.get(featureId);
       for await (const records of pageList((next) =>
         session
           .getJson(featureItemEntitlementsUrl(site, featureId, perPage, next))
           .then(parseItemEntitlementsPage)
       )) {
         if (records.length > 0) {
-          yield { object: "feature", records };
+          yield {
+            object: "feature",
+            records:
+              metered === undefined
+                ? records
+                : records.map((record) => ({
+                    ...record,
+                    feature_metered: metered,
+                  })),
+          };
         }
       }
     }

@@ -72,6 +72,17 @@ describe("the catalog schema", () => {
     }
   });
 
+  it("exposes feature.isMetered as a mappable boolean", () => {
+    // Nullable in the database and mappable here: a provider that has no
+    // metered concept (Stripe's entitlements) leaves it unset rather than
+    // claiming `false`.
+    const metered = OBJECT_SCHEMAS.feature.fields.find(
+      (f) => f.name === "isMetered"
+    );
+    expect(metered?.kind).toBe("boolean");
+    expect(mappableFields("feature").map((f) => f.name)).toContain("isMetered");
+  });
+
   it("offers the billing intervals the writer accepts", () => {
     const interval = OBJECT_SCHEMAS.price.fields.find(
       (f) => f.name === "interval"

@@ -541,6 +541,29 @@ describe("writing features", () => {
     expect(row.externalFeatureId).toBe("feat_prodft_1");
   });
 
+  it("records whether a feature is metered, keeping unknown distinct from false", async () => {
+    const index = await offeringIndex("off_1");
+    await writeFeatures(
+      INTEGRATION_ID,
+      [
+        featureRecord("prodft_metered", "off_1", { isMetered: "true" }),
+        featureRecord("prodft_flag", "off_1", { isMetered: "false" }),
+        featureRecord("prodft_unstated", "off_1"),
+      ],
+      index
+    );
+
+    const rows = await prisma.feature.findMany({
+      where: { integrationId: INTEGRATION_ID },
+      orderBy: { externalSourceId: "asc" },
+    });
+    const metered = new Map(rows.map((r) => [r.externalSourceId, r.isMetered]));
+    expect(metered.get("prodft_metered")).toBe(true);
+    expect(metered.get("prodft_flag")).toBe(false);
+    // Unmapped is "we were not told", which the nullable column exists to hold.
+    expect(metered.get("prodft_unstated")).toBeNull();
+  });
+
   it("keeps a feature whose offering did not resolve, and says so", async () => {
     const result = await writeFeatures(
       INTEGRATION_ID,
