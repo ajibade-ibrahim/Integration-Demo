@@ -4,6 +4,7 @@ import { currentUserId } from "@/lib/current-user";
 import {
   formatOfferingPrice,
   loadCatalog,
+  type FeatureOffering,
 } from "@/core/repositories/catalog-repository";
 import { Empty, Table, Td } from "../data-table";
 
@@ -153,7 +154,7 @@ export default async function CatalogPage({
                 request rather than asking once per product or feature.
               </p>
             ) : (
-              <Table headers={["Feature", "Lookup key", "Offering", "Source"]}>
+              <Table headers={["Feature", "Lookup key", "Offerings", "Source"]}>
                 {features.map((row) => (
                   <tr key={row.id} className="border-t border-slate-100">
                     <Td className="font-medium">{row.name}</Td>
@@ -170,15 +171,12 @@ export default async function CatalogPage({
                       )}
                     </Td>
                     <Td>
-                      <ParentCell
-                        name={row.offeringName}
-                        externalId={row.externalOfferingId}
-                      />
+                      <OfferingsCell offerings={row.offerings} />
                     </Td>
                     <Td className="text-xs text-slate-400">
                       {row.integrationLabel}
                       <span className="ml-1 font-mono">
-                        #{row.externalSourceId}
+                        #{row.featureId ?? row.externalSourceId}
                       </span>
                     </Td>
                   </tr>
@@ -224,10 +222,10 @@ export default async function CatalogPage({
 /**
  * The parent a child row belongs to — resolved, unresolved, or never named.
  *
- * Three states and one renderer, shared by offerings (whose parent is a
- * product) and features (whose parent is an offering) because they hold the
- * same two columns for the same reason. An "unresolved" badge that looked
- * different on the two tabs would read as two different problems.
+ * Three states and one renderer, used by offerings (whose parent is a product).
+ * Features show a *list* of parents instead — see `OfferingsCell` — but the
+ * badge is the same one, because an "unresolved" that looked different on the
+ * two tabs would read as two different problems.
  */
 function ParentCell({
   name,
@@ -245,6 +243,33 @@ function ParentCell({
     );
   }
   return <Empty />;
+}
+
+/**
+ * Every offering a feature belongs to, comma-separated.
+ *
+ * A feature is one row here however many offerings include it, so the
+ * single-parent renderer above does not fit: a resolved offering and an
+ * unresolved one have to appear side by side in the same cell.
+ */
+function OfferingsCell({ offerings }: { offerings: FeatureOffering[] }) {
+  if (offerings.length === 0) return <Empty />;
+  return (
+    <>
+      {offerings.map((offering, index) => (
+        <span key={`${offering.name ?? ""}#${offering.externalId ?? ""}`}>
+          {index > 0 ? ", " : null}
+          {offering.name !== null ? (
+            offering.name
+          ) : (
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">
+              unresolved #{offering.externalId}
+            </span>
+          )}
+        </span>
+      ))}
+    </>
+  );
 }
 
 /**

@@ -38,7 +38,21 @@ export interface OfferingRow {
 }
 
 /**
- * One feature attachment, with the offering it resolved to.
+ * One offering a feature belongs to, as the page renders it in the list.
+ */
+export interface FeatureOffering {
+  /** Resolved internal offering name, or null when the link is unresolved. */
+  name: string | null;
+  /** The provider's own offering id, present even when the link is unresolved. */
+  externalId: string | null;
+}
+
+/**
+ * One feature, deduplicated across the offerings that include it.
+ *
+ * The `Feature` table stores one row per *attachment*, so the same feature on
+ * three offerings is three rows. The page is written in terms of the feature,
+ * not the attachment, so those rows are grouped here — see `featureGroupKey`.
  */
 export interface FeatureRow {
   id: string;
@@ -46,9 +60,8 @@ export interface FeatureRow {
   name: string;
   lookupKey: string | null;
   featureId: string | null;
-  offeringName: string | null;
-  /** The provider's own offering id, present even when the link is unresolved. */
-  externalOfferingId: string | null;
+  /** Every offering this feature belongs to, deduplicated and name-sorted. */
+  offerings: FeatureOffering[];
   customFields: Record<string, string>;
   integrationLabel: string;
 }
@@ -88,16 +101,8 @@ export async function loadCatalog(
 ): Promise<CatalogPage> {
   const scope = { integration: { userId } };
 
-  const [
-    products,
-    offerings,
-    features,
-    productTotal,
-    offeringTotal,
-    featureTotal,
-    unlinked,
-    unlinkedFeatures,
-  ] = await Promise.all([
+  const [products, offerings, features, productTotal, offeringTotal, unlinked] =
+    await Promise.all([
       prisma.product.findMany({
         where: scope,
         orderBy: { name: "asc" },
@@ -131,14 +136,25 @@ export async function loadCatalog(
       }),
       prisma.product.count({ where: scope }),
       prisma.offering.count({ where: scope }),
-      prisma.feature.count({ where: scope }),
       prisma.offering.count({
         where: { ...scope, productId: null, externalProductId: { not: null } },
       }),
-      prisma.feature.count({
-        where: { ...scope, offeringId: null, externalOfferingId: { not: null } },
-      }),
     ]);
+
+  const featureRows = groupFeatures(
+    features.map((row) => ({
+      id: row.id,
+      externalSourceId: row.externalSourceId,
+      name: row.name,
+      lookupKey: row.lookupKey,
+      featureId: row.externalFeatureId,
+      offeringName: row.offering?.name ?? null,
+      externalOfferingId: row.externalOfferingId,
+      customFields: readJsonObject(row.customFields),
+      integrationLabel: row.integration.instanceLabel,
+      integrationId: row.integrationId,
+    }))
+  );
 
   return {
     products: products.map((row) => ({
@@ -170,25 +186,112 @@ export async function loadCatalog(
         integrationLabel: row.integration.instanceLabel,
       };
     }),
-    features: features.map((row) => ({
-      id: row.id,
-      externalSourceId: row.externalSourceId,
-      name: row.name,
-      lookupKey: row.lookupKey,
-      featureId: row.externalFeatureId,
-      offeringName: row.offering?.name ?? null,
-      externalOfferingId: row.externalOfferingId,
-      customFields: readJsonObject(row.customFields),
-      integrationLabel: row.integration.instanceLabel,
-    })),
+    features: featureRows,
+    // Feature counts come from the grouped rows rather than `prisma.feature`,
+    // which counts attachments. A tab reading "Features (12)" above six rows —
+    // the same feature on two offerings is two attachments — would make the
+    // grouping look like a bug.
     totals: {
       products: productTotal,
       offerings: offeringTotal,
-      features: featureTotal,
+      features: featureRows.length,
       unlinkedOfferings: unlinked,
-      unlinkedFeatures,
+      unlinkedFeatures: featureRows.filter((row) =>
+        row.offerings.some((offering) => offering.name === null)
+      ).length,
     },
   };
+}
+
+/** A feature attachment row, before grouping. */
+interface FlatFeature {
+  id: string;
+  externalSourceId: string;
+  name: string;
+  lookupKey: string | null;
+  featureId: string | null;
+  offeringName: string | null;
+  externalOfferingId: string | null;
+  customFields: Record<string, string>;
+  integrationLabel: string;
+  integrationId: string;
+}
+
+/**
+ * The identity a feature row is grouped by.
+ *
+ * `lookupKey` is the stable key an application gates on, so it is the key the
+ * page groups by. It can be null — Stripe does not require one — and grouping
+ * every null together would merge distinct features into one row, so the
+ * provider's own feature id, and finally the attachment id, stand in.
+ *
+ * The integration id is part of the key, not the display label: two connections
+ * to two accounts hold two separate catalogs, and nothing here merges them.
+ */
+function featureGroupKey(row: FlatFeature): string {
+  const identity = row.lookupKey ?? row.featureId ?? row.externalSourceId;
+  return `${row.integrationId}\u0000${identity}`;
+}
+
+/**
+ * Collapse the attachment rows into one row per feature.
+ *
+ * Resolved offerings sort before unresolved ones, and both sort by name or, for
+ * an unresolved one, by the provider's id — so the list a person reads is
+ * stable and the "unresolved #off_x" badges land at the end.
+ */
+function groupFeatures(rows: readonly FlatFeature[]): FeatureRow[] {
+  const grouped = new Map<string, FeatureRow>();
+
+  for (const row of rows) {
+    const offering: FeatureOffering | null =
+      row.offeringName === null && row.externalOfferingId === null
+        ? null
+        : { name: row.offeringName, externalId: row.externalOfferingId };
+
+    const key = featureGroupKey(row);
+    const existing = grouped.get(key);
+    if (existing === undefined) {
+      grouped.set(key, {
+        id: row.id,
+        externalSourceId: row.externalSourceId,
+        name: row.name,
+        lookupKey: row.lookupKey,
+        featureId: row.featureId,
+        offerings: offering === null ? [] : [offering],
+        customFields: row.customFields,
+        integrationLabel: row.integrationLabel,
+      });
+      continue;
+    }
+
+    const duplicate =
+      offering !== null &&
+      existing.offerings.some(
+        (it) => it.name === offering.name && it.externalId === offering.externalId
+      );
+    if (offering !== null && !duplicate) {
+      existing.offerings.push(offering);
+    }
+  }
+
+  const result = [...grouped.values()];
+  for (const row of result) {
+    row.offerings.sort(compareOfferings);
+  }
+  result.sort(
+    (a, b) =>
+      a.name.localeCompare(b.name) ||
+      (a.lookupKey ?? "").localeCompare(b.lookupKey ?? "")
+  );
+  return result;
+}
+
+function compareOfferings(a: FeatureOffering, b: FeatureOffering): number {
+  if (a.name !== null && b.name !== null) return a.name.localeCompare(b.name);
+  if (a.name !== null) return -1;
+  if (b.name !== null) return 1;
+  return (a.externalId ?? "").localeCompare(b.externalId ?? "");
 }
 
 /**

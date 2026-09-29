@@ -32,6 +32,10 @@ import { loadCatalog } from "@/core/repositories/catalog-repository";
 
 const USER_ID = "user-catalog-writer";
 const INTEGRATION_ID = "integration-catalog-writer";
+// A second connection for the same user, so the "two catalogs do not merge"
+// read can be exercised against a real second integration rather than asserted
+// in the abstract.
+const OTHER_INTEGRATION_ID = "integration-catalog-writer-other";
 
 beforeAll(async () => {
   await prisma.user.upsert({
@@ -50,18 +54,34 @@ beforeAll(async () => {
     },
     update: {},
   });
+  await prisma.integration.upsert({
+    where: { id: OTHER_INTEGRATION_ID },
+    create: {
+      id: OTHER_INTEGRATION_ID,
+      userId: USER_ID,
+      providerName: "stripe",
+      status: "active",
+      // Deliberately the same label as the first connection: grouping is keyed
+      // on the integration id, not the name a person reads.
+      instanceLabel: "Catalog writer",
+    },
+    update: {},
+  });
 });
 
 beforeEach(async () => {
-  await prisma.price.deleteMany({ where: { integrationId: INTEGRATION_ID } });
-  await prisma.feature.deleteMany({
-    where: { integrationId: INTEGRATION_ID },
-  });
-  await prisma.offering.deleteMany({ where: { integrationId: INTEGRATION_ID } });
-  await prisma.product.deleteMany({ where: { integrationId: INTEGRATION_ID } });
+  for (const integrationId of [INTEGRATION_ID, OTHER_INTEGRATION_ID]) {
+    await prisma.price.deleteMany({ where: { integrationId } });
+    await prisma.feature.deleteMany({ where: { integrationId } });
+    await prisma.offering.deleteMany({ where: { integrationId } });
+    await prisma.product.deleteMany({ where: { integrationId } });
+  }
 });
 
 afterAll(async () => {
+  await prisma.integration
+    .delete({ where: { id: OTHER_INTEGRATION_ID } })
+    .catch(() => {});
   await prisma.integration
     .delete({ where: { id: INTEGRATION_ID } })
     .catch(() => {});
@@ -724,8 +744,87 @@ describe("writing features", () => {
     const orphan = page.features.find(
       (f) => f.externalSourceId === "prodft_orphan"
     );
-    expect(orphan?.offeringName).toBeNull();
-    expect(orphan?.externalOfferingId).toBe("off_gone");
+    expect(orphan?.offerings).toEqual([{ name: null, externalId: "off_gone" }]);
+  });
+
+  it("groups feature rows by lookup key, listing every offering", async () => {
+    // The same feature attached to two offerings is two `Feature` rows. The
+    // page shows the feature once, with both offerings in the one cell.
+    const index = await offeringIndex("off_platform", "off_integrations");
+    await writeFeatures(
+      INTEGRATION_ID,
+      [
+        featureRecord("prodft_a", "off_platform", {
+          name: "API access",
+          lookupKey: "api-access",
+          externalFeatureId: "feat_api",
+        }),
+        featureRecord("prodft_b", "off_integrations", {
+          name: "API access",
+          lookupKey: "api-access",
+          externalFeatureId: "feat_api",
+        }),
+      ],
+      index
+    );
+
+    const page = await loadCatalog(USER_ID);
+
+    // Two attachments, one feature: the counts and the row follow the grouping.
+    expect(page.totals.features).toBe(1);
+    expect(page.features).toHaveLength(1);
+
+    const row = page.features[0];
+    expect(row?.lookupKey).toBe("api-access");
+    expect(row?.offerings).toEqual([
+      { name: "Offering off_integrations", externalId: "off_integrations" },
+      { name: "Offering off_platform", externalId: "off_platform" },
+    ]);
+  });
+
+  it("keeps a shared lookup key apart per integration", async () => {
+    // Two connections to two accounts hold two separate catalogs, and grouping
+    // must not merge their identically-keyed features — even when the two
+    // connections share a display label, which is why the key is the id.
+    const offerings = await writeOfferings(
+      INTEGRATION_ID,
+      [offeringRecord("off_1", undefined)],
+      new Map()
+    );
+    const otherOfferings = await writeOfferings(
+      OTHER_INTEGRATION_ID,
+      [offeringRecord("off_1", undefined)],
+      new Map()
+    );
+
+    await writeFeatures(
+      INTEGRATION_ID,
+      [
+        featureRecord("prodft_1", "off_1", {
+          lookupKey: "api-access",
+          externalFeatureId: "feat_1",
+        }),
+      ],
+      offerings.externalToInternal
+    );
+    await writeFeatures(
+      OTHER_INTEGRATION_ID,
+      [
+        featureRecord("prodft_1", "off_1", {
+          lookupKey: "api-access",
+          externalFeatureId: "feat_1",
+        }),
+      ],
+      otherOfferings.externalToInternal
+    );
+
+    const page = await loadCatalog(USER_ID);
+
+    expect(page.totals.features).toBe(2);
+    expect(page.features).toHaveLength(2);
+    // One row each: merging the two integrations would have collapsed them into
+    // a single row carrying both offerings.
+    expect(page.features.every((row) => row.offerings.length === 1)).toBe(true);
   });
 });
 
