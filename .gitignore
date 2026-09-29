@@ -31,3 +31,6 @@ hubspot-app/**/node_modules/
 scripts/users*.json
 scripts/stripe-sandbox-fixtures.json
 README.md
+
+#kilo
+.kilo*
