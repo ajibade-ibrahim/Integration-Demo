@@ -101,14 +101,85 @@ export const CHARGEBEE_FIXTURE_ITEMS_PAGE_1 = {
         created_at: 1672531200,
       },
     },
+  ],
+};
+
+/** Feature definitions — shaped like a real `/api/v2/features` response. */
+export const CHARGEBEE_FIXTURE_FEATURES_PAGE_1 = {
+  list: [
     {
-      item: {
-        id: "cb_item_advanced_reports",
+      feature: {
+        id: "cb_feat_advanced_reports",
         name: "Advanced Reports",
-        type: "feature",
-        item_family_id: "cb_family_analytics",
         status: "active",
-        created_at: 1672531200,
+        type: "switch",
+        levels: [],
+        object: "feature",
+      },
+    },
+    {
+      feature: {
+        id: "cb_feat_dashboards",
+        name: "Dashboards",
+        status: "active",
+        type: "range",
+        unit: "dashboard",
+        levels: [
+          { name: "Minimum", value: "1", is_unlimited: false, level: 0 },
+          { name: "Maximum", value: "50", is_unlimited: false, level: 1 },
+        ],
+        object: "feature",
+      },
+    },
+  ],
+};
+
+/** `/api/v2/features/cb_feat_advanced_reports/item_entitlements` */
+export const CHARGEBEE_FIXTURE_ADVANCED_REPORTS_ENTITLEMENTS = {
+  list: [
+    {
+      item_entitlement: {
+        id: "item-ent-reports-pro",
+        item_id: "cb_item_analytics_pro",
+        item_type: "plan",
+        feature_id: "cb_feat_advanced_reports",
+        feature_name: "Advanced Reports",
+        value: "true",
+        name: "Available",
+        object: "item_entitlement",
+      },
+    },
+  ],
+};
+
+/**
+ * `/api/v2/features/cb_feat_dashboards/item_entitlements` — the same feature on
+ * two items, at two different levels.
+ */
+export const CHARGEBEE_FIXTURE_DASHBOARDS_ENTITLEMENTS = {
+  list: [
+    {
+      item_entitlement: {
+        id: "item-ent-dash-pro",
+        item_id: "cb_item_analytics_pro",
+        item_type: "plan",
+        feature_id: "cb_feat_dashboards",
+        feature_name: "Dashboards",
+        value: "50",
+        name: "Maximum",
+        object: "item_entitlement",
+      },
+    },
+    {
+      item_entitlement: {
+        id: "item-ent-dash-seats",
+        item_id: "cb_item_extra_seats",
+        item_type: "addon",
+        feature_id: "cb_feat_dashboards",
+        feature_name: "Dashboards",
+        value: "1",
+        name: "Minimum",
+        object: "item_entitlement",
       },
     },
   ],

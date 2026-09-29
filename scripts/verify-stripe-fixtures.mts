@@ -43,7 +43,7 @@ const ctx: HandlerContext = {
   // them to decide whether the per-product features fan-out is worth running.
   // Declared here so this script exercises what a mapped integration does; an
   // empty map would make the features section silently report zero.
-  requestedSourcePaths: new Map([["productFeature", ["feature_name"]]]),
+  requestedSourcePaths: new Map([["feature", ["feature_name"]]]),
 };
 
 /** Every record a handler yields, bucketed by target object. */
@@ -93,16 +93,16 @@ for (const offering of offerings) {
   );
 }
 
-const productFeatures = catalog.get("productFeature") ?? [];
+const features = catalog.get("feature") ?? [];
 
-console.log(`\n=== features: ${productFeatures.length} attachments ===\n`);
-console.log("feature_name".padEnd(22), "lookup_key".padEnd(18), "feature_id".padEnd(22), "product");
-for (const feature of productFeatures) {
+console.log(`\n=== features: ${features.length} attachments ===\n`);
+console.log("feature_name".padEnd(22), "lookup_key".padEnd(18), "feature_id".padEnd(22), "offering");
+for (const feature of features) {
   console.log(
     str(feature["feature_name"]).slice(0, 21).padEnd(22),
     str(feature["lookup_key"]).slice(0, 17).padEnd(18),
     str(feature["feature_id"]).slice(0, 21).padEnd(22),
-    str(feature["product_id"])
+    str(feature["offering_id"])
   );
 }
 
@@ -277,47 +277,47 @@ const checks: Array<[string, boolean, string]> = [
   ],
   [
     "features came back at all",
-    productFeatures.length > 0,
+    features.length > 0,
     "the probe short-circuited on a seeded account, or the fan-out stopped " +
       "running — the two failures that look identical from the output alone",
   ],
   [
-    "every feature resolved a product",
-    productFeatures.length > 0 &&
-      productFeatures.every((f) => String(f["product_id"] ?? "").startsWith("prod_")),
+    "every feature resolved an offering",
+    features.length > 0 &&
+      features.every((f) => String(f["offering_id"] ?? "").startsWith("prod_")),
     "the id comes from the request URL, not the payload; a blank one means " +
-      "the handler lost track of which product it was fetching",
+      "the handler lost track of which product (and so offering) it was fetching",
   ],
   [
-    "one feature is attached to two products",
+    "one feature is attached to two offerings",
     (() => {
       const byFeature = new Map<string, Set<string>>();
-      for (const f of productFeatures) {
+      for (const f of features) {
         const id = str(f["feature_id"]);
         const products = byFeature.get(id) ?? new Set<string>();
-        products.add(str(f["product_id"]));
+        products.add(str(f["offering_id"]));
         byFeature.set(id, products);
       }
       return [...byFeature.values()].some((products) => products.size > 1);
     })(),
     "api-access on both Platform and Integrations — two rows sharing one " +
-      "feature id, the case a Feature table would have made a join row",
+      "feature id, the case a feature-definitions table would have made a join row",
   ],
   [
-    "a product with no features produced no rows",
-    !productFeatures.some((f) => str(f["product_id"]).includes("seats")),
+    "an offering with no features produced no rows",
+    !features.some((f) => str(f["offering_id"]).includes("seats")),
     "Additional Seats is seeded with none; a row here means the parent id is " +
       "being taken from the wrong place",
   ],
   [
     "the unattached feature appears nowhere",
-    !productFeatures.some((f) => str(f["lookup_key"]) === "beta-sandbox"),
-    "a standalone Feature table is out of scope by design, and this is what " +
+    !features.some((f) => str(f["lookup_key"]) === "beta-sandbox"),
+    "a standalone feature-definitions table is out of scope by design, and this is what " +
       "makes that observable rather than merely claimed",
   ],
   [
     "a lookup key differs from a slug of the name",
-    productFeatures.some(
+    features.some(
       (f) =>
         str(f["lookup_key"]) === "reporting-v2" &&
         str(f["feature_name"]) === "Advanced reporting"

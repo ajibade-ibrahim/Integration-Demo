@@ -83,8 +83,8 @@ const PRICE_SCHEMA: ObjectSchema = {
   ],
 };
 
-const PRODUCT_FEATURE_SCHEMA: ObjectSchema = {
-  object: "productFeature",
+const FEATURE_SCHEMA: ObjectSchema = {
+  object: "feature",
   label: "Feature",
   fields: [
     { name: "name", label: "Name", kind: "string", required: true, maxLength: 255 },
@@ -101,8 +101,8 @@ const PRODUCT_FEATURE_SCHEMA: ObjectSchema = {
       maxLength: 255,
     },
     {
-      name: "associatedProductId",
-      label: "Associated product",
+      name: "associatedOfferingId",
+      label: "Associated offering",
       kind: "string",
       readOnly: true,
     },
@@ -113,5 +113,5 @@ export const CATALOG_SCHEMA = {
   product: PRODUCT_SCHEMA,
   offering: OFFERING_SCHEMA,
   price: PRICE_SCHEMA,
-  productFeature: PRODUCT_FEATURE_SCHEMA,
+  feature: FEATURE_SCHEMA,
 } as const;

@@ -2,20 +2,21 @@
  * Turning mapped records into rows: validation, upsert, and resolving each
  * child record's association to its parent.
  *
- * The association is the subtle part, and it is now the same shape five times.
+ * The association is the subtle part, and it is the same shape at every edge.
  * Providers hand back their *own* id for the parent — a company id on a contact
  * (HubSpot via an associations block, Salesforce via `AccountId`), a product id
- * on a price — never our internal UUID. Writing that straight into a foreign key
- * produces a dangling reference. So parents are written first, building an
- * external→internal index, and children resolve through it.
+ * on a price, a price id on an agreement's line — never our internal UUID.
+ * Writing that straight into a foreign key produces a dangling reference. So
+ * parents are written first, building an external→internal index, and children
+ * resolve through it.
  *
- * Three families live here: customers and contacts for `identity`, products and
- * offerings for `catalog`, agreements and subscriptions for `agreement`. They
- * share `resolveAssociation` and the relink pass rather than each growing their
- * own, because a second copy of that cache-then-fall-back logic is exactly
- * where the database fallback gets quietly omitted — and the symptom of
- * omitting it is a link that vanishes on the second sync, which is not a thing
- * anyone notices quickly.
+ * Three families live here: customers and contacts for `identity`; products,
+ * offerings, prices and features for `catalog`; agreements, subscriptions and
+ * their line items for `agreement`. They share `resolveAssociation` and the
+ * relink pass rather than each growing their own, because a second copy of that
+ * cache-then-fall-back logic is exactly where the database fallback gets quietly
+ * omitted — and the symptom of omitting it is a link that vanishes on the second
+ * sync, which is not a thing anyone notices quickly.
  *
  * The agreement family is where the shape stops being uniform, in two ways
  * worth knowing before reading it:
@@ -338,7 +339,12 @@ async function resolveCustomer(
 }
 
 /** Parent models a child record can be associated with by foreign id. */
-type ParentModel = "customer" | "product" | "offering" | "agreement";
+type ParentModel =
+  | "customer"
+  | "product"
+  | "offering"
+  | "price"
+  | "agreement";
 
 /**
  * Look a parent up by the provider's own id.
@@ -368,6 +374,8 @@ async function findByExternalId(
       return prisma.product.findUnique({ where, select });
     case "offering":
       return prisma.offering.findUnique({ where, select });
+    case "price":
+      return prisma.price.findUnique({ where, select });
     case "agreement":
       return prisma.agreement.findUnique({ where, select });
   }
@@ -380,10 +388,12 @@ async function findByExternalId(
  * for a parent written by an earlier run — without that fallback, a child whose
  * parent did not change would lose its link on every subsequent sync.
  *
- * Shared by contact→customer, offering→product, agreement→customer,
- * agreement→offering and subscription→agreement. They differ only in which
- * table they read, and having written the same cache-then-fall-back logic five
- * times is how one of them ends up quietly missing the fallback.
+ * Shared by every association in this file — contact→customer,
+ * offering→product, price→offering, feature→offering, agreement→customer,
+ * agreement→offering, agreementItem→offering, agreementItem→price and
+ * subscription→agreement. They differ only in which table they read, and
+ * having written the same cache-then-fall-back logic once per edge is how one
+ * of them ends up quietly missing the fallback.
  *
  * **One index per model, never one shared between them.** The index is keyed by
  * the provider's id alone, so a single map passed for two models would let a
@@ -840,35 +850,28 @@ export async function relinkOrphanedOfferings(
 }
 
 // ---------------------------------------------------------------------------
-// Product features
+// Features
 // ---------------------------------------------------------------------------
 
 /**
- * Write the features each product includes.
+ * Write the features each offering includes.
  *
  * Modelled directly on `writeOfferings`, because the shape is the same: a
  * single-parent child keyed on `(integrationId, externalSourceId)`, whose parent
  * may or may not resolve. The validation split is the same too, and the same way
- * round — no id or no name is **rejected**, an unresolvable product is a
+ * round — no id or no name is **rejected**, an unresolvable offering is a
  * **warning** with the row kept.
  *
- * Two things are worth knowing about the parent here, and neither is visible
- * from this function alone.
- *
- * The external product id did not come from the record Stripe sent. Features are
- * read from `/v1/products/{id}/features` and the response carries no product
- * field, so the handler injected it from the URL. That means an unresolvable
- * product is a *much* stronger signal here than it is for an offering — the id
- * is one this integration listed moments earlier in the same run, so failing to
- * resolve it means the product itself was rejected by `writeProducts`, not that
- * the provider named something we had never seen.
- *
- * And there is no relink pass for the same reason: a feature cannot arrive
- * before its parent. `externalProductId` is still stored, for the warning and
- * the data browser, but `relinkOrphansForFunction("catalog")` deliberately does
- * not look at this table. See the column's comment in the schema.
+ * Worth knowing about the parent, and not visible from this function alone:
+ * the external offering id comes from the provider's own payload (Chargebee's
+ * item entitlement `item_id`) or from the URL the handler requested (Stripe's
+ * `/v1/products/{id}/features`, where the offering is the synthesised sibling
+ * of the product). Either way both handlers read features after offerings, so
+ * the association resolves against the offering index built in the same run —
+ * and there is no relink pass, because a feature cannot arrive before its
+ * offering.
  */
-export async function writeProductFeatures(
+export async function writeFeatures(
   integrationId: string,
   records: readonly CollectedRecord[],
   externalToInternal: Map<string, string>
@@ -877,30 +880,25 @@ export async function writeProductFeatures(
   let written = 0;
 
   for (const { externalSourceId, externalRefs, mapped } of records) {
-    const externalProductId = externalRefs?.product;
+    const externalOfferingId = externalRefs?.offering;
     if (externalSourceId === undefined || externalSourceId === "") {
       issues.push({
         sourceRecordId: "(unknown)",
-        targetObject: "productFeature",
+        targetObject: "feature",
         reason: "Source record has no id",
         severity: "rejected",
       });
       continue;
     }
 
-    // Rejected rather than warned, as it is everywhere a name is required. A
-    // feature with no name cannot be rendered and cannot be told apart from the
-    // others in a list, and unlike a price it is not something a provider is
-    // expected to leave out — Stripe will not create a feature without one, so a
-    // blank name here means the mapping is wrong rather than the data thin.
     const name = normalize(
       mapped.fields["name"] ?? null,
-      maxLengthOf("productFeature", "name")
+      maxLengthOf("feature", "name")
     );
     if (name === null) {
       issues.push({
         sourceRecordId: externalSourceId,
-        targetObject: "productFeature",
+        targetObject: "feature",
         reason: "Name is required",
         fieldName: "name",
         severity: "rejected",
@@ -908,19 +906,19 @@ export async function writeProductFeatures(
       continue;
     }
 
-    const productId = await resolveAssociation(
+    const offeringId = await resolveAssociation(
       integrationId,
-      "product",
-      externalProductId,
+      "offering",
+      externalOfferingId,
       externalToInternal
     );
 
-    if (externalProductId !== undefined && productId === null) {
+    if (externalOfferingId !== undefined && offeringId === null) {
       issues.push({
         sourceRecordId: externalSourceId,
-        targetObject: "productFeature",
-        reason: `Product '${externalProductId}' not found; feature saved without a link`,
-        fieldName: "associatedProductId",
+        targetObject: "feature",
+        reason: `Offering '${externalOfferingId}' not found; feature saved without a link`,
+        fieldName: "associatedOfferingId",
         severity: "warning",
       });
     }
@@ -929,21 +927,18 @@ export async function writeProductFeatures(
       name,
       lookupKey: normalize(
         mapped.fields["lookupKey"] ?? null,
-        maxLengthOf("productFeature", "lookupKey")
+        maxLengthOf("feature", "lookupKey")
       ),
       externalFeatureId: normalize(
         mapped.fields["externalFeatureId"] ?? null,
-        maxLengthOf("productFeature", "externalFeatureId")
+        maxLengthOf("feature", "externalFeatureId")
       ),
-      productId,
-      externalProductId: externalProductId ?? null,
-      // Required rather than decorative: `resolveTargetField` validates
-      // `customFields.*` for every object, so without this call a rule writing
-      // one would save cleanly in the editor and then silently do nothing.
+      offeringId,
+      externalOfferingId: externalOfferingId ?? null,
       customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
     };
 
-    await prisma.productFeature.upsert({
+    await prisma.feature.upsert({
       where: {
         integrationId_externalSourceId: { integrationId, externalSourceId },
       },
@@ -1201,15 +1196,18 @@ export async function writeSubscriptions(
 
     const itemCount = parseInteger(mapped.fields["itemCount"] ?? null);
 
-    // Only the first priced line is linked to an offering, so a count above one
-    // is the only thing on the row that says the rest exist. Warned every run
-    // rather than once: it stays true until the subscription changes, and a
-    // warning that appears once and then goes quiet reads as resolved.
+    // Every line is stored now, each with its own price and offering — so this
+    // no longer warns about data that is missing. What it still says is that
+    // the *summary* is one line: the agreement links the first line's offering
+    // and its price column shows that one figure, so a count above one is what
+    // tells a reader that $49/month is not the whole of what is billed. Warned
+    // every run rather than once: it stays true until the subscription changes,
+    // and a warning that appears once and then goes quiet reads as resolved.
     if (itemCount !== null && itemCount > 1) {
       issues.push({
         sourceRecordId: externalSourceId,
         targetObject: "subscription",
-        reason: `Subscription has ${itemCount} priced items; only the first is linked to an offering`,
+        reason: `Subscription has ${itemCount} priced items; the agreement shows the first one's price`,
         fieldName: "itemCount",
         severity: "warning",
       });
@@ -1320,7 +1318,7 @@ export async function relinkOrphanedAgreements(
  *
  * **This is the only writer in the system that deletes.** Everything else is
  * upsert-only, and the gaps that leaves are documented rather than repaired: a
- * `ProductFeature` detached at Stripe stays until the integration is deleted,
+ * `Feature` attachment detached at Stripe stays until the integration is deleted,
  * because absence is not observable from a list we only ever add to. Items are
  * the exception, and the reason is worth stating precisely — a removed add-on
  * that lingers does not merely go stale, it makes the line list *wrong*, and
@@ -1355,9 +1353,10 @@ export async function writeAgreementItems(
   let written = 0;
 
   // One per model, never shared: the index is keyed by the provider's id
-  // alone, so a single map for both parents would let a subscription id
+  // alone, so a single map for these three parents would let a subscription id
   // collide with a price id. See `resolveAssociation`.
   const offeringIndex = new Map<string, string>();
+  const priceIndex = new Map<string, string>();
 
   // Our internal agreement id → the internal ids of its items written this
   // run. Only agreements appearing as keys here are reconciled, and only
@@ -1420,6 +1419,30 @@ export async function writeAgreementItems(
       });
     }
 
+    // The price, resolved independently of the offering above. Both come off
+    // the one nested price object and normally resolve together, but they are
+    // separate columns for the reason the schema gives: an offering has several
+    // prices, and only this edge says which of them was sold. Warned on its own
+    // for the same reason the agreement warns about each parent separately — a
+    // line whose price we could not find is still a real line.
+    const externalPriceId = externalRefs?.price;
+    const priceId = await resolveAssociation(
+      integrationId,
+      "price",
+      externalPriceId,
+      priceIndex
+    );
+
+    if (externalPriceId !== undefined && priceId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreementItem",
+        reason: `Price '${externalPriceId}' not found; line item saved without a price`,
+        fieldName: "associatedPriceId",
+        severity: "warning",
+      });
+    }
+
     // Warned and left unset, the policy every enum on this function gets: a
     // line whose type we cannot read is still a line, and a wrong type is
     // worse than a missing one. Null already means "the provider did not
@@ -1445,6 +1468,8 @@ export async function writeAgreementItems(
       agreementId,
       offeringId,
       externalOfferingId: externalOfferingId ?? null,
+      priceId,
+      externalPriceId: externalPriceId ?? null,
       quantity: parseInteger(mapped.fields["quantity"] ?? null),
       position: parseInteger(mapped.fields["position"] ?? null),
       itemType,
@@ -1518,18 +1543,20 @@ async function reconcileAgreementItems(
 }
 
 /**
- * Retry the offering links agreement items were written without.
+ * Retry the offering and price links agreement items were written without.
  *
- * The offering edge only. There is deliberately no agreement counterpart, for
- * `writeSubscriptions`' reason: that FK is required, so an unlinked item row
- * cannot exist to be repaired.
+ * Two edges rather than one, the shape `relinkOrphanedAgreements` has: each is
+ * repaired independently and a row that gained both is counted **once**, since
+ * the count answers "how many rows changed". There is deliberately no agreement
+ * counterpart, for `writeSubscriptions`' reason: that FK is required, so an
+ * unlinked item row cannot exist to be repaired.
  *
- * Worth having where `writeProductFeatures` has none, and the difference is
- * instructive. A feature's product id comes from the URL the sync just called,
- * so it cannot arrive before its parent. An item's *offering* comes from the
- * agreement function, and the catalog function may not be on this integration
- * at all — the same situation `Agreement.offeringId` is in, repaired the same
- * way.
+ * Worth having where `writeFeatures` has none, and the difference is
+ * instructive. A feature's offering id comes from the URL the sync just called,
+ * so it cannot arrive before its parent. An item's offering *and* its price both
+ * come from the catalog function, and the catalog function may not be on this
+ * integration at all — the same situation `Agreement.offeringId` is in, repaired
+ * the same way.
  */
 export async function relinkOrphanedAgreementItems(
   integrationId: string
@@ -1537,29 +1564,46 @@ export async function relinkOrphanedAgreementItems(
   const orphans = await prisma.agreementItem.findMany({
     where: {
       integrationId,
-      offeringId: null,
-      externalOfferingId: { not: null },
+      OR: [
+        { offeringId: null, externalOfferingId: { not: null } },
+        { priceId: null, externalPriceId: { not: null } },
+      ],
     },
-    select: { id: true, externalOfferingId: true },
+    select: {
+      id: true,
+      offeringId: true,
+      externalOfferingId: true,
+      priceId: true,
+      externalPriceId: true,
+    },
   });
 
   let relinked = 0;
   for (const orphan of orphans) {
-    if (orphan.externalOfferingId === null) continue;
+    const data: { offeringId?: string; priceId?: string } = {};
 
-    const offering = await findByExternalId(
-      integrationId,
-      "offering",
-      orphan.externalOfferingId
-    );
-
-    if (offering !== null) {
-      await prisma.agreementItem.update({
-        where: { id: orphan.id },
-        data: { offeringId: offering.id },
-      });
-      relinked += 1;
+    if (orphan.offeringId === null && orphan.externalOfferingId !== null) {
+      const offering = await findByExternalId(
+        integrationId,
+        "offering",
+        orphan.externalOfferingId
+      );
+      if (offering !== null) data.offeringId = offering.id;
     }
+
+    if (orphan.priceId === null && orphan.externalPriceId !== null) {
+      const price = await findByExternalId(
+        integrationId,
+        "price",
+        orphan.externalPriceId
+      );
+      if (price !== null) data.priceId = price.id;
+    }
+
+    if (Object.keys(data).length === 0) continue;
+
+    await prisma.agreementItem.update({ where: { id: orphan.id }, data });
+    relinked += 1;
   }
   return relinked;
 }
@@ -1632,17 +1676,17 @@ export async function writeRecordsForFunction(
         at("price"),
         offerings.externalToInternal
       );
-      const features = await writeProductFeatures(
+      const features = await writeFeatures(
         integrationId,
-        at("productFeature"),
-        products.externalToInternal
+        at("feature"),
+        offerings.externalToInternal
       );
       return {
         counts: {
           product: products.written,
           offering: offerings.written,
           price: prices.written,
-          productFeature: features.written,
+          feature: features.written,
         },
         issues: [
           ...products.issues,

@@ -206,9 +206,9 @@ export function productFeaturesUrl(
  * is flat and listable, so a single request with `limit=1` settles it.
  *
  * Note what it deliberately is *not* used for: the definitions it returns are
- * not synced. A `Feature` row would add only the ability to see a feature
- * attached to no product, and `ProductFeature` already carries the feature's id
- * and name denormalized onto every attachment.
+ * not synced. A definitions table would add only the ability to see a feature
+ * attached to no offering, and each `Feature` row (an attachment) already
+ * carries the feature's id and name denormalized onto it.
  */
 export function entitlementFeaturesUrl(limit: number): string {
   return paginatedUrl("/v1/entitlements/features", limit);
@@ -488,37 +488,27 @@ export function priceProductId(price: RawRecord): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Product feature
+// Feature
 // ---------------------------------------------------------------------------
 
 /**
- * Flatten one `ProductFeature` into a mappable record.
+ * Flatten one feature attachment into a mappable record.
  *
- * Two things make this unlike `flattenPrice`, and both are why it exists.
- *
- * **1. The parent id is not in the payload.** A ProductFeature response is
- * `{ id, object, livemode, entitlement_feature: { id, name, lookup_key } }` —
- * there is no `product` field anywhere in it. The product id comes from *the URL
- * the caller just requested*, which is why this takes a second argument where
- * `flattenPrice` takes one. A caller that loses track of which product it was
- * fetching links every row to the wrong product **silently**: no error, no null,
- * nothing to notice, just a catalog that is confidently wrong. The argument is
- * required rather than optional precisely so that losing track is a type error.
+ * The parent offering id is not in the payload. For Stripe's product-level
+ * features, the attachment is read from `/v1/products/{id}/features` and the
+ * response carries no product field — the offering id (which is the synthesised
+ * sibling of the product, sharing its id) comes from *the URL the caller just
+ * requested*. A caller that loses track of which offering it was fetching links
+ * every row to the wrong offering **silently**: no error, no null, nothing to
+ * notice. The argument is required rather than optional precisely so that losing
+ * track is a type error.
  *
  * It is also injected *last* and unconditionally, so a record carrying a
- * misleading `product` or `product_id` key of its own cannot win. The URL is the
- * only authority here.
- *
- * **2. The interesting fields are one level down.** `name` and `lookup_key`
- * belong to the nested feature definition rather than to the attachment, so they
- * are lifted to the top level — a mapping rule is one path, as it is for
- * `interval`. They are renamed rather than passed through: `name` at the top
- * level of a record whose `id` is a `prodft_…` would read as the attachment's
- * name, which is not a thing that exists.
+ * misleading key of its own cannot win. The URL is the only authority here.
  */
-export function flattenProductFeature(
+export function flattenFeature(
   feature: RawRecord,
-  productId: string
+  offeringId: string
 ): RawRecord {
   const definition = asRecord(feature["entitlement_feature"]);
 
@@ -526,7 +516,7 @@ export function flattenProductFeature(
     feature_name: asString(definition?.["name"]),
     lookup_key: asString(definition?.["lookup_key"]),
     feature_id: asString(definition?.["id"]),
-    product_id: productId,
+    offering_id: offeringId,
   };
 }
 
@@ -695,15 +685,16 @@ function periodBoundary(
  *   `status`          — overwritten with our vocabulary, not Stripe's.
  *   `customer_id`     — `customer` is a bare id normally and an expanded object
  *                       when asked for; both are read, as `priceProductId` does.
- *   `offering_id`     — the first item's price id, which is the join to the
- *                       catalog's Offering row.
+ *   `offering_id`     — the offering the first item sells, read through its
+ *                       price's `product`; the join to the catalog's Offering
+ *                       row. The *price* is not this, and no longer stands in
+ *                       for it: see `subscriptionOfferingId`.
  *   `item_count`      — how many priced lines exist, so that only-the-first is
  *                       a visible fact rather than a silent one.
  *   dates             — Unix epoch seconds through `epochToIso`, because every
  *                       date the writer accepts goes through `new Date(string)`.
  */
 export function flattenSubscription(subscription: RawRecord): RawRecord {
-  const price = firstItemPrice(subscription);
   const items = subscriptionItems(subscription);
   const firstQuantity = items[0]?.["quantity"];
 
@@ -744,7 +735,7 @@ export function flattenSubscription(subscription: RawRecord): RawRecord {
       ? {}
       : { raw_status: asString(subscription["status"]) }),
     customer_id: subscriptionCustomerId(subscription),
-    offering_id: asString(price?.["id"]),
+    offering_id: subscriptionOfferingId(subscription),
     item_count: items.length,
     ...(typeof firstQuantity === "number" ? { quantity: firstQuantity } : {}),
     ...dates,
@@ -798,7 +789,7 @@ export function itemTypeOf(item: RawRecord): string | undefined {
  *
  * **`agreement_id` is injected by the caller, never read from the record.**
  * Stripe's subscription item *does* carry a `subscription` field, which makes
- * this stricter than `flattenProductFeature`'s version of the same rule rather
+ * this stricter than `flattenFeature`'s version of the same rule rather
  * than looser: there is a plausible-looking value right there in the payload
  * and it is deliberately ignored. A record that could name its own parent is a
  * record that could reassign itself to another agreement, and this is the one
@@ -809,6 +800,14 @@ export function itemTypeOf(item: RawRecord): string | undefined {
  * **`position` is the caller's index, not anything Stripe sends.** It counts
  * across the *completed* list, including pages fetched separately, so it
  * orders the lines the way the provider returned them.
+ *
+ * **Both of the line's own ids come from the price it carries**, and they are
+ * not interchangeable. `price_id` is what this line bills at; `offering_id` is
+ * the offering it belongs to, which is the price's `product` — the synthesised
+ * sibling of the product the catalog handler writes. A line carries both because
+ * they answer different questions: *which* of an offering's prices was sold
+ * (monthly or yearly), and *what* was sold. Only the price can answer the first,
+ * which is exactly why the item table needs the column.
  */
 export function flattenAgreementItem(
   item: RawRecord,
@@ -820,7 +819,8 @@ export function flattenAgreementItem(
 
   return {
     agreement_id: subscriptionId,
-    offering_id: asString(price?.["id"]),
+    price_id: asString(price?.["id"]),
+    offering_id: price === undefined ? undefined : priceProductId(price),
     position,
     // Omitted rather than null, as `flattenSubscription` does for an
     // unrecognised status: no value means no mapping rule fires and the writer
@@ -829,9 +829,25 @@ export function flattenAgreementItem(
   };
 }
 
-/** The price id a subscription's first item names, or undefined if it has none. */
+/**
+ * The offering a subscription's first line sells, or undefined if it names none.
+ *
+ * The *offering*, not the price. A subscription's line names a price, and the
+ * offering is the product that price belongs to — the same synthesised sibling
+ * of the product the catalog handler writes, which is what makes this resolvable
+ * against the Offering row at all. Returning the price id here was the older
+ * shape, from when one Stripe price *was* one of our offerings; an offering now
+ * has several prices, so the price id would name a row that does not exist and
+ * silently link nothing. `priceProductId` reads both the bare-id and expanded
+ * forms of `product`, for the reason it documents.
+ *
+ * The first item only, and that limit is `Agreement.offeringId`'s own: one
+ * agreement links one offering. Every other line is on the agreement's items,
+ * each with its own price.
+ */
 export function subscriptionOfferingId(
   subscription: RawRecord
 ): string | undefined {
-  return asString(firstItemPrice(subscription)?.["id"]);
+  const price = firstItemPrice(subscription);
+  return price === undefined ? undefined : priceProductId(price);
 }

@@ -65,11 +65,21 @@ export const CHARGEBEE_PRICE_FIELDS: readonly DiscoveredFieldDef[] = [
   { path: "status", label: "Status", type: "string" },
 ];
 
+/**
+ * An item entitlement: one feature attached to one item.
+ *
+ * `name` is the *entitlement level's* label ("Maximum", "Available"), not the
+ * feature's name — that is `feature_name`. `value` is the level's raw value
+ * ("300", "true"), mappable into a custom field.
+ */
 export const CHARGEBEE_FEATURE_FIELDS: readonly DiscoveredFieldDef[] = [
-  { path: "id", label: "Feature Item ID", type: "string" },
+  { path: "id", label: "Item Entitlement ID", type: "string" },
+  { path: "feature_id", label: "Feature ID", type: "string" },
   { path: "feature_name", label: "Feature Name", type: "string" },
-  { path: "lookup_key", label: "Lookup Key", type: "string" },
-  { path: "product_id", label: "Product Family ID", type: "string" },
+  { path: "item_id", label: "Item ID (offering)", type: "string" },
+  { path: "item_type", label: "Item Type", type: "string" },
+  { path: "value", label: "Entitlement Value", type: "string" },
+  { path: "name", label: "Entitlement Level", type: "string" },
 ];
 
 export const chargebeeFieldDiscovery: FieldDiscovery = {
@@ -86,7 +96,7 @@ export const chargebeeFieldDiscovery: FieldDiscovery = {
         return [...CHARGEBEE_OFFERING_FIELDS];
       case "price":
         return [...CHARGEBEE_PRICE_FIELDS];
-      case "productFeature":
+      case "feature":
         return [...CHARGEBEE_FEATURE_FIELDS];
       default:
         return [...CHARGEBEE_CUSTOMER_FIELDS];

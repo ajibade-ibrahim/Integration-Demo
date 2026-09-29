@@ -100,22 +100,24 @@ export default async function CatalogPage({
 
           {/*
             Worded more strongly than the offering warning above, because it
-            means something worse. A feature&apos;s product id comes from the URL
-            the sync just called, so the product was listed in the same run — it
-            failing to resolve means the product was rejected, and no later sync
-            fixes that on its own.
+            means something worse. Features are read after offerings in the same
+            run, so the offering a feature names was already listed — it failing
+            to resolve means the offering was rejected, and no later sync fixes
+            that on its own.
           */}
           {totals.unlinkedFeatures > 0 && (
             <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
               {totals.unlinkedFeatures} feature
               {totals.unlinkedFeatures === 1 ? "" : "s"} could not be linked to
-              their product, although the sync read them from that product.
-              Check the latest run report for a rejected product.
+              their offering, although the sync listed that offering first.
+              Check the latest run report for a rejected offering.
             </p>
           )}
 
           {view === "offerings" ? (
-            <Table headers={["Offering", "Price", "Product", "Active", "Source"]}>
+            <Table
+              headers={["Offering", "Price", "Product", "Features", "Active", "Source"]}
+            >
               {offerings.map((row) => {
                 const price = formatOfferingPrice(row);
                 return (
@@ -123,11 +125,12 @@ export default async function CatalogPage({
                     <Td className="font-medium">{row.name}</Td>
                     <Td>{price ?? <Empty />}</Td>
                     <Td>
-                      <ProductCell
+                      <ParentCell
                         name={row.productName}
                         externalId={row.externalProductId}
                       />
                     </Td>
+                    <Td>{row.featureCount}</Td>
                     <Td>
                       <ActiveCell value={row.active} />
                     </Td>
@@ -144,13 +147,13 @@ export default async function CatalogPage({
           ) : view === "features" ? (
             totals.features === 0 ? (
               <p className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
-                No features synced. Stripe returns these only for accounts using
-                its Entitlements API — if yours does not, there is nothing here
-                to miss, and the sync skips the lookup entirely rather than
-                asking once per product.
+                No features synced. Stripe and Chargebee return these only for
+                accounts using their Entitlements APIs — if yours does not,
+                there is nothing here to miss, and the sync stops after one
+                request rather than asking once per product or feature.
               </p>
             ) : (
-              <Table headers={["Feature", "Lookup key", "Product", "Source"]}>
+              <Table headers={["Feature", "Lookup key", "Offering", "Source"]}>
                 {features.map((row) => (
                   <tr key={row.id} className="border-t border-slate-100">
                     <Td className="font-medium">{row.name}</Td>
@@ -167,9 +170,9 @@ export default async function CatalogPage({
                       )}
                     </Td>
                     <Td>
-                      <ProductCell
-                        name={row.productName}
-                        externalId={row.externalProductId}
+                      <ParentCell
+                        name={row.offeringName}
+                        externalId={row.externalOfferingId}
                       />
                     </Td>
                     <Td className="text-xs text-slate-400">
@@ -188,7 +191,6 @@ export default async function CatalogPage({
                 "Product",
                 "Description",
                 "Offerings",
-                "Features",
                 "Active",
                 "Source",
               ]}
@@ -200,7 +202,6 @@ export default async function CatalogPage({
                     {row.description ?? <Empty />}
                   </Td>
                   <Td>{row.offeringCount}</Td>
-                  <Td>{row.featureCount}</Td>
                   <Td>
                     <ActiveCell value={row.active} />
                   </Td>
@@ -221,13 +222,14 @@ export default async function CatalogPage({
 }
 
 /**
- * The product a child row belongs to — resolved, unresolved, or never named.
+ * The parent a child row belongs to — resolved, unresolved, or never named.
  *
- * Three states and one renderer, shared by offerings and features because they
- * hold the same two columns for the same reason. An "unresolved" badge that
- * looked different on the two tabs would read as two different problems.
+ * Three states and one renderer, shared by offerings (whose parent is a
+ * product) and features (whose parent is an offering) because they hold the
+ * same two columns for the same reason. An "unresolved" badge that looked
+ * different on the two tabs would read as two different problems.
  */
-function ProductCell({
+function ParentCell({
   name,
   externalId,
 }: {

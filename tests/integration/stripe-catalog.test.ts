@@ -315,13 +315,13 @@ describe("Stripe catalog record shape", () => {
  * will fan out. Only the presence of an entry matters — Stripe has no
  * field-selection parameter, so the paths themselves are never sent.
  */
-const FEATURES_MAPPED = { productFeature: ["feature_name"] };
+const FEATURES_MAPPED = { feature: ["feature_name"] };
 
 /**
  * The features pass: the probe that decides whether to make it, and the URL it
  * takes its parent id from.
  */
-describe("Stripe product features", () => {
+describe("Stripe features", () => {
   function attachment(
     id: string,
     featureId: string,
@@ -363,13 +363,13 @@ describe("Stripe product features", () => {
       })
     );
 
-    // No `sources`, so no rule points at `productFeature`.
+    // No `sources`, so no rule points at `feature`.
     const { ctx } = testContext();
     const { byObject } = await collect(stripeCatalogHandler, ctx);
 
     expect(probes).toEqual([]);
     expect(featureRequests).toEqual([]);
-    expect(byObject.productFeature).toEqual([]);
+    expect(byObject.feature).toEqual([]);
     // The rest of the catalog is unaffected — the gate is on this pass alone.
     expect(byObject.product).toHaveLength(1);
     expect(byObject.offering).toHaveLength(1);
@@ -395,7 +395,7 @@ describe("Stripe product features", () => {
     const { byObject } = await collect(stripeCatalogHandler, ctx);
 
     expect(featureRequests).toEqual([]);
-    expect(byObject.productFeature).toEqual([]);
+    expect(byObject.feature).toEqual([]);
   });
 
   it("asks every product once when the account does define features", async () => {
@@ -423,11 +423,12 @@ describe("Stripe product features", () => {
     expect(featureRequests).toEqual(["prod_1", "prod_2"]);
   });
 
-  it("takes the product of each row from the URL, never from the payload", async () => {
-    // The one genuinely new hazard in this handler. A ProductFeature response
-    // has no `product` field at all, so the id comes from the request URL; a
-    // handler that lost track would link every row to the wrong product with no
-    // error and no null to notice. The payloads below carry a deliberately
+  it("takes the offering of each row from the URL, never from the payload", async () => {
+    // The one genuinely new hazard in this handler. A Stripe ProductFeature
+    // response has no parent field at all, so the offering id (the synthesised
+    // sibling of the product) comes from the request URL; a handler that lost
+    // track would link every row to the wrong offering with no error and no
+    // null to notice. The payloads below carry a deliberately
     // misleading `product` to prove the URL wins.
     server.use(
       http.get(ENTITLEMENT_FEATURES, () => listing([{ id: "feat_api" }])),
@@ -449,16 +450,16 @@ describe("Stripe product features", () => {
     const { ctx } = testContext({ sources: FEATURES_MAPPED });
     const { byObject } = await collect(stripeCatalogHandler, ctx);
 
-    expect(byObject.productFeature.map((f) => f["product_id"])).toEqual([
+    expect(byObject.feature.map((f) => f["offering_id"])).toEqual([
       "prod_platform",
       "prod_support",
     ]);
 
-    const first = byObject.productFeature[0];
+    const first = byObject.feature[0];
     expect(first).toBeDefined();
     if (first === undefined) return;
-    expect(stripeCatalogHandler.externalRefsOf(first, "productFeature")).toEqual({
-      product: "prod_platform",
+    expect(stripeCatalogHandler.externalRefsOf(first, "feature")).toEqual({
+      offering: "prod_platform",
     });
   });
 
@@ -482,7 +483,7 @@ describe("Stripe product features", () => {
     const { ctx } = testContext({ sources: FEATURES_MAPPED });
     const { byObject } = await collect(stripeCatalogHandler, ctx);
 
-    const row = byObject.productFeature[0];
+    const row = byObject.feature[0];
     expect(row).toBeDefined();
     if (row === undefined) return;
 
@@ -495,7 +496,7 @@ describe("Stripe product features", () => {
   });
 
   it("yields the same feature twice when two products include it", async () => {
-    // The case a standalone Feature table would have turned into a join row.
+    // The case a feature-definitions table would have turned into a join row.
     // Here it is two ordinary rows that happen to share an `externalFeatureId`.
     server.use(
       http.get(ENTITLEMENT_FEATURES, () => listing([{ id: "feat_api" }])),
@@ -518,18 +519,18 @@ describe("Stripe product features", () => {
     const { ctx } = testContext({ sources: FEATURES_MAPPED });
     const { byObject } = await collect(stripeCatalogHandler, ctx);
 
-    expect(byObject.productFeature).toHaveLength(2);
-    expect(new Set(byObject.productFeature.map((f) => f["feature_id"]))).toEqual(
+    expect(byObject.feature).toHaveLength(2);
+    expect(new Set(byObject.feature.map((f) => f["feature_id"]))).toEqual(
       new Set(["feat_api"])
     );
-    expect(byObject.productFeature.map((f) => f["id"])).toEqual([
+    expect(byObject.feature.map((f) => f["id"])).toEqual([
       "prodft_prod_platform",
       "prodft_prod_integrations",
     ]);
   });
 
   it("yields every product and price page before any feature page", async () => {
-    // Features resolve their product through the index the product pages build,
+    // Features resolve their offering through the index the product pages build,
     // exactly as offerings do — and unlike an offering there is no relink pass
     // to repair it on a later run.
     server.use(
@@ -546,8 +547,8 @@ describe("Stripe product features", () => {
       "product",
       "product",
       "offering",
-      "productFeature",
-      "productFeature",
+      "feature",
+      "feature",
     ]);
   });
 
@@ -564,7 +565,7 @@ describe("Stripe product features", () => {
 
     // An empty page is still a page: the pass must not throw, and must not
     // invent a row from a response carrying no data.
-    expect(byObject.productFeature).toEqual([]);
+    expect(byObject.feature).toEqual([]);
   });
 
   it("fails the run rather than reading a broken probe as 'no features'", async () => {
@@ -584,9 +585,9 @@ describe("Stripe product features", () => {
   });
 });
 
-describe("Stripe product feature field discovery", () => {
+describe("Stripe feature field discovery", () => {
   it("reads the flat definitions endpoint, not a per-product one", async () => {
-    // A ProductFeature attachment carries no metadata of its own, and the
+    // A Stripe ProductFeature attachment carries no metadata of its own, and the
     // attachments are only reachable per product — so sampling them would mean
     // fanning out over the whole catalog just to populate a dropdown.
     const featureRequests: string[] = [];
@@ -610,7 +611,7 @@ describe("Stripe product feature field discovery", () => {
 
     const { ctx } = testContext();
     const paths = (
-      await stripeFieldDiscovery.discover(ctx, "productFeature")
+      await stripeFieldDiscovery.discover(ctx, "feature")
     ).map((f) => f.path);
 
     expect(featureRequests).toEqual([]);
@@ -619,7 +620,7 @@ describe("Stripe product feature field discovery", () => {
     expect(paths).toContain("feature_name");
     expect(paths).toContain("lookup_key");
     expect(paths).toContain("feature_id");
-    expect(paths).toContain("product_id");
+    expect(paths).toContain("offering_id");
     // Prefixed with the path the record actually carries. A bare
     // `metadata.tier` would resolve to nothing on every feature row.
     expect(paths).toContain("entitlement_feature.metadata.tier");

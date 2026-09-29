@@ -58,18 +58,25 @@ export const stripeIdentityDefaults: FieldMappingRule[] = [
 /**
  * Suggested starting mappings for the Stripe catalog.
  *
- * Four of the offering rules name fields that do not exist in Stripe's
- * response — `offering_name`, `interval`, `interval_count`, `product_id` are
- * synthesized by `flattenPrice`. That is the same arrangement `created_at` has
- * on the identity side, and for the same reason: the raw shape does not survive
- * the trip through the mapper, so the handler fixes it while it still can.
+ * Three of the price rules name fields that do not exist in Stripe's response —
+ * `offering_name`, `interval` and `interval_count` are synthesized by
+ * `flattenPrice`. That is the same arrangement `created_at` has on the identity
+ * side, and for the same reason: the raw shape does not survive the trip through
+ * the mapper, so the handler fixes it while it still can.
+ *
+ * The product and offering rules read the *same* three fields, and that is not a
+ * copy-paste: in Stripe a product has one offering under the same id, so the two
+ * targets are two views of one row and there is nothing else for the offering to
+ * carry. `price.active` is mapped where `product.active` is not needed on the
+ * offering for a reason of its own — Stripe deactivates a price far more often
+ * than a product (a price change is a new price plus a deactivation), so on the
+ * price it is the column that tells a live catalog from an archived one.
  *
  * Two absences are deliberate.
  *
- *   `offering.active`  — mapped, unlike on product. Stripe deactivates a price
- *                        far more often than a product (a price change is a new
- *                        price plus a deactivation), so this is the column that
- *                        tells a live catalog from an archived one.
+ *   `price.product_id` — the offering link, and it needs no rule: the engine
+ *                        derives every association from the record's refs, and
+ *                        this one lands in `associatedOfferingId`.
  *   `product.url` and  — real fields, deliberately unmapped. Neither is part of
  *   `unit_label`         our schema, and putting them in `customFields` by
  *                        default would spend two of a user's fifty custom keys
@@ -97,10 +104,10 @@ export const stripeCatalogDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "interval_count", targetObject: "price", targetFieldPath: "intervalCount", transform: "none" },
   { sourceFieldPath: "active", targetObject: "price", targetFieldPath: "active", transform: "none" },
 
-  // --- productFeature ---
-  { sourceFieldPath: "feature_name", targetObject: "productFeature", targetFieldPath: "name", transform: "trim" },
-  { sourceFieldPath: "lookup_key", targetObject: "productFeature", targetFieldPath: "lookupKey", transform: "trim" },
-  { sourceFieldPath: "feature_id", targetObject: "productFeature", targetFieldPath: "externalFeatureId", transform: "none" },
+  // --- feature ---
+  { sourceFieldPath: "feature_name", targetObject: "feature", targetFieldPath: "name", transform: "trim" },
+  { sourceFieldPath: "lookup_key", targetObject: "feature", targetFieldPath: "lookupKey", transform: "trim" },
+  { sourceFieldPath: "feature_id", targetObject: "feature", targetFieldPath: "externalFeatureId", transform: "none" },
 ];
 
 /**

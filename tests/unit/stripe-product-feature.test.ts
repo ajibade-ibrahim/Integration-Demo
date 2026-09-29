@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   entitlementFeaturesUrl,
-  flattenProductFeature,
+  flattenFeature,
   listUrl,
   productFeaturesUrl,
 } from "@/core/providers/stripe/api";
@@ -100,7 +100,7 @@ describe("listUrl after the paginatedUrl extraction", () => {
   });
 });
 
-describe("flattenProductFeature", () => {
+describe("flattenFeature", () => {
   const attachment = {
     id: "prodft_1",
     object: "product_feature",
@@ -115,7 +115,7 @@ describe("flattenProductFeature", () => {
   };
 
   it("lifts the nested name, lookup key and feature id", () => {
-    const flat = flattenProductFeature(attachment, "prod_support");
+    const flat = flattenFeature(attachment, "prod_support");
 
     expect(flat["feature_name"]).toBe("Premium support");
     expect(flat["lookup_key"]).toBe("premium-support");
@@ -125,24 +125,25 @@ describe("flattenProductFeature", () => {
     expect(flat["feature_id"]).toBe("feat_support");
   });
 
-  it("takes the product id from the argument", () => {
-    expect(flattenProductFeature(attachment, "prod_support")["product_id"]).toBe(
+  it("takes the offering id from the argument", () => {
+    expect(flattenFeature(attachment, "prod_support")["offering_id"]).toBe(
       "prod_support"
     );
   });
 
-  it("ignores a product id the record carries itself", () => {
+  it("ignores a parent id the record carries itself", () => {
     // The hazard, stated as a test. Stripe sends no `product` on this object
     // today; if a future version, a proxy or a fixture ever did, the URL the
     // caller actually requested must still win — otherwise a record could
-    // reassign itself to another product and nothing would notice.
+    // reassign itself to another offering and nothing would notice.
     const misleading = {
       ...attachment,
       product: "prod_WRONG",
       product_id: "prod_ALSO_WRONG",
+      offering_id: "prod_STILL_WRONG",
     };
 
-    expect(flattenProductFeature(misleading, "prod_support")["product_id"]).toBe(
+    expect(flattenFeature(misleading, "prod_support")["offering_id"]).toBe(
       "prod_support"
     );
   });
@@ -151,14 +152,14 @@ describe("flattenProductFeature", () => {
     // Undefined, not an empty string: the writer reads a blank name as a reason
     // to reject the row and reports it, which is the visible outcome we want.
     // An empty string would be stored as a name nobody can search for.
-    const flat = flattenProductFeature({ id: "prodft_1" }, "prod_1");
+    const flat = flattenFeature({ id: "prodft_1" }, "prod_1");
 
     expect(flat["feature_name"]).toBeUndefined();
     expect(flat["lookup_key"]).toBeUndefined();
     expect(flat["feature_id"]).toBeUndefined();
     // The one field that is still there, because it never came from the
     // payload in the first place.
-    expect(flat["product_id"]).toBe("prod_1");
+    expect(flat["offering_id"]).toBe("prod_1");
   });
 
   it("returns undefined for a lookup key the merchant left unset", () => {
@@ -169,8 +170,8 @@ describe("flattenProductFeature", () => {
       entitlement_feature: { ...attachment.entitlement_feature, lookup_key: null },
     };
 
-    expect(flattenProductFeature(noKey, "prod_1")["lookup_key"]).toBeUndefined();
-    expect(flattenProductFeature(noKey, "prod_1")["feature_name"]).toBe(
+    expect(flattenFeature(noKey, "prod_1")["lookup_key"]).toBeUndefined();
+    expect(flattenFeature(noKey, "prod_1")["feature_name"]).toBe(
       "Premium support"
     );
   });

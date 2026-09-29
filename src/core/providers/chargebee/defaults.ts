@@ -113,17 +113,28 @@ export const chargebeeCatalogDefaults: readonly FieldMappingRule[] = [
     transform: "none",
   },
 
-  // ProductFeature mapping rules
+  // Feature mapping rules (item entitlements).
+  //
+  // `feature_id` feeds both columns. Chargebee has no separate lookup key: the
+  // feature id ("premium_tools", set by the merchant or generated) is stable,
+  // which is what an application gates on — and it is also the provider's
+  // definition id.
   {
     sourceFieldPath: "feature_name",
-    targetObject: "productFeature",
+    targetObject: "feature",
     targetFieldPath: "name",
     transform: "trim",
   },
   {
-    sourceFieldPath: "lookup_key",
-    targetObject: "productFeature",
+    sourceFieldPath: "feature_id",
+    targetObject: "feature",
     targetFieldPath: "lookupKey",
     transform: "trim",
+  },
+  {
+    sourceFieldPath: "feature_id",
+    targetObject: "feature",
+    targetFieldPath: "externalFeatureId",
+    transform: "none",
   },
 ];

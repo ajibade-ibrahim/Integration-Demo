@@ -25,8 +25,8 @@ import { readJsonObject } from "./json-column";
 /**
  * One priced line, as the page renders it.
  *
- * No price and no line total, and that is a decision rather than an omission:
- * an item is the *selection*, the offering it points at holds the money, and a
+ * No amount and no line total, and that is a decision rather than an omission:
+ * an item is the *selection*, the price it points at holds the money, and a
  * subscription's true total is the provider's to state. Summing our lines here
  * would produce a confident number that is wrong the moment a line failed to
  * link — and this page has no way to know it did.
@@ -34,8 +34,14 @@ import { readJsonObject } from "./json-column";
 export interface AgreementItemRow {
   id: string;
   offeringName: string | null;
-  /** The provider's own price id, present even when the link is unresolved. */
+  /** The provider's own offering id, present even when the link is unresolved. */
   externalOfferingId: string | null;
+  /**
+   * The provider's own price id — which of the offering's prices this line went
+   * for. Present even when the price did not resolve, which is the state that
+   * makes an unresolved line worth showing rather than hiding.
+   */
+  externalPriceId: string | null;
   quantity: number | null;
   /** plan | add_on | usage, or null where the provider did not say. */
   itemType: string | null;
@@ -57,7 +63,7 @@ export interface AgreementRow {
   offeringName: string | null;
   externalOfferingId: string | null;
 
-  /** The offering's price, when it resolved — what the agreement is worth. */
+  /** The sold price, when it resolved — what the agreement is worth. */
   price: string | undefined;
 
   /** Joined from the detail table; null for an agreement of another type. */
@@ -94,8 +100,9 @@ export interface AgreementPage {
      * Subscriptions carrying more than one priced line.
      *
      * No longer a warning that data is missing — every line is stored now —
-     * but still worth counting, because `Agreement.offeringId` links one of
-     * them and the Price column shows that one's price rather than the total.
+     * but still worth counting, because the Price column shows the first
+     * line's price rather than the total, and a reader should know when the
+     * figure they are looking at is one line of several.
      */
     multiItem: number;
   };
@@ -123,19 +130,7 @@ export async function loadAgreements(
         include: {
           integration: { select: { instanceLabel: true } },
           customer: { select: { name: true } },
-          offering: {
-            select: {
-              name: true,
-              prices: {
-                select: {
-                  amountMinor: true,
-                  currency: true,
-                  interval: true,
-                  intervalCount: true,
-                },
-              },
-            },
-          },
+          offering: { select: { name: true } },
           subscription: true,
           // Ordered by the provider's own sequence rather than by name or
           // price, because the order a subscription lists its lines in is
@@ -146,9 +141,20 @@ export async function loadAgreements(
             select: {
               id: true,
               externalOfferingId: true,
+              externalPriceId: true,
               quantity: true,
               itemType: true,
               offering: { select: { name: true } },
+              // Read for the agreement-level price below, which is the *sold*
+              // price rather than the offering's first one.
+              price: {
+                select: {
+                  amountMinor: true,
+                  currency: true,
+                  interval: true,
+                  intervalCount: true,
+                },
+              },
             },
           },
         },
@@ -170,7 +176,13 @@ export async function loadAgreements(
 
   return {
     agreements: agreements.map((row) => {
-      const primaryPrice = row.offering?.prices[0];
+      // The price actually sold, taken from the first line rather than from the
+      // offering's price list. An offering has several — monthly and yearly are
+      // two rows on one offering — so the offering's first price is whichever
+      // the database happened to return, which is a different question from
+      // "what is this agreement billed at". The line's own link is the only
+      // thing that answers that; see `AgreementItem.priceId`.
+      const primaryPrice = row.items[0]?.price;
       return {
         id: row.id,
         externalSourceId: row.externalSourceId,
@@ -186,11 +198,11 @@ export async function loadAgreements(
         offeringName: row.offering?.name ?? null,
         externalOfferingId: row.externalOfferingId,
 
-        // Formatted from the offering's price rather than stored on the agreement: the
-        // price belongs to what was sold, and duplicating it here would be a
-        // second copy to keep in step.
+        // Formatted from the linked price rather than stored on the agreement:
+        // the price belongs to what was sold, and duplicating it here would be
+        // a second copy to keep in step.
         price:
-          primaryPrice === undefined
+          primaryPrice === undefined || primaryPrice === null
             ? undefined
             : priceLabel({
                 amountMinor: primaryPrice.amountMinor,
@@ -209,6 +221,7 @@ export async function loadAgreements(
         id: item.id,
         offeringName: item.offering?.name ?? null,
         externalOfferingId: item.externalOfferingId,
+        externalPriceId: item.externalPriceId,
         quantity: item.quantity,
         itemType: item.itemType,
       })),

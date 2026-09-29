@@ -28,7 +28,7 @@ import {
 } from "./chargebee/defaults";
 import { CHARGEBEE_PROVIDER_NAME } from "./chargebee/provider";
 
-const DEFAULTS: Record<string, FieldMappingRule[]> = {
+const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
   [`identity:${HUBSPOT_PROVIDER_NAME}`]: hubspotIdentityDefaults,
   [`identity:${SALESFORCE_PROVIDER_NAME}`]: salesforceIdentityDefaults,
   [`identity:${MOCK_PROVIDER_NAME}`]: mockIdentityDefaults,

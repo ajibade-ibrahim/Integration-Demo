@@ -697,7 +697,7 @@ describe("the other functions still sync alongside it", () => {
       contact: 1,
       product: 1,
       offering: 1,
-      productFeature: 0,
+      feature: 0,
       agreement: 1,
       subscription: 1,
       agreementItem: 1,

@@ -166,9 +166,9 @@ const SUBSCRIPTION_SCHEMA: ObjectSchema = {
  *
  * Note what is *not* here. No name — a line is described by the offering it
  * points at, and a copied one could only drift. No amount and no total: the
- * offering holds the money, and a subscription's true total is the provider's
- * to state rather than ours to sum. This object is the *selection*, not the
- * thing selected.
+ * price it points at holds the money, and a subscription's true total is the
+ * provider's to state rather than ours to sum. This object is the *selection*,
+ * not the thing selected.
  */
 const AGREEMENT_ITEM_SCHEMA: ObjectSchema = {
   object: "agreementItem",
@@ -187,8 +187,8 @@ const AGREEMENT_ITEM_SCHEMA: ObjectSchema = {
       enumValues: AGREEMENT_ITEM_TYPES,
       maxLength: 20,
     },
-    // Both derived by the engine from the provider's own ids, as every other
-    // association id on this function is.
+    // All three derived by the engine from the provider's own ids, as every
+    // other association id on this function is.
     {
       name: "associatedAgreementId",
       label: "Associated agreement",
@@ -198,6 +198,17 @@ const AGREEMENT_ITEM_SCHEMA: ObjectSchema = {
     {
       name: "associatedOfferingId",
       label: "Associated offering",
+      kind: "string",
+      readOnly: true,
+    },
+    // The third edge, and the one that says *which* of the offering's prices
+    // this line went for. It normally agrees with the offering beside it — both
+    // are read off the same nested price — but a line whose offering resolved
+    // and whose price did not is a state the schema can hold, and the writer
+    // warns into this field when it happens.
+    {
+      name: "associatedPriceId",
+      label: "Associated price",
       kind: "string",
       readOnly: true,
     },

@@ -45,12 +45,12 @@ describe("the catalog schema", () => {
     //
     // For a feature the consequence is worse than for an offering, because
     // there is no relink pass to quietly fix it on the second run — see the
-    // `externalProductId` comment on the model.
+    // `externalOfferingId` comment on the model.
     expect(objectsForFunction(CATALOG_FUNCTION)).toEqual([
       "product",
       "offering",
       "price",
-      "productFeature",
+      "feature",
     ]);
   });
 
@@ -170,7 +170,7 @@ describe("function scoping of mapping rules", () => {
       "product",
       "offering",
       "price",
-      "productFeature",
+      "feature",
     ]);
     expect(schemasForFunction("identity").map((s) => s.object)).toEqual([
       "customer",

@@ -261,7 +261,7 @@ export type ExternalRefs = Readonly<Partial<Record<TargetObject, string>>>;
  *
  * Every other object here is written by upsert, so a record a handler fails to
  * yield simply keeps its previous value — the known gap that lets a detached
- * `ProductFeature` linger. Agreement items are the exception: they are
+ * `Feature` attachment linger. Agreement items are the exception: they are
  * reconciled, because a removed add-on that lingers makes the line list wrong
  * in a way nothing else on the row contradicts. That trade only holds while
  * "the handler yielded every line" is true, so it is stated here as a contract

@@ -21,7 +21,7 @@ import {
   relinkOrphanedPrices,
   writeOfferings,
   writePrices,
-  writeProductFeatures,
+  writeFeatures,
   writeProducts,
   writeRecordsForFunction,
   type CollectedRecord,
@@ -54,10 +54,10 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await prisma.price.deleteMany({ where: { integrationId: INTEGRATION_ID } });
-  await prisma.offering.deleteMany({ where: { integrationId: INTEGRATION_ID } });
-  await prisma.productFeature.deleteMany({
+  await prisma.feature.deleteMany({
     where: { integrationId: INTEGRATION_ID },
   });
+  await prisma.offering.deleteMany({ where: { integrationId: INTEGRATION_ID } });
   await prisma.product.deleteMany({ where: { integrationId: INTEGRATION_ID } });
 });
 
@@ -438,7 +438,7 @@ describe("per-function dispatch", () => {
       collected
     );
 
-    expect(result.counts).toEqual({ product: 1, offering: 1, price: 1, productFeature: 0 });
+    expect(result.counts).toEqual({ product: 1, offering: 1, price: 1, feature: 0 });
     expect(result.issues).toEqual([]);
 
     const row = await prisma.price.findFirstOrThrow({
@@ -458,10 +458,10 @@ describe("per-function dispatch", () => {
     // No `customer: 0`. An absent key means "not synced", which is what the run
     // report should say for a catalog sync.
     expect(Object.keys(result.counts).sort()).toEqual([
+      "feature",
       "offering",
       "price",
       "product",
-      "productFeature",
     ]);
   });
 
@@ -480,25 +480,25 @@ describe("per-function dispatch", () => {
 });
 
 /**
- * The product-feature writer.
+ * The feature writer.
  *
- * Shaped like the offering writer and validated the same way round, so most of
+ * Shaped like the price writer and validated the same way round, so most of
  * what is pinned here is that the resemblance is real. The two differences are
- * the interesting part: two products can legitimately produce two rows for the
- * same feature, and an unresolved product is a symptom of something worse here
- * than it is for an offering, because no relink pass will ever clear it.
+ * the interesting part: two offerings can legitimately produce two rows for the
+ * same feature, and an unresolved offering is a symptom of something worse here
+ * than it is for a price, because no relink pass will ever clear it.
  */
-describe("writing product features", () => {
+describe("writing features", () => {
   function featureRecord(
     externalSourceId: string,
-    externalProductId: string | undefined,
+    externalOfferingId: string | undefined,
     fields: Record<string, string | null> = {}
   ): CollectedRecord {
     return {
       externalSourceId,
-      externalRefs: { product: externalProductId },
+      externalRefs: { offering: externalOfferingId },
       mapped: {
-        object: "productFeature",
+        object: "feature",
         fields: {
           name: `Feature ${externalSourceId}`,
           lookupKey: `key-${externalSourceId}`,
@@ -511,88 +511,91 @@ describe("writing product features", () => {
     };
   }
 
-  async function productIndex(...externalIds: string[]) {
-    const written = await writeProducts(
+  async function offeringIndex(...externalIds: string[]) {
+    const written = await writeOfferings(
       INTEGRATION_ID,
-      externalIds.map((id) => productRecord(id))
+      externalIds.map((id) => offeringRecord(id, undefined)),
+      new Map()
     );
     return written.externalToInternal;
   }
 
-  it("links a feature to the product written in the same run", async () => {
-    const index = await productIndex("prod_1");
-    const result = await writeProductFeatures(
+  it("links a feature to the offering written in the same run", async () => {
+    const index = await offeringIndex("off_1");
+    const result = await writeFeatures(
       INTEGRATION_ID,
-      [featureRecord("prodft_1", "prod_1")],
+      [featureRecord("prodft_1", "off_1")],
       index
     );
 
     expect(result.written).toBe(1);
     expect(result.issues).toEqual([]);
 
-    const row = await prisma.productFeature.findFirstOrThrow({
+    const row = await prisma.feature.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
-      include: { product: true },
+      include: { offering: true },
     });
-    expect(row.product?.externalSourceId).toBe("prod_1");
+    expect(row.offering?.externalSourceId).toBe("off_1");
     expect(row.name).toBe("Feature prodft_1");
     expect(row.lookupKey).toBe("key-prodft_1");
     expect(row.externalFeatureId).toBe("feat_prodft_1");
   });
 
-  it("keeps a feature whose product did not resolve, and says so", async () => {
-    const result = await writeProductFeatures(
+  it("keeps a feature whose offering did not resolve, and says so", async () => {
+    const result = await writeFeatures(
       INTEGRATION_ID,
-      [featureRecord("prodft_1", "prod_gone")],
+      [featureRecord("prodft_1", "off_gone")],
       new Map()
     );
 
     // Kept rather than dropped, matching the offering policy: a feature with no
-    // product link is still a real feature, and discarding it would lose the
+    // offering link is still a real feature, and discarding it would lose the
     // name and the lookup key along with the link.
     expect(result.written).toBe(1);
     expect(result.issues).toEqual([
       {
         sourceRecordId: "prodft_1",
-        targetObject: "productFeature",
-        reason: "Product 'prod_gone' not found; feature saved without a link",
-        fieldName: "associatedProductId",
+        targetObject: "feature",
+        reason: "Offering 'off_gone' not found; feature saved without a link",
+        fieldName: "associatedOfferingId",
         severity: "warning",
       },
     ]);
 
-    const row = await prisma.productFeature.findFirstOrThrow({
+    const row = await prisma.feature.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
     });
-    expect(row.productId).toBeNull();
+    expect(row.offeringId).toBeNull();
     // Retained for the warning and the data browser, not for a relink pass.
-    expect(row.externalProductId).toBe("prod_gone");
+    expect(row.externalOfferingId).toBe("off_gone");
   });
 
   it("is not repaired by the catalog relink pass, deliberately", async () => {
-    // The documented deviation from `Offering`. A feature cannot arrive before
-    // its parent — the handler builds its URL from a product it listed moments
-    // earlier — so an unresolved product means that product was *rejected*, and
-    // a relink pass would be machinery for a state that cannot occur. Pinned so
-    // that adding one later is a decision rather than a reflex.
-    await writeProductFeatures(
+    // A feature cannot arrive before its parent — the handler builds its URL
+    // from an offering it listed moments earlier — so an unresolved offering
+    // means that offering was *rejected*, and a relink pass would be machinery
+    // for a state that cannot occur. Pinned so that adding one later is a
+    // decision rather than a reflex.
+    await writeFeatures(
       INTEGRATION_ID,
-      [featureRecord("prodft_1", "prod_late")],
+      [featureRecord("prodft_1", "off_late")],
       new Map()
     );
-    await productIndex("prod_late");
+    await offeringIndex("off_late");
 
-    const relinked = await relinkOrphanedOfferings(INTEGRATION_ID);
+    const relinked =
+      (await relinkOrphanedOfferings(INTEGRATION_ID)) +
+      (await relinkOrphanedPrices(INTEGRATION_ID));
     expect(relinked).toBe(0);
 
-    const row = await prisma.productFeature.findFirstOrThrow({
+    const row = await prisma.feature.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
     });
-    expect(row.productId).toBeNull();
+    expect(row.offeringId).toBeNull();
   });
 
   it("rejects a feature with no id and one with a blank name", async () => {
-    const result = await writeProductFeatures(
+    const result = await writeFeatures(
       INTEGRATION_ID,
       [
         { ...featureRecord("prodft_1", undefined), externalSourceId: undefined },
@@ -607,24 +610,24 @@ describe("writing product features", () => {
       ["prodft_2", "rejected", "Name is required"],
     ]);
     expect(
-      await prisma.productFeature.count({ where: { integrationId: INTEGRATION_ID } })
+      await prisma.feature.count({ where: { integrationId: INTEGRATION_ID } })
     ).toBe(0);
   });
 
-  it("writes two rows when two products include the same feature", async () => {
+  it("writes two rows when two offerings include the same feature", async () => {
     // The whole reason a row is keyed on the attachment id rather than the
-    // feature id. Keyed the other way, the second product would overwrite the
-    // first and the catalog would claim the feature belongs to one product.
-    const index = await productIndex("prod_platform", "prod_integrations");
-    const result = await writeProductFeatures(
+    // feature id. Keyed the other way, the second offering would overwrite the
+    // first and the catalog would claim the feature belongs to one offering.
+    const index = await offeringIndex("off_platform", "off_integrations");
+    const result = await writeFeatures(
       INTEGRATION_ID,
       [
-        featureRecord("prodft_a", "prod_platform", {
+        featureRecord("prodft_a", "off_platform", {
           name: "API access",
           lookupKey: "api-access",
           externalFeatureId: "feat_api",
         }),
-        featureRecord("prodft_b", "prod_integrations", {
+        featureRecord("prodft_b", "off_integrations", {
           name: "API access",
           lookupKey: "api-access",
           externalFeatureId: "feat_api",
@@ -635,54 +638,54 @@ describe("writing product features", () => {
 
     expect(result.written).toBe(2);
 
-    const rows = await prisma.productFeature.findMany({
+    const rows = await prisma.feature.findMany({
       where: { integrationId: INTEGRATION_ID },
-      include: { product: true },
+      include: { offering: true },
       orderBy: { externalSourceId: "asc" },
     });
     expect(rows.map((r) => r.externalFeatureId)).toEqual(["feat_api", "feat_api"]);
-    expect(rows.map((r) => r.product?.externalSourceId)).toEqual([
-      "prod_platform",
-      "prod_integrations",
+    expect(rows.map((r) => r.offering?.externalSourceId)).toEqual([
+      "off_platform",
+      "off_integrations",
     ]);
   });
 
   it("re-links a feature on a later run with an empty index", async () => {
-    // The ordinary second-sync case: the product did not change, so nothing put
-    // it in this run's map and the only route to the link is the database
+    // The ordinary second-sync case: the offering did not change, so nothing
+    // put it in this run's map and the only route to the link is the database
     // fallback in `resolveAssociation`. Without it every unchanged feature would
-    // silently lose its product on every sync after the first.
-    const index = await productIndex("prod_1");
-    await writeProductFeatures(
+    // silently lose its offering on every sync after the first.
+    const index = await offeringIndex("off_1");
+    await writeFeatures(
       INTEGRATION_ID,
-      [featureRecord("prodft_1", "prod_1")],
+      [featureRecord("prodft_1", "off_1")],
       index
     );
 
-    const again = await writeProductFeatures(
+    const again = await writeFeatures(
       INTEGRATION_ID,
-      [featureRecord("prodft_1", "prod_1")],
+      [featureRecord("prodft_1", "off_1")],
       new Map()
     );
 
     expect(again.issues).toEqual([]);
-    const rows = await prisma.productFeature.findMany({
+    const rows = await prisma.feature.findMany({
       where: { integrationId: INTEGRATION_ID },
-      include: { product: true },
+      include: { offering: true },
     });
     // Upserted, not duplicated.
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.product?.externalSourceId).toBe("prod_1");
+    expect(rows[0]?.offering?.externalSourceId).toBe("off_1");
   });
 
   it("surfaces features on the catalog page, with their counts", async () => {
-    const index = await productIndex("prod_1");
-    await writeProductFeatures(
+    const index = await offeringIndex("off_1");
+    await writeFeatures(
       INTEGRATION_ID,
       [
-        featureRecord("prodft_1", "prod_1"),
-        featureRecord("prodft_2", "prod_1"),
-        featureRecord("prodft_orphan", "prod_gone"),
+        featureRecord("prodft_1", "off_1"),
+        featureRecord("prodft_2", "off_1"),
+        featureRecord("prodft_orphan", "off_gone"),
       ],
       index
     );
@@ -691,15 +694,15 @@ describe("writing product features", () => {
 
     expect(page.totals.features).toBe(3);
     // Reported separately from unlinked offerings, because it means something
-    // different: the product was rejected, not merely absent from this page.
+    // different: the offering was rejected, not merely absent from this page.
     expect(page.totals.unlinkedFeatures).toBe(1);
-    expect(page.products[0]?.featureCount).toBe(2);
+    expect(page.offerings[0]?.featureCount).toBe(2);
 
     const orphan = page.features.find(
       (f) => f.externalSourceId === "prodft_orphan"
     );
-    expect(orphan?.productName).toBeNull();
-    expect(orphan?.externalProductId).toBe("prod_gone");
+    expect(orphan?.offeringName).toBeNull();
+    expect(orphan?.externalOfferingId).toBe("off_gone");
   });
 });
 

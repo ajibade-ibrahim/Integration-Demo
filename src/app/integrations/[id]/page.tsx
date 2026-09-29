@@ -58,7 +58,7 @@ export default async function IntegrationDetailPage({
       prisma.contact.count(where),
       prisma.product.count(where),
       prisma.offering.count(where),
-      prisma.productFeature.count(where),
+      prisma.feature.count(where),
       prisma.agreement.count(where),
       prisma.subscription.count(where),
       prisma.agreementItem.count(where),

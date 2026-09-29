@@ -279,6 +279,74 @@ export function parseItemPricesPage(json: unknown): ChargebeeListPage {
   return parseEnvelopePage(json, "item_price");
 }
 
+// ---------------------------------------------------------------------------
+// Entitlements (Features, Item Entitlements)
+// ---------------------------------------------------------------------------
+
+/**
+ * The site's feature *definitions*.
+ *
+ * Read for their ids only: each one is the parent segment of a
+ * `featureItemEntitlementsUrl` request. Also the cheap "does this site use
+ * Entitlements at all?" answer — a site with no features yields an empty first
+ * page and the per-feature pass never starts.
+ */
+export function featuresUrl(
+  site: string,
+  limit: number,
+  offset?: string
+): string {
+  const base = chargebeeApiBase(site).replace(/\/$/, "");
+  const url = new URL(`${base}/api/v2/features`);
+  url.searchParams.set("limit", String(limit));
+  if (offset !== undefined && offset !== "") {
+    url.searchParams.set("next_offset", offset);
+  }
+  return url.toString();
+}
+
+/**
+ * The items one feature is attached to.
+ *
+ * Per feature because Chargebee has no site-wide item-entitlement list
+ * (`/api/v2/item_entitlements` is a 404). Per feature rather than per item
+ * because a catalog usually defines fewer features than items, so this is the
+ * shorter fan-out of the two.
+ *
+ * The id is percent-encoded: it is a path segment built from response data.
+ */
+export function featureItemEntitlementsUrl(
+  site: string,
+  featureId: string,
+  limit: number,
+  offset?: string
+): string {
+  const base = chargebeeApiBase(site).replace(/\/$/, "");
+  const url = new URL(
+    `${base}/api/v2/features/${encodeURIComponent(featureId)}/item_entitlements`
+  );
+  url.searchParams.set("limit", String(limit));
+  if (offset !== undefined && offset !== "") {
+    url.searchParams.set("next_offset", offset);
+  }
+  return url.toString();
+}
+
+export function parseFeaturesPage(json: unknown): ChargebeeListPage {
+  return parseEnvelopePage(json, "feature");
+}
+
+/**
+ * Item entitlements, passed through as they arrive.
+ *
+ * No flattening is needed, unlike Stripe's attachment: Chargebee puts
+ * `feature_id`, `feature_name` and the parent `item_id` at the top level of
+ * every record, so the offering link is read from the payload itself.
+ */
+export function parseItemEntitlementsPage(json: unknown): ChargebeeListPage {
+  return parseEnvelopePage(json, "item_entitlement");
+}
+
 export function flattenItemPrice(itemPrice: RawRecord): RawRecord {
   const periodUnit = asString(itemPrice["period_unit"])?.toLowerCase();
   const period = itemPrice["period"];

@@ -13,11 +13,12 @@
  *   2. **A subscription has no name.** `Agreement.name` is required, so
  *      `agreementDisplayName` synthesizes one. Skip it and every subscription
  *      in the account is rejected on every sync.
- *   3. **One source record, two objects.** Each subscription is yielded twice —
- *      as `agreement`, then as `subscription` — because the mapping layer
- *      resolves one table per target object and the type-specific detail lives
- *      in its own table. The identity handler does the same thing when it
- *      derives a contact from a customer.
+ *   3. **One source record, more than one object.** Each subscription is
+ *      yielded twice — as `agreement`, then as `subscription` — and again once
+ *      per line as an `agreementItem`, because the mapping layer resolves one
+ *      table per target object and the type-specific detail lives in its own
+ *      table. The identity handler does the same thing when it derives a
+ *      contact from a customer.
  *
  * Docs: https://docs.stripe.com/api/subscriptions/list
  */
@@ -260,10 +261,16 @@ export const stripeAgreementHandler: SyncHandler = {
       // agreement id is read from `agreement_id`, which `flattenAgreementItem`
       // injected from the subscription this item was fetched from, *not* from
       // the item's own `subscription` field.
+      //
+      // A third ref rides along, and it is not a duplicate of the offering: the
+      // offering is *what* was sold, the price is *which of its prices* it went
+      // for. Both come off the same nested price object — see
+      // `flattenAgreementItem`.
       case "agreementItem":
         return {
           agreement: asString(record["agreement_id"]),
           offering: asString(record["offering_id"]),
+          price: asString(record["price_id"]),
         };
 
       default:

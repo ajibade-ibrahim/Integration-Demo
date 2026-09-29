@@ -1,6 +1,17 @@
 /**
- * Chargebee catalog sync handler — Item Families (Products), Items (Offerings / Features),
- * and Item Prices (Prices).
+ * Chargebee catalog sync handler — Item Families (Products), Items (Offerings),
+ * Item Prices (Prices), and Item Entitlements (Features).
+ *
+ * Features come from Chargebee's Entitlements API, which is separate from the
+ * item catalog: `/features` lists the definitions, and each definition's
+ * `/item_entitlements` lists the items that include it. An item entitlement is
+ * the attachment of one feature to one item, which is exactly what a `Feature`
+ * row is — so each one becomes a row, linked to the offering its `item_id`
+ * names.
+ *
+ * That pass is conditional, as Stripe's is: it runs only when a mapping rule
+ * targets `feature`, and a site with no feature definitions costs the one list
+ * request that says so.
  */
 
 import type { RawRecord, TargetObject } from "../../types/common";
@@ -16,14 +27,19 @@ import {
   chargebeePageSize,
   CHARGEBEE_MAX_PAGES,
   epochToIso,
+  featureItemEntitlementsUrl,
+  featuresUrl,
   flattenItemPrice,
   itemFamiliesUrl,
   itemPricesUrl,
   itemsUrl,
   parseChargebeeCredential,
+  parseFeaturesPage,
+  parseItemEntitlementsPage,
   parseItemFamiliesPage,
   parseItemPricesPage,
   parseItemsPage,
+  type ChargebeeListPage,
 } from "./api";
 
 export const CHARGEBEE_SESSION_OPTIONS = {
@@ -74,7 +90,7 @@ export const chargebeeCatalogHandler: SyncHandler = {
       offset = body.nextOffset;
     }
 
-    // 2. Fetch Items -> Offerings or ProductFeatures
+    // 2. Fetch Items -> Offerings
     offset = undefined;
     pagesFetched = 0;
 
@@ -83,35 +99,22 @@ export const chargebeeCatalogHandler: SyncHandler = {
         await session.getJson(itemsUrl(site, perPage, offset))
       );
 
+      // Chargebee item types are "plan", "addon", and "charge" — all map to
+      // offerings. Features are not items; they come from the Entitlements API
+      // in step 4.
       const offerings: RawRecord[] = [];
-      const features: RawRecord[] = [];
 
       for (const item of body.records) {
-        const itemType = asString(item["type"]);
         const familyId = asString(item["item_family_id"]);
-
-        if (itemType === "feature") {
-          features.push({
-            ...item,
-            feature_name: asString(item["name"]),
-            lookup_key: asString(item["id"]),
-            product_id: familyId,
-            ...withCreatedAt(item),
-          });
-        } else {
-          offerings.push({
-            ...item,
-            product_id: familyId,
-            ...withCreatedAt(item),
-          });
-        }
+        offerings.push({
+          ...item,
+          product_id: familyId,
+          ...withCreatedAt(item),
+        });
       }
 
       if (offerings.length > 0) {
         yield { object: "offering", records: offerings };
-      }
-      if (features.length > 0) {
-        yield { object: "productFeature", records: features };
       }
 
       pagesFetched += 1;
@@ -143,6 +146,41 @@ export const chargebeeCatalogHandler: SyncHandler = {
       if (body.nextOffset === undefined || body.nextOffset === offset) break;
       offset = body.nextOffset;
     }
+
+    // 4. Fetch Item Entitlements -> Features
+    //
+    // Last, so every offering a feature names was written before it. Skipped
+    // entirely when nothing is mapped to `feature`: the pass is one request per
+    // feature definition, and without a rule there is nowhere to put the rows.
+    const featuresAreMapped =
+      (ctx.requestedSourcePaths.get("feature") ?? []).length > 0;
+    if (!featuresAreMapped) return;
+
+    // Collected before the fan-out rather than interleaved with it, so a
+    // feature page and an entitlement page never share an offset variable.
+    const featureIds: string[] = [];
+    for await (const records of pageList((next) =>
+      session
+        .getJson(featuresUrl(site, perPage, next))
+        .then(parseFeaturesPage)
+    )) {
+      for (const feature of records) {
+        const id = asString(feature["id"]);
+        if (id !== undefined && id !== "") featureIds.push(id);
+      }
+    }
+
+    for (const featureId of featureIds) {
+      for await (const records of pageList((next) =>
+        session
+          .getJson(featureItemEntitlementsUrl(site, featureId, perPage, next))
+          .then(parseItemEntitlementsPage)
+      )) {
+        if (records.length > 0) {
+          yield { object: "feature", records };
+        }
+      }
+    }
   },
 
   externalIdOf(record: RawRecord): string | undefined {
@@ -161,16 +199,38 @@ export const chargebeeCatalogHandler: SyncHandler = {
           offering:
             asString(record["item_id"]) ?? asString(record["offering_id"]),
         };
-      case "productFeature":
-        return {
-          product:
-            asString(record["item_family_id"]) ?? asString(record["product_id"]),
-        };
+      // Read from the payload: every item entitlement names its own item.
+      case "feature":
+        return { offering: asString(record["item_id"]) };
       default:
         return {};
     }
   },
 };
+
+/**
+ * Page one Chargebee list endpoint to the end, yielding each page's records.
+ *
+ * The same three stopping conditions as the inline loops above: no
+ * `next_offset`, an offset that fails to advance, and the page cap.
+ */
+async function* pageList(
+  fetchPage: (offset: string | undefined) => Promise<ChargebeeListPage>
+): AsyncGenerator<readonly RawRecord[]> {
+  let offset: string | undefined;
+  let pagesFetched = 0;
+
+  for (;;) {
+    const body = await fetchPage(offset);
+    yield body.records;
+
+    pagesFetched += 1;
+    if (pagesFetched >= CHARGEBEE_MAX_PAGES) break;
+
+    if (body.nextOffset === undefined || body.nextOffset === offset) break;
+    offset = body.nextOffset;
+  }
+}
 
 function withCreatedAt(record: RawRecord): RawRecord {
   const createdAt = epochToIso(record["created_at"]);

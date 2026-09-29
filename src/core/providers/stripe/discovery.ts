@@ -39,8 +39,9 @@ import {
   STRIPE_AGREEMENT_ITEM_FIELDS,
   STRIPE_CONTACT_FIELDS,
   STRIPE_CUSTOMER_FIELDS,
+  STRIPE_FEATURE_FIELDS,
   STRIPE_OFFERING_FIELDS,
-  STRIPE_PRODUCT_FEATURE_FIELDS,
+  STRIPE_PRICE_FIELDS,
   STRIPE_PRODUCT_FIELDS,
   STRIPE_SUBSCRIPTION_FIELDS,
 } from "./fixtures";
@@ -183,12 +184,21 @@ export const stripeFieldDiscovery: FieldDiscovery = {
         return withMetadataKeys(session, "customers", STRIPE_CUSTOMER_FIELDS);
       case "product":
         return withMetadataKeys(session, "products", STRIPE_PRODUCT_FIELDS);
+      // Static, and no request: the offering record is built key by key from a
+      // product the handler listed, so its shape is known here exactly as
+      // `contact`'s is — and it carries no metadata, which is why nothing is
+      // sampled from the products endpoint for it.
       case "offering":
-        return withMetadataKeys(session, "prices", STRIPE_OFFERING_FIELDS);
+        return [...STRIPE_OFFERING_FIELDS];
+      // The prices endpoint, and sampled: unlike the offering, a price record is
+      // the raw payload with the synthesized fields spread over it, so it keeps
+      // whatever metadata the account put on its prices.
+      case "price":
+        return withMetadataKeys(session, "prices", STRIPE_PRICE_FIELDS);
       // The one object whose metadata lives on a nested record, read from the
       // flat definitions endpoint rather than from the attachments themselves.
-      case "productFeature":
-        return withFeatureMetadataKeys(session, STRIPE_PRODUCT_FEATURE_FIELDS);
+      case "feature":
+        return withFeatureMetadataKeys(session, STRIPE_FEATURE_FIELDS);
       // Both halves of an agreement are read from the same endpoint, because
       // they are two halves of one Stripe record. Only the field list differs:
       // the shared node's fields against the recurring detail's.

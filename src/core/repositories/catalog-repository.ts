@@ -32,29 +32,23 @@ export interface OfferingRow {
   productName: string | null;
   /** The provider's own product id, present even when the link is unresolved. */
   externalProductId: string | null;
+  featureCount: number;
   customFields: Record<string, string>;
   integrationLabel: string;
 }
 
 /**
- * One feature attachment, with the product it resolved to.
- *
- * `featureId` is the provider's `feat_…` and is what groups rows that are the
- * same feature on different products. Kept beside `lookupKey` rather than
- * folded into it: a merchant can create two features with the same lookup key
- * only by deleting the first, but nothing stops the key being absent, and a
- * grouping that fell back to the display name would merge two features a
- * merchant had deliberately named alike.
+ * One feature attachment, with the offering it resolved to.
  */
-export interface ProductFeatureRow {
+export interface FeatureRow {
   id: string;
   externalSourceId: string;
   name: string;
   lookupKey: string | null;
   featureId: string | null;
-  productName: string | null;
-  /** The provider's own product id, present even when the link is unresolved. */
-  externalProductId: string | null;
+  offeringName: string | null;
+  /** The provider's own offering id, present even when the link is unresolved. */
+  externalOfferingId: string | null;
   customFields: Record<string, string>;
   integrationLabel: string;
 }
@@ -69,13 +63,12 @@ export interface ProductRow {
   integrationLabel: string;
   providerName: string;
   offeringCount: number;
-  featureCount: number;
 }
 
 export interface CatalogPage {
   products: ProductRow[];
   offerings: OfferingRow[];
-  features: ProductFeatureRow[];
+  features: FeatureRow[];
   totals: {
     products: number;
     offerings: number;
@@ -83,13 +76,7 @@ export interface CatalogPage {
     /** Offerings that named a product we could not resolve. */
     unlinkedOfferings: number;
     /**
-     * Features that named a product we could not resolve.
-     *
-     * Counted separately from offerings, and expected to be zero rather than
-     * merely small. A feature's product id is one this integration listed in
-     * the same run, so a non-zero figure here means a product was *rejected* by
-     * the writer — a different diagnosis from an offering pointing at a product
-     * that simply did not come back on this page.
+     * Features that named an offering we could not resolve.
      */
     unlinkedFeatures: number;
   };
@@ -117,7 +104,7 @@ export async function loadCatalog(
         take,
         include: {
           integration: { select: { instanceLabel: true, providerName: true } },
-          _count: { select: { offerings: true, features: true } },
+          _count: { select: { offerings: true } },
         },
       }),
       prisma.offering.findMany({
@@ -130,28 +117,26 @@ export async function loadCatalog(
           integration: { select: { instanceLabel: true } },
           product: { select: { name: true } },
           prices: true,
+          _count: { select: { features: true } },
         },
       }),
-      prisma.productFeature.findMany({
+      prisma.feature.findMany({
         where: scope,
-        // By product, then by name — the order the page reads in, since the
-        // features tab groups under the product that includes them. A feature
-        // whose product did not resolve sorts first, where it is noticed.
-        orderBy: [{ product: { name: "asc" } }, { name: "asc" }],
+        orderBy: [{ offering: { name: "asc" } }, { name: "asc" }],
         take,
         include: {
           integration: { select: { instanceLabel: true } },
-          product: { select: { name: true } },
+          offering: { select: { name: true } },
         },
       }),
       prisma.product.count({ where: scope }),
       prisma.offering.count({ where: scope }),
-      prisma.productFeature.count({ where: scope }),
+      prisma.feature.count({ where: scope }),
       prisma.offering.count({
         where: { ...scope, productId: null, externalProductId: { not: null } },
       }),
-      prisma.productFeature.count({
-        where: { ...scope, productId: null, externalProductId: { not: null } },
+      prisma.feature.count({
+        where: { ...scope, offeringId: null, externalOfferingId: { not: null } },
       }),
     ]);
 
@@ -166,7 +151,6 @@ export async function loadCatalog(
       integrationLabel: row.integration.instanceLabel,
       providerName: row.integration.providerName,
       offeringCount: row._count.offerings,
-      featureCount: row._count.features,
     })),
     offerings: offerings.map((row) => {
       const primaryPrice = row.prices[0];
@@ -181,6 +165,7 @@ export async function loadCatalog(
         active: row.active,
         productName: row.product?.name ?? null,
         externalProductId: row.externalProductId,
+        featureCount: row._count.features,
         customFields: readJsonObject(row.customFields),
         integrationLabel: row.integration.instanceLabel,
       };
@@ -191,8 +176,8 @@ export async function loadCatalog(
       name: row.name,
       lookupKey: row.lookupKey,
       featureId: row.externalFeatureId,
-      productName: row.product?.name ?? null,
-      externalProductId: row.externalProductId,
+      offeringName: row.offering?.name ?? null,
+      externalOfferingId: row.externalOfferingId,
       customFields: readJsonObject(row.customFields),
       integrationLabel: row.integration.instanceLabel,
     })),

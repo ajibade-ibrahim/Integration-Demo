@@ -1,16 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bootstrap, resetBootstrapForTests } from "@/core/bootstrap";
 import {
+  featureItemEntitlementsUrl,
+  featuresUrl,
   flattenItemPrice,
   itemFamiliesUrl,
   itemPricesUrl,
   itemsUrl,
+  parseFeaturesPage,
+  parseItemEntitlementsPage,
   parseItemFamiliesPage,
   parseItemPricesPage,
   parseItemsPage,
 } from "@/core/providers/chargebee/api";
 import { chargebeeCatalogHandler } from "@/core/providers/chargebee/catalog-handler";
 import {
+  CHARGEBEE_FIXTURE_DASHBOARDS_ENTITLEMENTS,
+  CHARGEBEE_FIXTURE_FEATURES_PAGE_1,
   CHARGEBEE_FIXTURE_ITEM_FAMILIES_PAGE_1,
   CHARGEBEE_FIXTURE_ITEM_PRICES_PAGE_1,
   CHARGEBEE_FIXTURE_ITEMS_PAGE_1,
@@ -42,19 +48,45 @@ describe("Chargebee Catalog API & Parsing", () => {
     expect(page.records[0]?.["name"]).toBe("Analytics Suite");
   });
 
+  it("builds entitlement URLs, encoding the feature id", () => {
+    expect(featuresUrl("acme-site", 25, "off_1")).toBe(
+      "https://acme-site.chargebee.com/api/v2/features?limit=25&next_offset=off_1"
+    );
+    expect(featureItemEntitlementsUrl("acme-site", "cb_feat_1", 10)).toBe(
+      "https://acme-site.chargebee.com/api/v2/features/cb_feat_1/item_entitlements?limit=10"
+    );
+    // A path segment built from response data must not be able to escape it.
+    expect(featureItemEntitlementsUrl("acme-site", "a/../../customers", 10)).toBe(
+      "https://acme-site.chargebee.com/api/v2/features/a%2F..%2F..%2Fcustomers/item_entitlements?limit=10"
+    );
+  });
+
   it("parses Items page envelope", () => {
     const page = parseItemsPage(CHARGEBEE_FIXTURE_ITEMS_PAGE_1);
-    expect(page.records.length).toBe(3);
+    expect(page.records.length).toBe(2);
     const plan = page.records.find((r) => r["id"] === "cb_item_analytics_pro");
-    const feature = page.records.find(
-      (r) => r["id"] === "cb_item_advanced_reports"
-    );
 
     expect(plan?.["type"]).toBe("plan");
     expect(plan?.["item_family_id"]).toBe("cb_family_analytics");
+  });
 
-    expect(feature?.["type"]).toBe("feature");
-    expect(feature?.["name"]).toBe("Advanced Reports");
+  it("parses Features and Item Entitlements page envelopes", () => {
+    const features = parseFeaturesPage(CHARGEBEE_FIXTURE_FEATURES_PAGE_1);
+    expect(features.records.map((r) => r["id"])).toEqual([
+      "cb_feat_advanced_reports",
+      "cb_feat_dashboards",
+    ]);
+
+    const entitlements = parseItemEntitlementsPage(
+      CHARGEBEE_FIXTURE_DASHBOARDS_ENTITLEMENTS
+    );
+    expect(entitlements.records.map((r) => r["id"])).toEqual([
+      "item-ent-dash-pro",
+      "item-ent-dash-seats",
+    ]);
+    expect(entitlements.records[0]?.["item_id"]).toBe("cb_item_analytics_pro");
+    expect(entitlements.records[0]?.["feature_name"]).toBe("Dashboards");
+    expect(entitlements.nextOffset).toBeUndefined();
   });
 
   it("parses Item Prices page envelope", () => {
@@ -98,13 +130,18 @@ describe("Chargebee Catalog Handler", () => {
 
     expect(
       chargebeeCatalogHandler.externalRefsOf(
-        { id: "cb_feat_1", item_family_id: "cb_fam_1" },
-        "productFeature"
+        {
+          id: "item-ent-1",
+          item_id: "cb_item_pro",
+          feature_id: "cb_feat_1",
+          item_family_id: "cb_fam_1",
+        },
+        "feature"
       )
-    ).toEqual({ product: "cb_fam_1" });
+    ).toEqual({ offering: "cb_item_pro" });
   });
 
-  it("fetches catalog pages for products, offerings, features, and prices", async () => {
+  it("fetches catalog pages for products, offerings, and prices", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       // 1. Item Families
@@ -126,10 +163,13 @@ describe("Chargebee Catalog Handler", () => {
         json: async () => CHARGEBEE_FIXTURE_ITEM_PRICES_PAGE_1,
       } as Response);
 
+    // Nothing mapped to `feature`, so the entitlements pass makes no request —
+    // the three mocks above are the whole conversation.
     const dummyCtx: HandlerContext = {
+      integrationId: "int-test",
       accessToken: "acme-test:chb_dummy_key",
       metadata: { site: "acme-test" },
-      options: {},
+      requestedSourcePaths: new Map(),
     };
 
     const pages = [];
@@ -137,18 +177,11 @@ describe("Chargebee Catalog Handler", () => {
       pages.push(page);
     }
 
-    expect(pages.length).toBe(4);
-    expect(pages[0]?.object).toBe("product");
+    expect(pages.map((p) => p.object)).toEqual(["product", "offering", "price"]);
     expect(pages[0]?.records.length).toBe(1);
-
-    expect(pages[1]?.object).toBe("offering");
     expect(pages[1]?.records.length).toBe(2); // plan + addon
-
-    expect(pages[2]?.object).toBe("productFeature");
-    expect(pages[2]?.records.length).toBe(1); // feature
-
-    expect(pages[3]?.object).toBe("price");
-    expect(pages[3]?.records.length).toBe(2);
+    expect(pages[2]?.records.length).toBe(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
 
     fetchSpy.mockRestore();
   });

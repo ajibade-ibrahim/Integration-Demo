@@ -2,16 +2,15 @@
  * Stripe catalog sync handler — products, the prices that sell them, and the
  * features they include.
  *
- * Stripe's three resources map onto ours one for one: a `product` is a Product,
- * a `price` is an Offering, a `ProductFeature` is a ProductFeature. That is a
- * happier fit than the identity side got — there is no synthesis of a record
- * that does not exist, as `synthesizeContact` has to do — but four details still
- * need handling here rather than downstream:
+ * Stripe's three resources map onto ours: a `product` is a Product *and* the
+ * source of the Offering synthesised from it, a `price` is a Price sold under
+ * that offering, and a `ProductFeature` attachment is a Feature. Four details
+ * still need handling here:
  *
  * 1. **A price usually has no name.** `nickname` is optional and in practice
- *    usually null, while `Offering.name` is required, so an unnamed price would
- *    be rejected on every sync forever. `offeringDisplayName` builds one from
- *    the amount and interval. This is the single most load-bearing line in the
+ *    usually null, while `Price.name` is required, so an unnamed price would be
+ *    rejected on every sync forever. `offeringDisplayName` builds one from the
+ *    amount and interval. This is the single most load-bearing line in the
  *    file.
  *
  * 2. **The interval is nested and sometimes absent.** `recurring.interval` is
@@ -19,18 +18,24 @@
  *    flattened and defaulted to `one_time` — a value, not a null, because "does
  *    not recur" is a fact and the writer reads null as "not told".
  *
- * 3. **Ordering.** Products are yielded before prices, and prices before
- *    features, so each child resolves its product against the index the product
- *    pages build — the same invariant customers-before-contacts keeps on the
- *    identity side.
+ * 3. **Ordering.** Each product page is followed by the offering page built
+ *    from it, and those come before any price page, which in turn comes before
+ *    any feature page. That is what lets a price and a feature resolve their
+ *    offering against the index those pages build — the same invariant
+ *    customers-before-contacts keeps on the identity side.
  *
- * 4. **A feature's payload does not name its product.** Features are read from
+ *    The synthesised offering is why this file writes the same row twice.
+ *    Stripe has no separate item object: a product *is* what gets sold, so it is
+ *    written once as a Product and once as the Offering its prices and features
+ *    attach to, under two ids that are equal by construction.
+ *
+ * 4. **A feature's payload does not name its offering.** Features are read from
  *    `/v1/products/{id}/features`, a per-product sub-resource, and the response
- *    carries no `product` field at all. The parent id comes from the URL, so
- *    this handler retains the product ids it listed and hands each one to
- *    `flattenProductFeature`. Lose track and every row is linked to the wrong
- *    product with no error and no null to notice — the one genuinely new hazard
- *    in this file.
+ *    carries no offering field at all. The offering id (which equals the product
+ *    id — each product has one synthesised offering with the same id) comes from
+ *    the URL, so this handler retains the product ids it listed and hands each
+ *    one to `flattenFeature`. Lose track and every row is linked to the wrong
+ *    offering with no error and no null to notice.
  *
  *    That pass is also the only one that is conditional, on two counts: most
  *    accounts define no entitlement features, and an integration may have no
@@ -63,7 +68,7 @@ import {
   entitlementFeaturesUrl,
   epochToIso,
   flattenPrice,
-  flattenProductFeature,
+  flattenFeature,
   listUrl,
   parseListPage,
   priceProductId,
@@ -119,16 +124,9 @@ async function* pageResource(
 /**
  * Page the features attached to one product.
  *
- * A near-copy of `pageResource`'s cursor loop rather than a widening of it, and
- * that is a deliberate trade. Sharing would mean teaching `pageResource` about
- * a URL builder with a different signature *and* about a decorator that needs
- * the parent id — two parameters that only one of its three callers would use.
- * The three break conditions are the part that matters and they are identical
- * here, which is what the pagination property test checks across both loops.
- *
- * `productId` is closed over and passed to every record. See
- * `flattenProductFeature`: the product id is not in the payload, so this
- * function is the only thing that knows it.
+ * Uses the product id as both the URL segment and the offering id — each Stripe
+ * product has a synthesised offering with the same id, so the two are
+ * interchangeable here.
  */
 async function* pageProductFeatures(
   session: ProviderSession,
@@ -145,10 +143,10 @@ async function* pageProductFeatures(
     );
 
     yield {
-      object: "productFeature",
+      object: "feature",
       records: body.records.map((record: RawRecord) => ({
         ...record,
-        ...flattenProductFeature(record, productId),
+        ...flattenFeature(record, productId),
       })),
     };
 
@@ -220,7 +218,7 @@ export const stripeCatalogHandler: SyncHandler = {
     yield* pageResource(session, "prices", "price", flattenPrice);
 
     const featuresAreMapped =
-      (ctx.requestedSourcePaths.get("productFeature") ?? []).length > 0;
+      (ctx.requestedSourcePaths.get("feature") ?? []).length > 0;
 
     if (featuresAreMapped && (await accountUsesEntitlements(session))) {
       for (const productId of productIds) {
@@ -239,8 +237,8 @@ export const stripeCatalogHandler: SyncHandler = {
         return { product: asString(record["product_id"]) ?? asString(record["id"]) };
       case "price":
         return { offering: priceProductId(record) };
-      case "productFeature":
-        return { product: asString(record["product_id"]) };
+      case "feature":
+        return { offering: asString(record["offering_id"]) };
       default:
         return {};
     }

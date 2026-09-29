@@ -21,7 +21,7 @@ import {
   writeContacts,
   writeCustomers,
   writeOfferings,
-  writeProductFeatures,
+  writeFeatures,
   writeProducts,
 } from "@/core/sync/record-writer";
 import type { MappedRecord } from "@/core/types/mapping";
@@ -58,7 +58,7 @@ beforeEach(async () => {
     where: { integrationId: INTEGRATION_ID },
   });
   await prisma.offering.deleteMany({ where: { integrationId: INTEGRATION_ID } });
-  await prisma.productFeature.deleteMany({
+  await prisma.feature.deleteMany({
     where: { integrationId: INTEGRATION_ID },
   });
   await prisma.product.deleteMany({ where: { integrationId: INTEGRATION_ID } });
@@ -412,68 +412,70 @@ describe("Property: agreements keep both parents across a re-sync", () => {
     );
   });
 
-  it("keeps product-feature associations after a re-sync with an empty index", async () => {
+  it("keeps feature associations after a re-sync with an empty index", async () => {
     await fc.assert(
       fc.asyncProperty(externalIds, async (ids) => {
-        await prisma.productFeature.deleteMany({
+        await prisma.feature.deleteMany({
           where: { integrationId: INTEGRATION_ID },
         });
-        await prisma.product.deleteMany({
+        await prisma.offering.deleteMany({
           where: { integrationId: INTEGRATION_ID },
         });
 
-        // One product per feature, so every row has a distinct parent to
+        // One offering per feature, so every row has a distinct parent to
         // resolve. A shared parent would let a switch branch that read the
-        // wrong table still look right for the first row.
-        const products = await writeProducts(
+        // wrong table still look right for the first row. The offerings need
+        // no product: that edge is nullable and not what this property is about.
+        const offerings = await writeOfferings(
           INTEGRATION_ID,
           ids.map((id) => ({
-            externalSourceId: `prod-${id}`,
+            externalSourceId: `offer-${id}`,
             mapped: {
-              object: "product" as const,
-              fields: { name: `Product ${id}` },
+              object: "offering" as const,
+              fields: { name: `Offering ${id}` },
               customFields: {},
               crossRefs: {},
             },
-          }))
+          })),
+          new Map()
         );
 
         const features = ids.map((id) => ({
           externalSourceId: `prodft-${id}`,
-          externalRefs: { product: `prod-${id}` },
+          externalRefs: { offering: `offer-${id}` },
           mapped: {
-            object: "productFeature" as const,
+            object: "feature" as const,
             fields: { name: `Feature ${id}`, lookupKey: `key-${id}` },
             customFields: {},
             crossRefs: {},
           },
         }));
 
-        await writeProductFeatures(
+        await writeFeatures(
           INTEGRATION_ID,
           features,
-          products.externalToInternal
+          offerings.externalToInternal
         );
 
         // Re-run with an *empty* index, which is what every sync after the
-        // first produces: the products did not change, so nothing put them in
+        // first produces: the offerings did not change, so nothing put them in
         // this run's map and the only route to the link is the database
         // fallback in `resolveAssociation`. Without it, every unchanged feature
-        // would silently lose its product — and unlike an offering there is no
-        // relink pass that would put it back.
-        await writeProductFeatures(INTEGRATION_ID, features, new Map());
+        // would silently lose its offering — and there is no relink pass for
+        // features that would put it back.
+        await writeFeatures(INTEGRATION_ID, features, new Map());
 
-        const rows = await prisma.productFeature.findMany({
+        const rows = await prisma.feature.findMany({
           where: { integrationId: INTEGRATION_ID },
           select: {
-            externalProductId: true,
-            product: { select: { externalSourceId: true } },
+            externalOfferingId: true,
+            offering: { select: { externalSourceId: true } },
           },
         });
 
         expect(rows).toHaveLength(ids.length);
         for (const row of rows) {
-          expect(row.product?.externalSourceId).toBe(row.externalProductId);
+          expect(row.offering?.externalSourceId).toBe(row.externalOfferingId);
         }
       }),
       { numRuns: 20 }

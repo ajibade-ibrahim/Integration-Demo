@@ -70,20 +70,15 @@ export const TARGET_OBJECTS = [
   "product",
   "offering",
   "price",
-  // Not `"feature"`, deliberately. This is Stripe's *attachment* of a feature
-  // to a product, and `"feature"` is the name the standalone Feature object
-  // should have if it is ever synced — a wrong discriminator is the expensive
-  // retrofit in this codebase, so the better name is reserved rather than spent.
-  // camelCase is new to this union and matches the Prisma accessor
-  // (`prisma.productFeature`), which is what `findByExternalId`'s switch reads.
-  "productFeature",
+  // camelCase matches the Prisma accessor (`prisma.feature`).
+  "feature",
   "agreement",
   "subscription",
   // A line on an agreement, not on a subscription — the name is the design.
   // Salesforce has ContractLineItem, OrderItem and QuoteLineItem, and HubSpot
   // models what a deal sold as line items; a subscription is the odd case
   // where one offering link almost suffices. Naming this `subscriptionItem`
-  // would be the discriminator mistake `productFeature` avoided, one table up.
+  // would name the object after one provider's case rather than what it is.
   "agreementItem",
 ] as const;
 

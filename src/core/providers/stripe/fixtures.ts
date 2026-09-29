@@ -86,16 +86,44 @@ export const STRIPE_PRODUCT_FIELDS: DiscoveredFieldDef[] = [
 ];
 
 /**
- * Price fields, including the four the handler synthesizes.
+ * Offering fields — the subset of a product's that an offering record carries.
  *
- * `offering_name`, `interval`, `interval_count` and `product_id` do not exist
- * in Stripe's response — see `flattenPrice`. They are listed first because they
- * are the ones the default mapping uses and the ones a user wants: the raw
- * `recurring.interval` below is offered for completeness, but mapping it works
- * only because `readPath` walks dots, and it is null for one-time prices where
- * the synthesized field says `one_time`.
+ * Every path here exists on the synthesized offering the catalog handler builds
+ * from a product, which is exactly the five keys it writes. A Stripe product has
+ * one offering with the same id, so the offering record is not a second read of
+ * the API but a second *view* of the same row.
+ *
+ * Deliberately not `STRIPE_PRODUCT_FIELDS`, which discovery would otherwise
+ * reuse for the shape the two targets share. The product record is the raw
+ * payload plus a synthesized date, so it carries `created_at`, `unit_label`,
+ * `url`, `statement_descriptor` and the account's metadata keys. The offering
+ * record is built key by key and carries none of them — and offering a path that
+ * resolves to nothing on every row is the failure the shipped default mapping is
+ * checked against, one object over.
  */
 export const STRIPE_OFFERING_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Offering ID (the product's own id)", type: "string" },
+  { path: "name", label: "Name (from the product)", type: "string" },
+  { path: "description", label: "Description (from the product)", type: "string" },
+  { path: "active", label: "Active (from the product)", type: "boolean" },
+  {
+    path: "product_id",
+    label: "Product ID (synthesized; the offering's own id)",
+    type: "string",
+  },
+];
+
+/**
+ * Price fields, including the three the handler synthesizes.
+ *
+ * `offering_name`, `interval` and `interval_count` do not exist in Stripe's
+ * response — see `flattenPrice`. They are listed first because they are the ones
+ * the default mapping uses and the ones a user wants: the raw `recurring.interval`
+ * below is offered for completeness, but mapping it works only because `readPath`
+ * walks dots, and it is null for one-time prices where the synthesized field says
+ * `one_time`.
+ */
+export const STRIPE_PRICE_FIELDS: DiscoveredFieldDef[] = [
   { path: "id", label: "Price ID", type: "string" },
   {
     path: "offering_name",
@@ -138,16 +166,12 @@ export const STRIPE_OFFERING_FIELDS: DiscoveredFieldDef[] = [
 ];
 
 /**
- * Product feature fields — a product's entitlement attachments.
+ * Feature fields — an offering's entitlement attachments.
  *
- * Synthesized paths first, as in `STRIPE_OFFERING_FIELDS`, and here the split
- * matters more than usual. Every field a user actually wants is nested one level
- * down inside `entitlement_feature`, and `product_id` does not appear in the
- * response *at all* — the handler injects it from the URL it requested. The raw
- * paths are offered below and labelled as raw so a user who maps one knows they
- * are reaching past the flattening rather than around a gap in it.
+ * Synthesized paths first. The offering_id is injected by the handler from the
+ * URL it requested — it does not appear in the Stripe response payload at all.
  */
-export const STRIPE_PRODUCT_FEATURE_FIELDS: DiscoveredFieldDef[] = [
+export const STRIPE_FEATURE_FIELDS: DiscoveredFieldDef[] = [
   { path: "id", label: "Attachment ID (prodft_…)", type: "string" },
   {
     path: "feature_name",
@@ -165,8 +189,8 @@ export const STRIPE_PRODUCT_FEATURE_FIELDS: DiscoveredFieldDef[] = [
     type: "string",
   },
   {
-    path: "product_id",
-    label: "Product ID (synthesized from the request URL, not the payload)",
+    path: "offering_id",
+    label: "Offering ID (synthesized from the request URL, not the payload)",
     type: "string",
   },
   {
@@ -185,7 +209,7 @@ export const STRIPE_PRODUCT_FEATURE_FIELDS: DiscoveredFieldDef[] = [
 /**
  * Agreement fields — the shared commercial node, read from a subscription.
  *
- * Synthesized paths first, as in `STRIPE_OFFERING_FIELDS`, because they are the
+ * Synthesized paths first, as in `STRIPE_PRICE_FIELDS`, because they are the
  * ones a user should reach for: `agreement_name` exists because Stripe gives a
  * subscription no name, and `status` here is already translated into our
  * vocabulary rather than Stripe's eight.
@@ -214,7 +238,7 @@ export const STRIPE_AGREEMENT_FIELDS: DiscoveredFieldDef[] = [
   },
   {
     path: "offering_id",
-    label: "Offering ID — the first item's price (synthesized)",
+    label: "Offering ID — the product behind the first item's price (synthesized)",
     type: "string",
   },
   {
@@ -337,8 +361,13 @@ export const STRIPE_AGREEMENT_ITEM_FIELDS: DiscoveredFieldDef[] = [
     type: "string",
   },
   {
+    path: "price_id",
+    label: "Price ID (synthesized from price.id — which price was sold)",
+    type: "string",
+  },
+  {
     path: "offering_id",
-    label: "Price ID (synthesized from price.id)",
+    label: "Offering ID (synthesized from price.product — what was sold)",
     type: "string",
   },
   { path: "quantity", label: "Quantity", type: "number" },
