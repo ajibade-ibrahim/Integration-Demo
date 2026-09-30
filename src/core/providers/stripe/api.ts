@@ -197,18 +197,18 @@ export function productFeaturesUrl(
 }
 
 /**
- * The account's feature *definitions* — one page, used only to ask whether
- * there are any.
+ * The account's feature *definitions* — one page, used to ask whether there are
+ * any, and by discovery to sample their metadata keys.
  *
  * This is the cheap answer to an expensive question. The per-product fan-out
- * above costs one request per product to discover nothing at all on every
+ * below costs one request per product to discover nothing at all on every
  * account that does not use Entitlements, which is most of them. This endpoint
  * is flat and listable, so a single request with `limit=1` settles it.
  *
- * Note what it deliberately is *not* used for: the definitions it returns are
- * not synced. A definitions table would add only the ability to see a feature
- * attached to no offering, and each `Feature` row (an attachment) already
- * carries the feature's id and name denormalized onto it.
+ * The definitions themselves are synced, but *not* from here: the sync reads
+ * each attachment's nested `entitlement_feature` on the per-product call it was
+ * already making, so a definition attached to no product is not synced at all.
+ * See `flattenFeatureDefinition`.
  */
 export function entitlementFeaturesUrl(limit: number): string {
   return paginatedUrl("/v1/entitlements/features", limit);
@@ -488,11 +488,48 @@ export function priceProductId(price: RawRecord): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Feature
+// Feature and entitlement
 // ---------------------------------------------------------------------------
 
 /**
- * Flatten one feature attachment into a mappable record.
+ * One feature *definition*, lifted out of a feature attachment.
+ *
+ * Stripe nests the reusable definition under `entitlement_feature` on every
+ * attachment returned by `/v1/products/{id}/features`. That definition is a
+ * first-class object of its own — the `feat_…` id, the name, the lookup key and
+ * the account's metadata — and this lifts it to a mappable top-level record.
+ *
+ * **The top-level `id` is the definition's, not the attachment's.** The reader
+ * of `id` is `externalIdOf`, which is object-agnostic; a definition record left
+ * carrying the attachment's `prodft_…` would be upserted under the wrong key,
+ * silently and for every row. This is the trap `tests/unit/stripe-product-feature.test.ts`
+ * exists to catch.
+ *
+ * The nested object is carried along unmodified so a raw
+ * `entitlement_feature.*` mapping path — the metadata keys discovery offers —
+ * still resolves against the record.
+ *
+ * @returns undefined when the attachment carries no definition id, because a
+ *   definitionless attachment is not a feature and writing it with no id would
+ *   only produce a rejection.
+ */
+export function flattenFeatureDefinition(
+  feature: RawRecord
+): RawRecord | undefined {
+  const definition = asRecord(feature["entitlement_feature"]);
+  const id = asString(definition?.["id"]);
+  if (id === undefined) return undefined;
+
+  return {
+    id,
+    feature_name: asString(definition?.["name"]),
+    lookup_key: asString(definition?.["lookup_key"]),
+    entitlement_feature: definition,
+  };
+}
+
+/**
+ * One entitlement *link*: this product includes that feature.
  *
  * The parent offering id is not in the payload. For Stripe's product-level
  * features, the attachment is read from `/v1/products/{id}/features` and the
@@ -505,16 +542,22 @@ export function priceProductId(price: RawRecord): string | undefined {
  *
  * It is also injected *last* and unconditionally, so a record carrying a
  * misleading key of its own cannot win. The URL is the only authority here.
+ *
+ * The row's own `id` is the attachment's `prodft_…`, which is what keys an
+ * entitlement; the feature it attaches is the definition's `feat_…`.
  */
-export function flattenFeature(
+export function flattenFeatureEntitlement(
   feature: RawRecord,
   offeringId: string
 ): RawRecord {
   const definition = asRecord(feature["entitlement_feature"]);
 
   return {
-    feature_name: asString(definition?.["name"]),
-    lookup_key: asString(definition?.["lookup_key"]),
+    // The attachment's own shape first — `livemode` and anything else Stripe
+    // sends with it — then ours, so an injected id always wins over a
+    // coincidental one in the payload.
+    ...feature,
+    id: asString(feature["id"]),
     feature_id: asString(definition?.["id"]),
     offering_id: offeringId,
   };
@@ -789,7 +832,7 @@ export function itemTypeOf(item: RawRecord): string | undefined {
  *
  * **`agreement_id` is injected by the caller, never read from the record.**
  * Stripe's subscription item *does* carry a `subscription` field, which makes
- * this stricter than `flattenFeature`'s version of the same rule rather
+ * this stricter than `flattenFeatureEntitlement`'s version of the same rule rather
  * than looser: there is a plausible-looking value right there in the payload
  * and it is deliberately ignored. A record that could name its own parent is a
  * record that could reassign itself to another agreement, and this is the one

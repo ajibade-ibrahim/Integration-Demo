@@ -39,6 +39,7 @@ import {
   STRIPE_AGREEMENT_ITEM_FIELDS,
   STRIPE_CONTACT_FIELDS,
   STRIPE_CUSTOMER_FIELDS,
+  STRIPE_ENTITLEMENT_FIELDS,
   STRIPE_FEATURE_FIELDS,
   STRIPE_OFFERING_FIELDS,
   STRIPE_PRICE_FIELDS,
@@ -199,6 +200,11 @@ export const stripeFieldDiscovery: FieldDiscovery = {
       // flat definitions endpoint rather than from the attachments themselves.
       case "feature":
         return withFeatureMetadataKeys(session, STRIPE_FEATURE_FIELDS);
+      // Static, and no request: the entitlement record is built from the
+      // attachment's own id and two synthesised ids, and Stripe states nothing
+      // else on it — so there is nothing to sample.
+      case "entitlement":
+        return [...STRIPE_ENTITLEMENT_FIELDS];
       // Both halves of an agreement are read from the same endpoint, because
       // they are two halves of one Stripe record. Only the field list differs:
       // the shared node's fields against the recurring detail's.

@@ -105,9 +105,18 @@ export const stripeCatalogDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "active", targetObject: "price", targetFieldPath: "active", transform: "none" },
 
   // --- feature ---
+  // The definition. `feature_name` and `lookup_key` are synthesized by
+  // `flattenFeatureDefinition`, which lifts them out of the nested
+  // `entitlement_feature`; the provider's own `feat_…` id becomes the row's
+  // `externalSourceId`, so there is no separate feature-id rule.
   { sourceFieldPath: "feature_name", targetObject: "feature", targetFieldPath: "name", transform: "trim" },
   { sourceFieldPath: "lookup_key", targetObject: "feature", targetFieldPath: "lookupKey", transform: "trim" },
-  { sourceFieldPath: "feature_id", targetObject: "feature", targetFieldPath: "externalFeatureId", transform: "none" },
+
+  // --- entitlement ---
+  // Deliberately empty. Stripe's attachment carries nothing mappable of its own
+  // — no value, no limit — and every useful column on the row (both
+  // associations, both provider ids) is derived by the engine from the record's
+  // refs. A rule here could only name a field the payload does not carry.
 ];
 
 /**

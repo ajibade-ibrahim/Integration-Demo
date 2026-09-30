@@ -1,12 +1,12 @@
 /**
  * Reads over the catalog the sync engine wrote.
  *
- * Reports the count of *unlinked* offerings alongside the rows, for the same
- * reason `synced-data-repository` reports unlinked contacts: an offering whose
- * product could not be resolved is kept rather than dropped, and that decision
- * is only defensible if the consequence is visible. Otherwise it is silent data
- * loss wearing a different hat — the rows are all there, one column is just
- * permanently empty.
+ * Reports the count of *unlinked* offerings and entitlements alongside the rows,
+ * for the same reason `synced-data-repository` reports unlinked contacts: an
+ * offering whose product could not be resolved is kept rather than dropped, and
+ * that decision is only defensible if the consequence is visible. Otherwise it
+ * is silent data loss wearing a different hat — the rows are all there, one
+ * column is just permanently empty.
  *
  * Scoped by `userId` through the integration, like every other request-scoped
  * read. The catalog is per-integration data: two connections to two Stripe
@@ -32,13 +32,14 @@ export interface OfferingRow {
   productName: string | null;
   /** The provider's own product id, present even when the link is unresolved. */
   externalProductId: string | null;
-  featureCount: number;
+  /** How many features this offering includes, from its entitlements. */
+  entitlementCount: number;
   customFields: Record<string, string>;
   integrationLabel: string;
 }
 
 /**
- * One offering a feature belongs to, as the page renders it in the list.
+ * One offering a feature belongs to, as the page lists it in the cell.
  */
 export interface FeatureOffering {
   /** Resolved internal offering name, or null when the link is unresolved. */
@@ -48,19 +49,26 @@ export interface FeatureOffering {
 }
 
 /**
- * One feature, deduplicated across the offerings that include it.
+ * One feature, with the offerings that include it.
  *
- * The `Feature` table stores one row per *attachment*, so the same feature on
- * three offerings is three rows. The page is written in terms of the feature,
- * not the attachment, so those rows are grouped here — see `featureGroupKey`.
+ * **Unique by lookup key within an integration**, not one row per definition.
+ * Two definitions that share a lookup key are the same feature as far as
+ * anything reading this page is concerned — that is what a lookup key is *for* —
+ * so their offerings are merged into one row. A definition with no lookup key
+ * has nothing to merge on and stays its own row, keyed by its provider id.
+ *
+ * Scoped to one integration on purpose: two connections to two accounts holding
+ * a feature that happens to share a key are not the same feature, and merging
+ * them would be the false merge the identity layer refuses everywhere else.
  */
 export interface FeatureRow {
   id: string;
   externalSourceId: string;
   name: string;
   lookupKey: string | null;
-  featureId: string | null;
-  /** Every offering this feature belongs to, deduplicated and name-sorted. */
+  isMetered: boolean | null;
+  unit: string | null;
+  /** Every offering that includes this feature, deduplicated and name-sorted. */
   offerings: FeatureOffering[];
   customFields: Record<string, string>;
   integrationLabel: string;
@@ -85,13 +93,14 @@ export interface CatalogPage {
   totals: {
     products: number;
     offerings: number;
+    /** Features, unique by lookup key within each integration. */
     features: number;
     /** Offerings that named a product we could not resolve. */
     unlinkedOfferings: number;
     /**
-     * Features that named an offering we could not resolve.
+     * Entitlements with either half of their two-parent link unresolved.
      */
-    unlinkedFeatures: number;
+    unlinkedEntitlements: number;
   };
 }
 
@@ -101,60 +110,64 @@ export async function loadCatalog(
 ): Promise<CatalogPage> {
   const scope = { integration: { userId } };
 
-  const [products, offerings, features, productTotal, offeringTotal, unlinked] =
-    await Promise.all([
-      prisma.product.findMany({
-        where: scope,
-        orderBy: { name: "asc" },
-        take,
-        include: {
-          integration: { select: { instanceLabel: true, providerName: true } },
-          _count: { select: { offerings: true } },
-        },
-      }),
-      prisma.offering.findMany({
-        where: scope,
-        // By product, then by name: a catalog reads as a list of things with
-        // their tiers underneath.
-        orderBy: [{ product: { name: "asc" } }, { name: "asc" }],
-        take,
-        include: {
-          integration: { select: { instanceLabel: true } },
-          product: { select: { name: true } },
-          prices: true,
-          _count: { select: { features: true } },
-        },
-      }),
-      prisma.feature.findMany({
-        where: scope,
-        orderBy: [{ offering: { name: "asc" } }, { name: "asc" }],
-        take,
-        include: {
-          integration: { select: { instanceLabel: true } },
-          offering: { select: { name: true } },
-        },
-      }),
-      prisma.product.count({ where: scope }),
-      prisma.offering.count({ where: scope }),
-      prisma.offering.count({
-        where: { ...scope, productId: null, externalProductId: { not: null } },
-      }),
-    ]);
+  const [
+    products,
+    offerings,
+    features,
+    entitlements,
+    productTotal,
+    offeringTotal,
+    unlinked,
+    unlinkedEntitlements,
+  ] = await Promise.all([
+    prisma.product.findMany({
+      where: scope,
+      orderBy: { name: "asc" },
+      take,
+      include: {
+        integration: { select: { instanceLabel: true, providerName: true } },
+        _count: { select: { offerings: true } },
+      },
+    }),
+    prisma.offering.findMany({
+      where: scope,
+      // By product, then by name: a catalog reads as a list of things with
+      // their tiers underneath.
+      orderBy: [{ product: { name: "asc" } }, { name: "asc" }],
+      take,
+      include: {
+        integration: { select: { instanceLabel: true } },
+        product: { select: { name: true } },
+        prices: true,
+        _count: { select: { entitlements: true } },
+      },
+    }),
+    prisma.feature.findMany({
+      where: scope,
+      orderBy: [{ name: "asc" }, { lookupKey: "asc" }],
+      take,
+      include: {
+        integration: { select: { instanceLabel: true } },
+      },
+    }),
+    prisma.entitlement.findMany({
+      where: scope,
+      take,
+      include: {
+        offering: { select: { name: true } },
+      },
+    }),
+    prisma.product.count({ where: scope }),
+    prisma.offering.count({ where: scope }),
+    prisma.offering.count({
+      where: { ...scope, productId: null, externalProductId: { not: null } },
+    }),
+    prisma.entitlement.count({
+      where: { ...scope, OR: [{ offeringId: null }, { featureId: null }] },
+    }),
+  ]);
 
-  const featureRows = groupFeatures(
-    features.map((row) => ({
-      id: row.id,
-      externalSourceId: row.externalSourceId,
-      name: row.name,
-      lookupKey: row.lookupKey,
-      featureId: row.externalFeatureId,
-      offeringName: row.offering?.name ?? null,
-      externalOfferingId: row.externalOfferingId,
-      customFields: readJsonObject(row.customFields),
-      integrationLabel: row.integration.instanceLabel,
-      integrationId: row.integrationId,
-    }))
-  );
+  const featureRows = attachOfferings(features, entitlements);
 
   return {
     products: products.map((row) => ({
@@ -181,112 +194,146 @@ export async function loadCatalog(
         active: row.active,
         productName: row.product?.name ?? null,
         externalProductId: row.externalProductId,
-        featureCount: row._count.features,
+        entitlementCount: row._count.entitlements,
         customFields: readJsonObject(row.customFields),
         integrationLabel: row.integration.instanceLabel,
       };
     }),
     features: featureRows,
-    // Feature counts come from the grouped rows rather than `prisma.feature`,
-    // which counts attachments. A tab reading "Features (12)" above six rows —
-    // the same feature on two offerings is two attachments — would make the
-    // grouping look like a bug.
     totals: {
       products: productTotal,
       offerings: offeringTotal,
       features: featureRows.length,
       unlinkedOfferings: unlinked,
-      unlinkedFeatures: featureRows.filter((row) =>
-        row.offerings.some((offering) => offering.name === null)
-      ).length,
+      // Counted from the entitlement rows rather than from the grouped
+      // offerings: an entitlement whose *feature* did not resolve has no
+      // definition to be grouped under, so subtracting linked lists would miss
+      // exactly the case this number exists to report.
+      unlinkedEntitlements,
     },
   };
 }
 
-/** A feature attachment row, before grouping. */
-interface FlatFeature {
+/** A feature definition row plus the entitlement rows that point at it. */
+type FeatureWithIntegration = {
   id: string;
+  integrationId: string;
   externalSourceId: string;
   name: string;
   lookupKey: string | null;
+  isMetered: boolean | null;
+  unit: string | null;
+  customFields: string;
+  integration: { instanceLabel: string };
+};
+
+type EntitlementWithOffering = {
   featureId: string | null;
-  offeringName: string | null;
   externalOfferingId: string | null;
-  customFields: Record<string, string>;
-  integrationLabel: string;
-  integrationId: string;
-}
+  offering: { name: string } | null;
+};
 
 /**
- * The identity a feature row is grouped by.
+ * Group the definitions by lookup key and collect each group's offerings.
  *
- * `lookupKey` is the stable key an application gates on, so it is the key the
- * page groups by. It can be null — Stripe does not require one — and grouping
- * every null together would merge distinct features into one row, so the
- * provider's own feature id, and finally the attachment id, stand in.
+ * Two groupings, in order. First the entitlement rows are bucketed by internal
+ * `featureId` — the join the schema actually holds, so no key stand-in is
+ * needed. Then the definitions are folded together on
+ * `(integrationId, lookupKey ?? externalSourceId)`, which is what "unique by
+ * lookup key" means: a shared key brings the two offerings into one row, and a
+ * definition with no key falls back to its provider id so it is never merged
+ * with an unrelated one.
  *
- * The integration id is part of the key, not the display label: two connections
- * to two accounts hold two separate catalogs, and nothing here merges them.
+ * An entitlement whose *feature* half did not resolve has no definition to
+ * attach to and is skipped here; it is still counted, by `unlinkedEntitlements`.
  */
-function featureGroupKey(row: FlatFeature): string {
-  const identity = row.lookupKey ?? row.featureId ?? row.externalSourceId;
-  return `${row.integrationId}\u0000${identity}`;
-}
+function attachOfferings(
+  features: readonly FeatureWithIntegration[],
+  entitlements: readonly EntitlementWithOffering[]
+): FeatureRow[] {
+  const offeringsByFeature = new Map<string, FeatureOffering[]>();
+  const seenByFeature = new Map<string, Set<string>>();
 
-/**
- * Collapse the attachment rows into one row per feature.
- *
- * Resolved offerings sort before unresolved ones, and both sort by name or, for
- * an unresolved one, by the provider's id — so the list a person reads is
- * stable and the "unresolved #off_x" badges land at the end.
- */
-function groupFeatures(rows: readonly FlatFeature[]): FeatureRow[] {
+  for (const row of entitlements) {
+    if (row.featureId === null) continue;
+
+    const offering: FeatureOffering = {
+      name: row.offering?.name ?? null,
+      externalId: row.externalOfferingId,
+    };
+
+    const seen = seenByFeature.get(row.featureId) ?? new Set<string>();
+    const identity = offeringIdentity(offering);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    seenByFeature.set(row.featureId, seen);
+
+    const list = offeringsByFeature.get(row.featureId) ?? [];
+    list.push(offering);
+    offeringsByFeature.set(row.featureId, list);
+  }
+
   const grouped = new Map<string, FeatureRow>();
 
-  for (const row of rows) {
-    const offering: FeatureOffering | null =
-      row.offeringName === null && row.externalOfferingId === null
-        ? null
-        : { name: row.offeringName, externalId: row.externalOfferingId };
+  for (const feature of features) {
+    const key = `${feature.integrationId}:${feature.lookupKey ?? feature.externalSourceId}`;
+    const offerings = offeringsByFeature.get(feature.id) ?? [];
 
-    const key = featureGroupKey(row);
     const existing = grouped.get(key);
     if (existing === undefined) {
       grouped.set(key, {
-        id: row.id,
-        externalSourceId: row.externalSourceId,
-        name: row.name,
-        lookupKey: row.lookupKey,
-        featureId: row.featureId,
-        offerings: offering === null ? [] : [offering],
-        customFields: row.customFields,
-        integrationLabel: row.integrationLabel,
+        id: feature.id,
+        externalSourceId: feature.externalSourceId,
+        name: feature.name,
+        lookupKey: feature.lookupKey,
+        isMetered: feature.isMetered,
+        unit: feature.unit,
+        // Copied, because the sort below must not reorder the source list out
+        // from under a second definition that merges into this row.
+        offerings: [...offerings],
+        customFields: readJsonObject(feature.customFields),
+        integrationLabel: feature.integration.instanceLabel,
       });
       continue;
     }
 
-    const duplicate =
-      offering !== null &&
-      existing.offerings.some(
-        (it) => it.name === offering.name && it.externalId === offering.externalId
-      );
-    if (offering !== null && !duplicate) {
-      existing.offerings.push(offering);
+    for (const offering of offerings) {
+      if (!existing.offerings.some((it) => offeringIdentity(it) === offeringIdentity(offering))) {
+        existing.offerings.push(offering);
+      }
     }
+
+    // A gap in one definition is filled from the other rather than kept. These
+    // rows describe the same feature — a shared lookup key is the whole premise
+    // of the fold — so a field one of them states and the other leaves unset is
+    // a field the group knows. Without this, which definition happened to sort
+    // first would decide whether the metered and unit columns were populated,
+    // and the two orderings differ only by a null.
+    existing.lookupKey ??= feature.lookupKey;
+    existing.isMetered ??= feature.isMetered;
+    existing.unit ??= feature.unit;
   }
 
-  const result = [...grouped.values()];
-  for (const row of result) {
-    row.offerings.sort(compareOfferings);
-  }
-  result.sort(
-    (a, b) =>
-      a.name.localeCompare(b.name) ||
-      (a.lookupKey ?? "").localeCompare(b.lookupKey ?? "")
-  );
-  return result;
+  const rows = [...grouped.values()];
+  for (const row of rows) row.offerings.sort(compareOfferings);
+  return rows;
 }
 
+/**
+ * What makes two offerings in a cell "the same entry". The provider id alone is
+ * not enough when the link is unresolved — two unresolved links both carry a
+ * null name but different ids — and the name alone is not enough when one
+ * offering is refused and another resolves to the same one.
+ */
+function offeringIdentity(offering: FeatureOffering): string {
+  return `${offering.name ?? ""}#${offering.externalId ?? ""}`;
+}
+
+/**
+ * Resolved offerings sort before unresolved ones, and both sort by name or, for
+ * an unresolved one, by the provider's id — so the list a person reads is
+ * stable and the "unresolved #off_x" badges land at the end.
+ */
 function compareOfferings(a: FeatureOffering, b: FeatureOffering): number {
   if (a.name !== null && b.name !== null) return a.name.localeCompare(b.name);
   if (a.name !== null) return -1;

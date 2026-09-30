@@ -20,8 +20,9 @@ import {
   writeAgreements,
   writeContacts,
   writeCustomers,
+  writeEntitlements,
+  writeFeatureDefinitions,
   writeOfferings,
-  writeFeatures,
   writeProducts,
 } from "@/core/sync/record-writer";
 import type { MappedRecord } from "@/core/types/mapping";
@@ -55,6 +56,9 @@ beforeEach(async () => {
     where: { integrationId: INTEGRATION_ID },
   });
   await prisma.agreement.deleteMany({
+    where: { integrationId: INTEGRATION_ID },
+  });
+  await prisma.entitlement.deleteMany({
     where: { integrationId: INTEGRATION_ID },
   });
   await prisma.offering.deleteMany({ where: { integrationId: INTEGRATION_ID } });
@@ -412,9 +416,12 @@ describe("Property: agreements keep both parents across a re-sync", () => {
     );
   });
 
-  it("keeps feature associations after a re-sync with an empty index", async () => {
+  it("keeps entitlement associations after a re-sync with empty indexes", async () => {
     await fc.assert(
       fc.asyncProperty(externalIds, async (ids) => {
+        await prisma.entitlement.deleteMany({
+          where: { integrationId: INTEGRATION_ID },
+        });
         await prisma.feature.deleteMany({
           where: { integrationId: INTEGRATION_ID },
         });
@@ -422,10 +429,11 @@ describe("Property: agreements keep both parents across a re-sync", () => {
           where: { integrationId: INTEGRATION_ID },
         });
 
-        // One offering per feature, so every row has a distinct parent to
-        // resolve. A shared parent would let a switch branch that read the
-        // wrong table still look right for the first row. The offerings need
-        // no product: that edge is nullable and not what this property is about.
+        // One offering and one feature per entitlement, so every row has a
+        // distinct parent on each side to resolve. A shared parent would let a
+        // switch branch that read the wrong table still look right for the
+        // first row. The offerings need no product: that edge is nullable and
+        // not what this property is about.
         const offerings = await writeOfferings(
           INTEGRATION_ID,
           ids.map((id) => ({
@@ -440,41 +448,59 @@ describe("Property: agreements keep both parents across a re-sync", () => {
           new Map()
         );
 
-        const features = ids.map((id) => ({
+        const features = await writeFeatureDefinitions(
+          INTEGRATION_ID,
+          ids.map((id) => ({
+            externalSourceId: `feat-${id}`,
+            mapped: {
+              object: "feature" as const,
+              fields: { name: `Feature ${id}` },
+              customFields: {},
+              crossRefs: {},
+            },
+          }))
+        );
+
+        const entitlements = ids.map((id) => ({
           externalSourceId: `prodft-${id}`,
-          externalRefs: { offering: `offer-${id}` },
+          externalRefs: { offering: `offer-${id}`, feature: `feat-${id}` },
           mapped: {
-            object: "feature" as const,
-            fields: { name: `Feature ${id}`, lookupKey: `key-${id}` },
+            object: "entitlement" as const,
+            fields: { value: String(id.length) },
             customFields: {},
             crossRefs: {},
           },
         }));
 
-        await writeFeatures(
+        await writeEntitlements(
           INTEGRATION_ID,
-          features,
+          entitlements,
+          features.externalToInternal,
           offerings.externalToInternal
         );
 
-        // Re-run with an *empty* index, which is what every sync after the
-        // first produces: the offerings did not change, so nothing put them in
-        // this run's map and the only route to the link is the database
-        // fallback in `resolveAssociation`. Without it, every unchanged feature
-        // would silently lose its offering — and there is no relink pass for
-        // features that would put it back.
-        await writeFeatures(INTEGRATION_ID, features, new Map());
+        // Re-run with *both* indexes empty, which is what every sync after the
+        // first produces: neither parent changed, so nothing put either in this
+        // run's maps and the only route to the links is the database fallback
+        // in `resolveAssociation`. Without it every unchanged entitlement would
+        // silently lose both its offering and its feature — and there is no
+        // relink pass for entitlements that would put either back.
+        await writeEntitlements(INTEGRATION_ID, entitlements, new Map(), new Map());
 
-        const rows = await prisma.feature.findMany({
+        const rows = await prisma.entitlement.findMany({
           where: { integrationId: INTEGRATION_ID },
           select: {
+            externalFeatureId: true,
             externalOfferingId: true,
+            feature: { select: { externalSourceId: true } },
             offering: { select: { externalSourceId: true } },
           },
         });
 
         expect(rows).toHaveLength(ids.length);
         for (const row of rows) {
+          // Both halves resolved, and to the row the provider actually named.
+          expect(row.feature?.externalSourceId).toBe(row.externalFeatureId);
           expect(row.offering?.externalSourceId).toBe(row.externalOfferingId);
         }
       }),

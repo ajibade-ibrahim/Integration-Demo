@@ -101,23 +101,23 @@ export default async function CatalogPage({
 
           {/*
             Worded more strongly than the offering warning above, because it
-            means something worse. Features are read after offerings in the same
-            run, so the offering a feature names was already listed — it failing
-            to resolve means the offering was rejected, and no later sync fixes
-            that on its own.
+            means something worse. An entitlement's two parents — an offering
+            and a feature — are both written earlier in the same run, so an
+            unresolved half means that parent was rejected, and no later sync
+            fixes that on its own.
           */}
-          {totals.unlinkedFeatures > 0 && (
+          {totals.unlinkedEntitlements > 0 && (
             <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              {totals.unlinkedFeatures} feature
-              {totals.unlinkedFeatures === 1 ? "" : "s"} could not be linked to
-              their offering, although the sync listed that offering first.
-              Check the latest run report for a rejected offering.
+              {totals.unlinkedEntitlements} entitlement
+              {totals.unlinkedEntitlements === 1 ? "" : "s"} could not be linked
+              to an offering or a feature, although the sync wrote both first.
+              Check the latest run report for a rejected offering or feature.
             </p>
           )}
 
           {view === "offerings" ? (
             <Table
-              headers={["Offering", "Price", "Product", "Features", "Active", "Source"]}
+              headers={["Offering", "Price", "Product", "Entitlements", "Active", "Source"]}
             >
               {offerings.map((row) => {
                 const price = formatOfferingPrice(row);
@@ -131,7 +131,7 @@ export default async function CatalogPage({
                         externalId={row.externalProductId}
                       />
                     </Td>
-                    <Td>{row.featureCount}</Td>
+                    <Td>{row.entitlementCount}</Td>
                     <Td>
                       <ActiveCell value={row.active} />
                     </Td>
@@ -154,7 +154,9 @@ export default async function CatalogPage({
                 request rather than asking once per product or feature.
               </p>
             ) : (
-              <Table headers={["Feature", "Lookup key", "Offerings", "Source"]}>
+              <Table
+                headers={["Feature", "Lookup key", "Metered", "Offerings", "Source"]}
+              >
                 {features.map((row) => (
                   <tr key={row.id} className="border-t border-slate-100">
                     <Td className="font-medium">{row.name}</Td>
@@ -171,12 +173,15 @@ export default async function CatalogPage({
                       )}
                     </Td>
                     <Td>
+                      <MeteredCell metered={row.isMetered} unit={row.unit} />
+                    </Td>
+                    <Td>
                       <OfferingsCell offerings={row.offerings} />
                     </Td>
                     <Td className="text-xs text-slate-400">
                       {row.integrationLabel}
                       <span className="ml-1 font-mono">
-                        #{row.featureId ?? row.externalSourceId}
+                        #{row.externalSourceId}
                       </span>
                     </Td>
                   </tr>
@@ -269,6 +274,38 @@ function OfferingsCell({ offerings }: { offerings: FeatureOffering[] }) {
         </span>
       ))}
     </>
+  );
+}
+
+/**
+ * A feature's metered flag and its unit.
+ *
+ * Three states for metered, not two: null means the provider never told us,
+ * which is a different fact from "not metered" — the column is nullable so the
+ * two can be told apart. The unit is shown beside it because "metered" alone
+ * says only that something is counted; the unit says what.
+ */
+function MeteredCell({
+  metered,
+  unit,
+}: {
+  metered: boolean | null;
+  unit: string | null;
+}) {
+  if (metered === null && unit === null) return <Empty />;
+  return (
+    <span className="text-xs">
+      {metered === null ? null : metered ? (
+        <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-800">
+          metered
+        </span>
+      ) : (
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">
+          flag
+        </span>
+      )}
+      {unit !== null && <span className="ml-1 text-slate-500">{unit}</span>}
+    </span>
   );
 }
 

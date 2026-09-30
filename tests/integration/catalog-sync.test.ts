@@ -150,14 +150,15 @@ describe("a catalog sync, end to end", () => {
     });
 
     expect(result.status).toBe("success");
-    // `feature: 0` and not absent: the catalog function does write that
-    // object, and this account simply has none. Absent would say "not synced",
-    // which is the claim the customer key's absence below makes.
+    // `feature: 0` and `entitlement: 0`, not absent: the catalog function does
+    // write both objects, and this account simply has none. Absent would say
+    // "not synced", which is the claim the customer key's absence below makes.
     expect(result.recordCounts).toEqual({
       product: 1,
       offering: 1,
       price: 1,
       feature: 0,
+      entitlement: 0,
     });
 
     const offering = await prisma.offering.findFirstOrThrow({
@@ -198,6 +199,7 @@ describe("a catalog sync, end to end", () => {
       offering: 1,
       price: 1,
       feature: 0,
+      entitlement: 0,
     });
   });
 
@@ -354,6 +356,7 @@ describe("identity still syncs the way it did", () => {
       offering: 1,
       price: 1,
       feature: 0,
+      entitlement: 0,
     });
   });
 });

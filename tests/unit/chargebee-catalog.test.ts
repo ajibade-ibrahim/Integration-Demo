@@ -136,6 +136,14 @@ describe("Chargebee Catalog Handler", () => {
       )
     ).toEqual({ offering: "cb_item_pro" });
 
+    // A definition hangs off nothing; the item entitlement names both parents.
+    expect(
+      chargebeeCatalogHandler.externalRefsOf(
+        { id: "cb_feat_1", name: "Dashboards", metered: false },
+        "feature"
+      )
+    ).toEqual({});
+
     expect(
       chargebeeCatalogHandler.externalRefsOf(
         {
@@ -144,9 +152,9 @@ describe("Chargebee Catalog Handler", () => {
           feature_id: "cb_feat_1",
           item_family_id: "cb_fam_1",
         },
-        "feature"
+        "entitlement"
       )
-    ).toEqual({ offering: "cb_item_pro" });
+    ).toEqual({ offering: "cb_item_pro", feature: "cb_feat_1" });
   });
 
   it("fetches catalog pages for products, offerings, and prices", async () => {

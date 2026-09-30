@@ -148,9 +148,10 @@ const prices = [
 
 // Two objects, not one. A feature is a *definition* and lives on the account;
 // attaching it to a product is a separate call that creates a separate object
-// (`prodft_...`), and it is the attachment that this integration syncs. The
-// split is the reason `feat_api_access` below can appear on two products
-// without the fixture file repeating its name or its lookup key.
+// (`prodft_...`). The integration syncs the attachments and reads each one's
+// nested definition, so `feat_api_access` below becomes one Feature row and two
+// Entitlement links — without the fixture file repeating its name or its lookup
+// key. A definition attached to nothing is not read at all.
 const features = [
   post("feat_api_access", "/v1/entitlements/features", {
     name: "API access",
@@ -168,9 +169,10 @@ const features = [
     lookup_key: "reporting-v2",
   }),
   // Attached to nothing, deliberately. It must appear nowhere in our data:
-  // a standalone Feature table is out of scope, and this fixture is what makes
-  // that omission observable rather than merely claimed. If a feature ever
-  // shows up here with no product, something started syncing definitions.
+  // definitions are read off attachments, so a feature with no product has no
+  // attachment to travel with. This fixture is what makes that gap observable
+  // rather than merely claimed. If a feature ever shows up here with no product,
+  // something started listing definitions directly.
   post("feat_unattached", "/v1/entitlements/features", {
     name: "Beta sandbox",
     lookup_key: "beta-sandbox",
@@ -191,10 +193,9 @@ const attachments = [
   post("prodft_support_premium", `/v1/products/${ref("prod_support")}/features`, {
     entitlement_feature: ref("feat_premium_support"),
   }),
-  // The same feature on a second product. Two rows sharing one
-  // `externalFeatureId`, which is the case that would have been a join row if a
-  // Feature table existed — and the case that breaks if anything keys a row on
-  // the feature id instead of the attachment id.
+  // The same feature on a second product. One definition, two entitlement
+  // links — the case that breaks if anything keys the link on the feature id
+  // instead of the attachment id.
   post(
     "prodft_integrations_api",
     `/v1/products/${ref("prod_integrations")}/features`,

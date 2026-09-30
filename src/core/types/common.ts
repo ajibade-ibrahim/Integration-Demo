@@ -72,6 +72,10 @@ export const TARGET_OBJECTS = [
   "price",
   // camelCase matches the Prisma accessor (`prisma.feature`).
   "feature",
+  // The offering × feature link ("this offering includes that feature, at this
+  // limit"). Separate from `feature` — the definition — because one shared
+  // feature can be attached to many offerings at different limits.
+  "entitlement",
   "agreement",
   "subscription",
   // A line on an agreement, not on a subscription — the name is the design.

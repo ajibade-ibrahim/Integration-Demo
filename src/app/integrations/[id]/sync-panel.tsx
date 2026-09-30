@@ -39,6 +39,7 @@ const OBJECT_LABELS: Record<string, [singular: string, plural: string]> = {
   product: ["product", "products"],
   offering: ["offering", "offerings"],
   feature: ["feature", "features"],
+  entitlement: ["entitlement", "entitlements"],
   agreement: ["agreement", "agreements"],
   subscription: ["subscription", "subscriptions"],
   // Spelled out because the fallback below would pluralize the union member

@@ -38,19 +38,20 @@ beforeEach(() => {
 });
 
 describe("the catalog schema", () => {
-  it("writes product, then offering, then feature, in that order", () => {
-    // Order is not presentational: both children resolve their product through
-    // the index the product writer builds, so putting either first would unlink
+  it("writes product, offering, price, feature, then entitlement, in that order", () => {
+    // Order is not presentational: both children resolve their parent through
+    // the index the parent writer builds, so putting either first would unlink
     // the whole catalog on a first sync and quietly relink it on the second.
     //
-    // For a feature the consequence is worse than for an offering, because
-    // there is no relink pass to quietly fix it on the second run — see the
-    // `externalOfferingId` comment on the model.
+    // For an entitlement the consequence is worse than for an offering: it
+    // resolves *two* parents — an offering and a feature — and there is no
+    // relink pass to quietly fix either on the second run.
     expect(objectsForFunction(CATALOG_FUNCTION)).toEqual([
       "product",
       "offering",
       "price",
       "feature",
+      "entitlement",
     ]);
   });
 
@@ -81,6 +82,41 @@ describe("the catalog schema", () => {
     );
     expect(metered?.kind).toBe("boolean");
     expect(mappableFields("feature").map((f) => f.name)).toContain("isMetered");
+  });
+
+  it("makes an entitlement expose its limit and derive both associations", () => {
+    // `limitValue` is mappable — it is the numeric column a provider's limit is
+    // parsed into, and some providers name the source something other than
+    // `value`. Both associations are `readOnly` for the reason
+    // `associatedProductId` is: they hold our internal UUIDs, resolved from the
+    // provider's own ids, and offering them as targets would invite a foreign
+    // id into those columns.
+    const mappable = mappableFields("entitlement").map((f) => f.name);
+    expect(mappable).toContain("limitValue");
+    expect(mappable).toContain("value");
+    expect(mappable).toContain("valueName");
+    expect(mappable).not.toContain("associatedOfferingId");
+    expect(mappable).not.toContain("associatedFeatureId");
+
+    expect(
+      resolveTargetField("entitlement", "associatedOfferingId")
+    ).toMatchObject({ readOnly: true });
+    expect(
+      resolveTargetField("entitlement", "associatedFeatureId")
+    ).toMatchObject({ readOnly: true });
+  });
+
+  it("no longer treats a feature as the attachment", () => {
+    // The split in one assertion: the definition carries the name, lookup key,
+    // metered flag and unit; the two things that made the old row an attachment
+    // — the offering link and the provider feature id — are gone from it.
+    const names = OBJECT_SCHEMAS.feature.fields.map((f) => f.name);
+    expect(names).toContain("name");
+    expect(names).toContain("lookupKey");
+    expect(names).toContain("isMetered");
+    expect(names).toContain("unit");
+    expect(names).not.toContain("externalFeatureId");
+    expect(names).not.toContain("associatedOfferingId");
   });
 
   it("offers the billing intervals the writer accepts", () => {
@@ -182,6 +218,7 @@ describe("function scoping of mapping rules", () => {
       "offering",
       "price",
       "feature",
+      "entitlement",
     ]);
     expect(schemasForFunction("identity").map((s) => s.object)).toEqual([
       "customer",

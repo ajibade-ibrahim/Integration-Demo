@@ -1,11 +1,12 @@
 /**
  * Stripe catalog sync handler — products, the prices that sell them, and the
- * features they include.
+ * feature definitions and entitlements that tie them together.
  *
- * Stripe's three resources map onto ours: a `product` is a Product *and* the
- * source of the Offering synthesised from it, a `price` is a Price sold under
- * that offering, and a `ProductFeature` attachment is a Feature. Four details
- * still need handling here:
+ * Stripe's resources map onto ours: a `product` is a Product *and* the source
+ * of the Offering synthesised from it, a `price` is a Price sold under that
+ * offering, an `EntitlementFeature` (`feat_…`) nested on a `ProductFeature`
+ * attachment is a Feature definition, and the attachment itself is the
+ * Entitlement linking it to an offering. Four details still need handling here:
  *
  * 1. **A price usually has no name.** `nickname` is optional and in practice
  *    usually null, while `Price.name` is required, so an unnamed price would be
@@ -20,26 +21,26 @@
  *
  * 3. **Ordering.** Each product page is followed by the offering page built
  *    from it, and those come before any price page, which in turn comes before
- *    any feature page. That is what lets a price and a feature resolve their
- *    offering against the index those pages build — the same invariant
- *    customers-before-contacts keeps on the identity side.
+ *    any feature or entitlement page. That is what lets a price and an
+ *    entitlement resolve their offering against the index those pages build —
+ *    the same invariant customers-before-contacts keeps on the identity side.
  *
  *    The synthesised offering is why this file writes the same row twice.
  *    Stripe has no separate item object: a product *is* what gets sold, so it is
- *    written once as a Product and once as the Offering its prices and features
- *    attach to, under two ids that are equal by construction.
+ *    written once as a Product and once as the Offering its prices, features and
+ *    entitlements attach to, under two ids that are equal by construction.
  *
- * 4. **A feature's payload does not name its offering.** Features are read from
- *    `/v1/products/{id}/features`, a per-product sub-resource, and the response
- *    carries no offering field at all. The offering id (which equals the product
- *    id — each product has one synthesised offering with the same id) comes from
- *    the URL, so this handler retains the product ids it listed and hands each
- *    one to `flattenFeature`. Lose track and every row is linked to the wrong
- *    offering with no error and no null to notice.
+ * 4. **An attachment's payload does not name its offering.** Features are read
+ *    from `/v1/products/{id}/features`, a per-product sub-resource, and the
+ *    response carries no offering field at all. The offering id (which equals
+ *    the product id — each product has one synthesised offering with the same
+ *    id) comes from the URL, so this handler retains the product ids it listed
+ *    and hands each one to `flattenFeatureEntitlement`. Lose track and every
+ *    row is linked to the wrong offering with no error and no null to notice.
  *
  *    That pass is also the only one that is conditional, on two counts: most
- *    accounts define no entitlement features, and an integration may have no
- *    mapping rule pointing at the object. Either way the fan-out is pure cost,
+ *    accounts define no entitlement features, and an integration may map
+ *    neither `feature` nor `entitlement`. Either way the fan-out is pure cost,
  *    so both are checked before a single per-product request is made.
  *
  * Pagination is Stripe's cursor, with the same three terminating conditions the
@@ -49,8 +50,8 @@
  *
  * Stripe has no field-selection parameter, so `ctx.requestedSourcePaths` is
  * not used to *narrow* a request — a mapped field cannot go missing because it
- * was not requested. It is read for one other thing: whether the features pass
- * is worth running at all. See `fetchPages`.
+ * was not requested. It is read for one other thing: whether the features and
+ * entitlements pass is worth running at all. See `fetchPages`.
  *
  * Docs: https://docs.stripe.com/api/products/list, .../prices/list,
  * .../product-feature/list
@@ -67,8 +68,9 @@ import { asString, createProviderSession, type ProviderSession } from "../http";
 import {
   entitlementFeaturesUrl,
   epochToIso,
+  flattenFeatureDefinition,
+  flattenFeatureEntitlement,
   flattenPrice,
-  flattenFeature,
   listUrl,
   parseListPage,
   priceProductId,
@@ -122,7 +124,20 @@ async function* pageResource(
 }
 
 /**
- * Page the features attached to one product.
+ * Page the features attached to one product, as two streams of records.
+ *
+ * Each attachment is both a *definition* (the nested `feat_…`) and a *link*
+ * (this product includes that feature). Both are yielded, and each may be
+ * suppressed by the caller when nothing is mapped to its object — a page for an
+ * unmapped object is a page whose every record is rejected for a missing name,
+ * which turns a clean run into a `partial` one.
+ *
+ * A definition is yielded **at most once per `feat_…` across the whole run**,
+ * which is what `seenFeatureIds` is for. The same feature attached to two
+ * products arrives twice, and the `Feature` table must hold it once; without
+ * the set, `feature` counts would report attachments and the run report would
+ * overstate what was written. The link is yielded every time, because two
+ * attachments really are two entitlements.
  *
  * Uses the product id as both the URL segment and the offering id — each Stripe
  * product has a synthesised offering with the same id, so the two are
@@ -130,7 +145,10 @@ async function* pageResource(
  */
 async function* pageProductFeatures(
   session: ProviderSession,
-  productId: string
+  productId: string,
+  seenFeatureIds: Set<string>,
+  emitDefinitions: boolean,
+  emitLinks: boolean
 ): AsyncGenerator<SourcePage> {
   const perPage = stripePageSize();
 
@@ -142,13 +160,27 @@ async function* pageProductFeatures(
       await session.getJson(productFeaturesUrl(productId, perPage, cursor))
     );
 
-    yield {
-      object: "feature",
-      records: body.records.map((record: RawRecord) => ({
-        ...record,
-        ...flattenFeature(record, productId),
-      })),
-    };
+    const definitions: RawRecord[] = [];
+    const links: RawRecord[] = [];
+
+    for (const record of body.records) {
+      const definition = flattenFeatureDefinition(record);
+      if (definition !== undefined) {
+        const id = asString(definition["id"]);
+        if (id !== undefined && !seenFeatureIds.has(id)) {
+          seenFeatureIds.add(id);
+          definitions.push(definition);
+        }
+      }
+      links.push(flattenFeatureEntitlement(record, productId));
+    }
+
+    if (emitDefinitions && definitions.length > 0) {
+      yield { object: "feature", records: definitions };
+    }
+    if (emitLinks && links.length > 0) {
+      yield { object: "entitlement", records: links };
+    }
 
     pagesFetched += 1;
     if (pagesFetched >= STRIPE_MAX_PAGES) break;
@@ -217,12 +249,29 @@ export const stripeCatalogHandler: SyncHandler = {
 
     yield* pageResource(session, "prices", "price", flattenPrice);
 
-    const featuresAreMapped =
+    // Either object turns the fan-out on. They come off one request, so a rule
+    // set that maps only `entitlement` still needs the per-product call — and
+    // an integration that maps neither must make none at all, probe included.
+    const definitionsAreMapped =
       (ctx.requestedSourcePaths.get("feature") ?? []).length > 0;
+    const linksAreMapped =
+      (ctx.requestedSourcePaths.get("entitlement") ?? []).length > 0;
 
-    if (featuresAreMapped && (await accountUsesEntitlements(session))) {
+    if (
+      (definitionsAreMapped || linksAreMapped) &&
+      (await accountUsesEntitlements(session))
+    ) {
+      // Shared across every product, so a feature attached to several products
+      // is emitted once.
+      const seenFeatureIds = new Set<string>();
       for (const productId of productIds) {
-        yield* pageProductFeatures(session, productId);
+        yield* pageProductFeatures(
+          session,
+          productId,
+          seenFeatureIds,
+          definitionsAreMapped,
+          linksAreMapped
+        );
       }
     }
   },
@@ -237,8 +286,15 @@ export const stripeCatalogHandler: SyncHandler = {
         return { product: asString(record["product_id"]) ?? asString(record["id"]) };
       case "price":
         return { offering: priceProductId(record) };
+      // A definition is a root record: it hangs off nothing.
       case "feature":
-        return { offering: asString(record["offering_id"]) };
+        return {};
+      // The link names both of its parents, and neither is primary.
+      case "entitlement":
+        return {
+          offering: asString(record["offering_id"]),
+          feature: asString(record["feature_id"]),
+        };
       default:
         return {};
     }

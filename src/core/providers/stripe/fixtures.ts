@@ -166,31 +166,23 @@ export const STRIPE_PRICE_FIELDS: DiscoveredFieldDef[] = [
 ];
 
 /**
- * Feature fields — an offering's entitlement attachments.
+ * Feature definition fields — the reusable `feat_…` definitions.
  *
- * Synthesized paths first. The offering_id is injected by the handler from the
- * URL it requested — it does not appear in the Stripe response payload at all.
+ * Synthesized paths first: `feature_name` and `lookup_key` are lifted to the top
+ * level by `flattenFeatureDefinition`, while the nested `entitlement_feature.*`
+ * paths are offered raw for anyone who wants Stripe's own shape. There is no
+ * `offering_id` here — a definition hangs off nothing.
  */
 export const STRIPE_FEATURE_FIELDS: DiscoveredFieldDef[] = [
-  { path: "id", label: "Attachment ID (prodft_…)", type: "string" },
+  { path: "id", label: "Feature ID (feat_…)", type: "string" },
   {
     path: "feature_name",
-    label: "Feature name (synthesized from entitlement_feature)",
+    label: "Feature name (synthesized from entitlement_feature.name)",
     type: "string",
   },
   {
     path: "lookup_key",
     label: "Lookup key — what code gates on (synthesized)",
-    type: "string",
-  },
-  {
-    path: "feature_id",
-    label: "Feature ID (feat_…, synthesized)",
-    type: "string",
-  },
-  {
-    path: "offering_id",
-    label: "Offering ID (synthesized from the request URL, not the payload)",
     type: "string",
   },
   {
@@ -201,6 +193,28 @@ export const STRIPE_FEATURE_FIELDS: DiscoveredFieldDef[] = [
   {
     path: "entitlement_feature.lookup_key",
     label: "Lookup key (raw)",
+    type: "string",
+  },
+];
+
+/**
+ * Entitlement fields — one offering's attachment of one feature.
+ *
+ * The offering id is injected by the handler from the URL it requested — it
+ * does not appear in the Stripe response payload at all. There is deliberately
+ * no value of any kind: Stripe states no limit on an attachment, and an
+ * entitlement's useful columns are derived from the two ids.
+ */
+export const STRIPE_ENTITLEMENT_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Attachment ID (prodft_…)", type: "string" },
+  {
+    path: "feature_id",
+    label: "Feature ID (feat_…, synthesized)",
+    type: "string",
+  },
+  {
+    path: "offering_id",
+    label: "Offering ID (synthesized from the request URL, not the payload)",
     type: "string",
   },
   { path: "livemode", label: "Live mode", type: "boolean" },

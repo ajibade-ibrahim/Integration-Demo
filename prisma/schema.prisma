@@ -111,6 +111,7 @@ model Integration {
   offerings        Offering[]
   prices           Price[]
   features         Feature[]
+  entitlements     Entitlement[]
   agreements       Agreement[]
   subscriptions    Subscription[]
   agreementItems   AgreementItem[]
@@ -393,7 +394,7 @@ model Offering {
 
   updatedAt      DateTime        @updatedAt
   prices         Price[]
-  features       Feature[]
+  entitlements   Entitlement[]
   agreements     Agreement[]
   agreementItems AgreementItem[]
 
@@ -441,25 +442,30 @@ model Price {
 }
 
 // ---------------------------------------------------------------------------
-// Feature
+// Feature and entitlement
 //
-// An offering's entitlement attachment. Stripe calls the attachment a
-// `ProductFeature` (`prodft_…`) and attaches it at the product level; Chargebee
-// attaches entitlements at the item (offering) level via Item Entitlements.
-// Both are stored here, linked to the offering they price or define.
+// The two things an entitlement attachment was doing on one row, split apart.
+//
+// `Feature` is the reusable *definition* — Chargebee's `Feature`, Stripe's
+// `EntitlementFeature` (`feat_…`), Stigg's `Feature`. `Entitlement` is the
+// *link*: this offering includes that feature, at this limit — Stripe's
+// `ProductFeature` (`prodft_…`), Chargebee's `item_entitlement`. Stripe names
+// the pair the other way round, which is why each handler states which of its
+// objects is which.
+//
+// The split is what lets one shared feature carry its own name, lookup key and
+// metered flag once, rather than denormalized onto every offering that includes
+// it.
 // ---------------------------------------------------------------------------
 
-/// A feature one offering includes.
-///
-/// A row is Stripe's *attachment* (`prodft_…`), not the feature definition
-/// itself — the same feature on three offerings is three rows, each carrying
-/// the feature's own id and name denormalized onto it.
+/// The reusable definition of a capability.
 model Feature {
   id            String      @id @default(uuid())
   integrationId String
   integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
-  /// Stripe's `prodft_…`. The upsert key, paired with integrationId.
+  /// The provider's definition id — Stripe's `feat_…`, Chargebee's feature id.
+  /// The upsert key, paired with integrationId.
   externalSourceId String
 
   /// The feature's display name. Required.
@@ -468,30 +474,66 @@ model Feature {
   /// The stable machine key an application gates on — "premium-support".
   lookupKey String?
 
-  /// The provider's own feature definition id (`feat_…` on Stripe).
-  externalFeatureId String?
-
-  /// Whether the feature's entitlement is consumed by measured usage rather
-  /// than granted as a fixed flag — Chargebee's `feature.metered`.
+  /// Whether the feature is consumed by measured usage rather than granted as a
+  /// fixed flag — Chargebee's `metered`.
   ///
-  /// Denormalized onto the attachment for the same reason `name` is: it lives
-  /// on the feature *definition*, and a row here is the attachment of that
-  /// definition to one offering.
-  ///
-  /// Nullable, for `Product.active`'s reason. Stripe's Entitlements API models
-  /// a feature as a bare flag with no quantity and no metered concept — metered
-  /// there is a property of a price, not a feature — so for Stripe the honest
-  /// answer is "we were not told", and `false` would be a claim the provider
-  /// never made.
+  /// Nullable, for `Product.active`'s reason. Stripe's Entitlements API models a
+  /// feature as a bare flag with no quantity and no metered concept — metered
+  /// there is a property of a price — so for Stripe the honest answer is "we
+  /// were not told", and `false` would be a claim the provider never made.
   isMetered Boolean?
 
-  /// Resolved internal offering. Null when the provider gave us an offering id
-  /// we could not resolve — the row is kept and a warning is recorded.
-  offeringId String?
-  offering   Offering? @relation(fields: [offeringId], references: [id], onDelete: SetNull)
+  /// What a metered grant counts — "dashboard", "seats". Chargebee's `unit`.
+  unit String?
 
-  /// The provider's own offering id, before resolution.
+  /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
+  customFields String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  entitlements Entitlement[]
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  /// "Which offerings include `premium-support`?" — the query the table is for.
+  @@index([integrationId, lookupKey])
+}
+
+/// The offering × feature join: "this offering includes that feature, at this
+/// limit." Stripe's `ProductFeature` (`prodft_…`), Chargebee's
+/// `item_entitlement`.
+model Entitlement {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Stripe's `prodft_…`, Chargebee's item entitlement id. The upsert key.
+  externalSourceId String
+
+  /// Resolved internal feature. SetNull with the provider's own id kept beside
+  /// it, for the reason `Offering.productId` gives: definitions and attachments
+  /// can be read in either order across runs, and the row is still readable
+  /// without the link.
+  featureId         String?
+  feature           Feature? @relation(fields: [featureId], references: [id], onDelete: SetNull)
+  externalFeatureId String?
+
+  /// Resolved internal offering, on the same terms.
+  offeringId         String?
+  offering           Offering? @relation(fields: [offeringId], references: [id], onDelete: SetNull)
   externalOfferingId String?
+
+  /// The provider's answer verbatim — Chargebee's "50", "true".
+  value String?
+
+  /// Chargebee's entitlement *level* label — "Maximum", "Available".
+  valueName String?
+
+  /// The numeric form of `value`, null when there is no number. Null means "no
+  /// stated limit", which is also how unlimited arrives; `value` is what tells
+  /// a reader which of the two it was. Always null on Stripe, which states no
+  /// limit on an attachment.
+  limitValue Int?
 
   /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
   customFields String @default("{}")
@@ -501,8 +543,7 @@ model Feature {
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
   @@index([offeringId])
-  /// "Which offerings include `premium-support`?" — the query the table is for.
-  @@index([integrationId, lookupKey])
+  @@index([featureId])
 }
 
 // ---------------------------------------------------------------------------

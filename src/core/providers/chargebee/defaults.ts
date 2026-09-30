@@ -113,37 +113,62 @@ export const chargebeeCatalogDefaults: readonly FieldMappingRule[] = [
     transform: "none",
   },
 
-  // Feature mapping rules (item entitlements).
+  // Feature definition mapping rules (Chargebee `/features`).
   //
-  // `feature_id` feeds both columns. Chargebee has no separate lookup key: the
-  // feature id ("premium_tools", set by the merchant or generated) is stable,
-  // which is what an application gates on — and it is also the provider's
-  // definition id.
+  // `id` feeds the row's `lookupKey`. Chargebee has no separate lookup-key
+  // field, but its feature id ("cbdemo_ticketing_module", merchant-set or
+  // generated) is the stable, unique string an application gates on — and it
+  // is what the features page groups by — so mapping it here is what keeps that
+  // column meaningful instead of permanently blank. The same id is also the
+  // row's `externalSourceId`, which the writer takes from the record id.
   {
-    sourceFieldPath: "feature_name",
-    targetObject: "feature",
-    targetFieldPath: "name",
-    transform: "trim",
-  },
-  {
-    sourceFieldPath: "feature_id",
+    sourceFieldPath: "id",
     targetObject: "feature",
     targetFieldPath: "lookupKey",
     transform: "trim",
   },
   {
-    sourceFieldPath: "feature_id",
+    sourceFieldPath: "name",
     targetObject: "feature",
-    targetFieldPath: "externalFeatureId",
-    transform: "none",
+    targetFieldPath: "name",
+    transform: "trim",
   },
-  // Chargebee keeps `metered` on the feature definition, not on the item
-  // entitlement that attaches it. The handler carries it across as
-  // `feature_metered`, so this is the source path rather than `metered`.
   {
-    sourceFieldPath: "feature_metered",
+    sourceFieldPath: "metered",
     targetObject: "feature",
     targetFieldPath: "isMetered",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "unit",
+    targetObject: "feature",
+    targetFieldPath: "unit",
+    transform: "trim",
+  },
+
+  // Entitlement mapping rules (item entitlements).
+  //
+  // Two rules read `value` and write different columns — the raw provider
+  // string kept as `value`, and its numeric form as `limitValue`. That pair is
+  // intended: `value` is what Chargebee actually said ("50", "true", or nothing
+  // at all), while `limitValue` is the queryable number the page and any future
+  // limit logic read.
+  {
+    sourceFieldPath: "value",
+    targetObject: "entitlement",
+    targetFieldPath: "value",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "name",
+    targetObject: "entitlement",
+    targetFieldPath: "valueName",
+    transform: "trim",
+  },
+  {
+    sourceFieldPath: "value",
+    targetObject: "entitlement",
+    targetFieldPath: "limitValue",
     transform: "none",
   },
 ];

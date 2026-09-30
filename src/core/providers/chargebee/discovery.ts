@@ -66,25 +66,33 @@ export const CHARGEBEE_PRICE_FIELDS: readonly DiscoveredFieldDef[] = [
 ];
 
 /**
+ * A feature *definition* — Chargebee's `/features` object.
+ *
+ * `metered` and `unit` live here, on the definition; the Item Entitlement that
+ * attaches the feature to an item does not repeat them. `type` is Chargebee's
+ * own ("switch", "range") and has no column of ours, so it is offered for a
+ * custom field.
+ */
+export const CHARGEBEE_FEATURE_FIELDS: readonly DiscoveredFieldDef[] = [
+  { path: "id", label: "Feature ID", type: "string" },
+  { path: "name", label: "Feature Name", type: "string" },
+  { path: "metered", label: "Metered", type: "boolean" },
+  { path: "unit", label: "Unit", type: "string" },
+  { path: "type", label: "Feature Type", type: "string" },
+  { path: "status", label: "Status", type: "string" },
+];
+
+/**
  * An item entitlement: one feature attached to one item.
  *
  * `name` is the *entitlement level's* label ("Maximum", "Available"), not the
- * feature's name — that is `feature_name`. `value` is the level's raw value
- * ("300", "true"), mappable into a custom field.
- *
- * `feature_metered` is synthesized by the handler from the feature definition,
- * which is where Chargebee keeps `metered`; the entitlement itself does not
- * carry it.
+ * feature's name — that is `feature_name` on the definition. `value` is the
+ * level's raw value ("300", "true").
  */
-export const CHARGEBEE_FEATURE_FIELDS: readonly DiscoveredFieldDef[] = [
+export const CHARGEBEE_ENTITLEMENT_FIELDS: readonly DiscoveredFieldDef[] = [
   { path: "id", label: "Item Entitlement ID", type: "string" },
   { path: "feature_id", label: "Feature ID", type: "string" },
   { path: "feature_name", label: "Feature Name", type: "string" },
-  {
-    path: "feature_metered",
-    label: "Metered (synthesized from the feature definition)",
-    type: "boolean",
-  },
   { path: "item_id", label: "Item ID (offering)", type: "string" },
   { path: "item_type", label: "Item Type", type: "string" },
   { path: "value", label: "Entitlement Value", type: "string" },
@@ -107,6 +115,8 @@ export const chargebeeFieldDiscovery: FieldDiscovery = {
         return [...CHARGEBEE_PRICE_FIELDS];
       case "feature":
         return [...CHARGEBEE_FEATURE_FIELDS];
+      case "entitlement":
+        return [...CHARGEBEE_ENTITLEMENT_FIELDS];
       default:
         return [...CHARGEBEE_CUSTOMER_FIELDS];
     }

@@ -61,6 +61,7 @@ export async function collect(
     offering: [],
     price: [],
     feature: [],
+    entitlement: [],
     agreement: [],
     subscription: [],
     agreementItem: [],

@@ -701,6 +701,7 @@ describe("the other functions still sync alongside it", () => {
       offering: 1,
       price: 1,
       feature: 0,
+      entitlement: 0,
       agreement: 1,
       subscription: 1,
       agreementItem: 1,

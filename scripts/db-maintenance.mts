@@ -144,16 +144,21 @@ report(
   " — they relink when the product syncs"
 );
 // Expected to be *zero*, not merely small, which is why it is reported
-// separately from the offerings above rather than added to them. Features are
-// read after offerings in the same run, so the offering a feature names was
-// already listed; a non-zero figure means that offering was rejected by the
+// separately from the offerings above rather than added to them. Both of an
+// entitlement's parents — the offering and the feature — are written earlier in
+// the same run, so an unresolved half means that parent was rejected by the
 // writer, and there is no relink pass that will ever clear it.
 report(
-  "features whose offering did not resolve",
-  await prisma.feature.count({
-    where: { offeringId: null, externalOfferingId: { not: null } },
+  "entitlements with an unresolved half",
+  await prisma.entitlement.count({
+    where: {
+      OR: [
+        { offeringId: null, externalOfferingId: { not: null } },
+        { featureId: null, externalFeatureId: { not: null } },
+      ],
+    },
   }),
-  " — expected zero; a non-zero count means an offering was rejected"
+  " — expected zero; a non-zero count means an offering or a feature was rejected"
 );
 // Two edges, reported separately. An agreement's customer comes from the
 // identity function and its offering from catalog, so a row can have either

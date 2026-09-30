@@ -43,7 +43,10 @@ const ctx: HandlerContext = {
   // them to decide whether the per-product features fan-out is worth running.
   // Declared here so this script exercises what a mapped integration does; an
   // empty map would make the features section silently report zero.
-  requestedSourcePaths: new Map([["feature", ["feature_name"]]]),
+  requestedSourcePaths: new Map([
+    ["feature", ["feature_name"]],
+    ["entitlement", ["offering_id"]],
+  ]),
 };
 
 /** Every record a handler yields, bucketed by target object. */
@@ -93,16 +96,28 @@ for (const offering of offerings) {
   );
 }
 
-const features = catalog.get("feature") ?? [];
+const definitions = catalog.get("feature") ?? [];
+const links = catalog.get("entitlement") ?? [];
 
-console.log(`\n=== features: ${features.length} attachments ===\n`);
-console.log("feature_name".padEnd(22), "lookup_key".padEnd(18), "feature_id".padEnd(22), "offering");
-for (const feature of features) {
+console.log(
+  `\n=== feature definitions: ${definitions.length} ===\n`
+);
+console.log("feature_name".padEnd(24), "lookup_key".padEnd(18), "id");
+for (const definition of definitions) {
   console.log(
-    str(feature["feature_name"]).slice(0, 21).padEnd(22),
-    str(feature["lookup_key"]).slice(0, 17).padEnd(18),
-    str(feature["feature_id"]).slice(0, 21).padEnd(22),
-    str(feature["offering_id"])
+    str(definition["feature_name"]).slice(0, 23).padEnd(24),
+    str(definition["lookup_key"]).slice(0, 17).padEnd(18),
+    str(definition["id"])
+  );
+}
+
+console.log(`\n=== entitlements: ${links.length} links ===\n`);
+console.log("attachment".padEnd(30), "feature_id".padEnd(22), "offering");
+for (const link of links) {
+  console.log(
+    str(link["id"]).slice(0, 29).padEnd(30),
+    str(link["feature_id"]).slice(0, 21).padEnd(22),
+    str(link["offering_id"])
   );
 }
 
@@ -276,15 +291,21 @@ const checks: Array<[string, boolean, string]> = [
     "the catalog page's inactive badge",
   ],
   [
-    "features came back at all",
-    features.length > 0,
+    "feature definitions came back at all",
+    definitions.length > 0,
     "the probe short-circuited on a seeded account, or the fan-out stopped " +
       "running — the two failures that look identical from the output alone",
   ],
   [
-    "every feature resolved an offering",
-    features.length > 0 &&
-      features.every((f) => String(f["offering_id"] ?? "").startsWith("prod_")),
+    "every feature on a product produced a definition and a link",
+    links.length > 0 && links.length >= definitions.length,
+    "each attachment yields both; fewer links than definitions means the join " +
+      "half stopped being emitted for some product",
+  ],
+  [
+    "every link resolved an offering",
+    links.length > 0 &&
+      links.every((l) => String(l["offering_id"] ?? "").startsWith("prod_")),
     "the id comes from the request URL, not the payload; a blank one means " +
       "the handler lost track of which product (and so offering) it was fetching",
   ],
@@ -292,35 +313,35 @@ const checks: Array<[string, boolean, string]> = [
     "one feature is attached to two offerings",
     (() => {
       const byFeature = new Map<string, Set<string>>();
-      for (const f of features) {
-        const id = str(f["feature_id"]);
+      for (const link of links) {
+        const id = str(link["feature_id"]);
         const products = byFeature.get(id) ?? new Set<string>();
-        products.add(str(f["offering_id"]));
+        products.add(str(link["offering_id"]));
         byFeature.set(id, products);
       }
       return [...byFeature.values()].some((products) => products.size > 1);
     })(),
-    "api-access on both Platform and Integrations — two rows sharing one " +
-      "feature id, the case a feature-definitions table would have made a join row",
+    "api-access on both Platform and Integrations — two links sharing one " +
+      "feature id, and one definition above them",
   ],
   [
-    "an offering with no features produced no rows",
-    !features.some((f) => str(f["offering_id"]).includes("seats")),
-    "Additional Seats is seeded with none; a row here means the parent id is " +
+    "an offering with no features produced no links",
+    !links.some((l) => str(l["offering_id"]).includes("seats")),
+    "Additional Seats is seeded with none; a link here means the parent id is " +
       "being taken from the wrong place",
   ],
   [
     "the unattached feature appears nowhere",
-    !features.some((f) => str(f["lookup_key"]) === "beta-sandbox"),
-    "a standalone feature-definitions table is out of scope by design, and this is what " +
-      "makes that observable rather than merely claimed",
+    !definitions.some((d) => str(d["lookup_key"]) === "beta-sandbox"),
+    "definitions are read off attachments, so a feature attached to no product " +
+      "has no attachment to travel with — this is what makes that observable",
   ],
   [
     "a lookup key differs from a slug of the name",
-    features.some(
-      (f) =>
-        str(f["lookup_key"]) === "reporting-v2" &&
-        str(f["feature_name"]) === "Advanced reporting"
+    definitions.some(
+      (d) =>
+        str(d["lookup_key"]) === "reporting-v2" &&
+        str(d["feature_name"]) === "Advanced reporting"
     ),
     "the column exists because the two are independent; deriving one from " +
       "the other would pass every test where they happen to agree",

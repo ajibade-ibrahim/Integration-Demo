@@ -11,19 +11,22 @@
  * resolve through it.
  *
  * Three families live here: customers and contacts for `identity`; products,
- * offerings, prices and features for `catalog`; agreements, subscriptions and
- * their line items for `agreement`. They share `resolveAssociation` and the
- * relink pass rather than each growing their own, because a second copy of that
- * cache-then-fall-back logic is exactly where the database fallback gets quietly
- * omitted — and the symptom of omitting it is a link that vanishes on the second
- * sync, which is not a thing anyone notices quickly.
+ * offerings, prices, feature definitions and their entitlements for `catalog`;
+ * agreements, subscriptions and their line items for `agreement`. They share
+ * `resolveAssociation` and the relink pass rather than each growing their own,
+ * because a second copy of that cache-then-fall-back logic is exactly where the
+ * database fallback gets quietly omitted — and the symptom of omitting it is a
+ * link that vanishes on the second sync, which is not a thing anyone notices
+ * quickly.
  *
  * The agreement family is where the shape stops being uniform, in two ways
  * worth knowing before reading it:
  *
  *   - An agreement has **two** parents, a customer and an offering, and neither
  *     is primary. It resolves two indexes rather than one, and an unresolved
- *     half is a warning on that half alone.
+ *     half is a warning on that half alone. The catalog's `entitlement` join is
+ *     the same shape one function over — an offering and a feature — and is
+ *     written the same way.
  *   - Both of its parents are written by *other functions*, so neither index
  *     has anything in it when the agreement writer runs. The database fallback
  *     is not an optimization there, it is the only path.
@@ -344,6 +347,7 @@ type ParentModel =
   | "product"
   | "offering"
   | "price"
+  | "feature"
   | "agreement";
 
 /**
@@ -376,6 +380,8 @@ async function findByExternalId(
       return prisma.offering.findUnique({ where, select });
     case "price":
       return prisma.price.findUnique({ where, select });
+    case "feature":
+      return prisma.feature.findUnique({ where, select });
     case "agreement":
       return prisma.agreement.findUnique({ where, select });
   }
@@ -389,11 +395,11 @@ async function findByExternalId(
  * parent did not change would lose its link on every subsequent sync.
  *
  * Shared by every association in this file — contact→customer,
- * offering→product, price→offering, feature→offering, agreement→customer,
- * agreement→offering, agreementItem→offering, agreementItem→price and
- * subscription→agreement. They differ only in which table they read, and
- * having written the same cache-then-fall-back logic once per edge is how one
- * of them ends up quietly missing the fallback.
+ * offering→product, price→offering, entitlement→offering, entitlement→feature,
+ * agreement→customer, agreement→offering, agreementItem→offering,
+ * agreementItem→price and subscription→agreement. They differ only in which
+ * table they read, and having written the same cache-then-fall-back logic once
+ * per edge is how one of them ends up quietly missing the fallback.
  *
  * **One index per model, never one shared between them.** The index is keyed by
  * the provider's id alone, so a single map passed for two models would let a
@@ -850,37 +856,47 @@ export async function relinkOrphanedOfferings(
 }
 
 // ---------------------------------------------------------------------------
-// Features
+// Feature definitions and entitlements
+//
+// Two writers, because the two things are two things. `writeFeatureDefinitions`
+// is a root writer shaped like `writeProducts`. `writeEntitlements` is the join,
+// shaped like `writeAgreements`: it resolves **two** parents, an offering and a
+// feature, each through its own index.
+//
+// The relative order of the two parents is what makes the join safe without a
+// relink pass. `writeFeatureDefinitions` runs first and builds the feature
+// index, and the offerings were written earlier still by `writeOfferings`, so
+// both halves are in hand before an entitlement resolves. A missing half
+// therefore means that parent was rejected, not that it is yet to arrive — the
+// argument `writeAgreements` makes.
 // ---------------------------------------------------------------------------
 
+export interface FeatureDefinitionWriteResult extends WriteOutcome {
+  /** Provider definition id → our internal id, for resolving entitlements. */
+  externalToInternal: Map<string, string>;
+}
+
 /**
- * Write the features each offering includes.
+ * Write the reusable feature definitions.
  *
- * Modelled directly on `writeOfferings`, because the shape is the same: a
- * single-parent child keyed on `(integrationId, externalSourceId)`, whose parent
- * may or may not resolve. The validation split is the same too, and the same way
- * round — no id or no name is **rejected**, an unresolvable offering is a
- * **warning** with the row kept.
- *
- * Worth knowing about the parent, and not visible from this function alone:
- * the external offering id comes from the provider's own payload (Chargebee's
- * item entitlement `item_id`) or from the URL the handler requested (Stripe's
- * `/v1/products/{id}/features`, where the offering is the synthesised sibling
- * of the product). Either way both handlers read features after offerings, so
- * the association resolves against the offering index built in the same run —
- * and there is no relink pass, because a feature cannot arrive before its
- * offering.
+ * Modelled on `writeProducts`: a root object keyed on
+ * `(integrationId, externalSourceId)`, no parent to resolve. Round and round
+ * like every other root writer, and rejecting the same two things: a record
+ * with no provider id, and one with no name. Both are load-bearing here
+ * because a `feature` page is emitted by some handlers even when nothing is
+ * mapped to the object's non-name fields.
  */
-export async function writeFeatures(
+export async function writeFeatureDefinitions(
   integrationId: string,
-  records: readonly CollectedRecord[],
-  externalToInternal: Map<string, string>
-): Promise<WriteOutcome> {
+  records: readonly CollectedRecord[]
+): Promise<FeatureDefinitionWriteResult> {
   const issues: RecordIssue[] = [];
+  const externalToInternal = new Map<string, string>();
   let written = 0;
 
-  for (const { externalSourceId, externalRefs, mapped } of records) {
-    const externalOfferingId = externalRefs?.offering;
+  for (const { externalSourceId, mapped } of records) {
+    // Without a provider id there is no upsert key, so the record cannot be
+    // reconciled on a later sync and must be refused.
     if (externalSourceId === undefined || externalSourceId === "") {
       issues.push({
         sourceRecordId: "(unknown)",
@@ -906,40 +922,140 @@ export async function writeFeatures(
       continue;
     }
 
-    const offeringId = await resolveAssociation(
-      integrationId,
-      "offering",
-      externalOfferingId,
-      externalToInternal
-    );
-
-    if (externalOfferingId !== undefined && offeringId === null) {
-      issues.push({
-        sourceRecordId: externalSourceId,
-        targetObject: "feature",
-        reason: `Offering '${externalOfferingId}' not found; feature saved without a link`,
-        fieldName: "associatedOfferingId",
-        severity: "warning",
-      });
-    }
-
     const data = {
       name,
       lookupKey: normalize(
         mapped.fields["lookupKey"] ?? null,
         maxLengthOf("feature", "lookupKey")
       ),
-      externalFeatureId: normalize(
-        mapped.fields["externalFeatureId"] ?? null,
-        maxLengthOf("feature", "externalFeatureId")
-      ),
       isMetered: parseBoolean(mapped.fields["isMetered"] ?? null),
-      offeringId,
-      externalOfferingId: externalOfferingId ?? null,
+      unit: normalize(
+        mapped.fields["unit"] ?? null,
+        maxLengthOf("feature", "unit")
+      ),
       customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
     };
 
-    await prisma.feature.upsert({
+    const row = await prisma.feature.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+      select: { id: true },
+    });
+
+    externalToInternal.set(externalSourceId, row.id);
+    written += 1;
+  }
+
+  return { written, issues, externalToInternal };
+}
+
+/**
+ * Write the offering × feature links, and the limit each carries.
+ *
+ * Modelled on `writeAgreements`, which is the existing two-parent writer. Two
+ * indexes, one per model — see `resolveAssociation` for why sharing one map
+ * between two models is a collision waiting to happen. Each half resolves and
+ * warns independently: an entitlement whose offering resolved and whose feature
+ * did not is a real, readable row, and saying "unresolved" about the whole
+ * thing would be wrong about half of it. The row is kept either way, with the
+ * provider's own id retained beside the null so the link is still visible.
+ *
+ * `value` is stored verbatim and mirrored into `limitValue` when it is a whole
+ * number. A non-numeric `value` is **not** a warning: Chargebee sends a boolean
+ * feature as the string "true", which is an ordinary entitlement rather than a
+ * malformed one, and a warning written every run on every flag would be noise
+ * rather than a signal.
+ */
+export async function writeEntitlements(
+  integrationId: string,
+  records: readonly CollectedRecord[],
+  externalToInternalFeature: Map<string, string>,
+  externalToInternalOffering: Map<string, string>
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  let written = 0;
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    const externalOfferingId = externalRefs?.offering;
+    const externalFeatureId = externalRefs?.feature;
+
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "entitlement",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const offeringId = await resolveAssociation(
+      integrationId,
+      "offering",
+      externalOfferingId,
+      externalToInternalOffering
+    );
+    const featureId = await resolveAssociation(
+      integrationId,
+      "feature",
+      externalFeatureId,
+      externalToInternalFeature
+    );
+
+    if (externalOfferingId !== undefined && offeringId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "entitlement",
+        reason: `Offering '${externalOfferingId}' not found; entitlement saved without a link`,
+        fieldName: "associatedOfferingId",
+        severity: "warning",
+      });
+    }
+
+    if (externalFeatureId !== undefined && featureId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "entitlement",
+        reason: `Feature '${externalFeatureId}' not found; entitlement saved without a link`,
+        fieldName: "associatedFeatureId",
+        severity: "warning",
+      });
+    }
+
+    const value = normalize(
+      mapped.fields["value"] ?? null,
+      maxLengthOf("entitlement", "value")
+    );
+
+    // The numeric form, from whichever of the two the mapping set. `limitValue`
+    // is its own mappable field so a provider whose limit travels under another
+    // name can still fill it; the fallback to `value` means a rule set that maps
+    // only the raw string still gets the number.
+    //
+    // A non-numeric result is left null rather than warned about — see the doc
+    // comment above.
+    const limitValue = parseInteger(
+      mapped.fields["limitValue"] ?? mapped.fields["value"] ?? null
+    );
+
+    const data = {
+      featureId,
+      externalFeatureId: externalFeatureId ?? null,
+      offeringId,
+      externalOfferingId: externalOfferingId ?? null,
+      value,
+      valueName: normalize(
+        mapped.fields["valueName"] ?? null,
+        maxLengthOf("entitlement", "valueName")
+      ),
+      limitValue,
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+    };
+
+    await prisma.entitlement.upsert({
       where: {
         integrationId_externalSourceId: { integrationId, externalSourceId },
       },
@@ -1552,12 +1668,12 @@ async function reconcileAgreementItems(
  * counterpart, for `writeSubscriptions`' reason: that FK is required, so an
  * unlinked item row cannot exist to be repaired.
  *
- * Worth having where `writeFeatures` has none, and the difference is
- * instructive. A feature's offering id comes from the URL the sync just called,
- * so it cannot arrive before its parent. An item's offering *and* its price both
- * come from the catalog function, and the catalog function may not be on this
- * integration at all — the same situation `Agreement.offeringId` is in, repaired
- * the same way.
+ * Worth having where `writeEntitlements` has none, and the difference is
+ * instructive. An entitlement's offering and feature both come from the catalog
+ * function and are written earlier in the same run, so neither can arrive before
+ * the other. An item's offering *and* its price also both come from the catalog
+ * function, but the catalog function may not be on this integration at all —
+ * the same situation `Agreement.offeringId` is in, repaired the same way.
  */
 export async function relinkOrphanedAgreementItems(
   integrationId: string
@@ -1677,9 +1793,14 @@ export async function writeRecordsForFunction(
         at("price"),
         offerings.externalToInternal
       );
-      const features = await writeFeatures(
+      const features = await writeFeatureDefinitions(
         integrationId,
-        at("feature"),
+        at("feature")
+      );
+      const entitlements = await writeEntitlements(
+        integrationId,
+        at("entitlement"),
+        features.externalToInternal,
         offerings.externalToInternal
       );
       return {
@@ -1688,12 +1809,14 @@ export async function writeRecordsForFunction(
           offering: offerings.written,
           price: prices.written,
           feature: features.written,
+          entitlement: entitlements.written,
         },
         issues: [
           ...products.issues,
           ...offerings.issues,
           ...prices.issues,
           ...features.issues,
+          ...entitlements.issues,
         ],
       };
     }

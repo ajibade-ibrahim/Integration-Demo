@@ -31,8 +31,15 @@ const ITEM_PRICES_ENDPOINT = `https://${SITE}.chargebee.com/api/v2/item_prices`;
 const FEATURES_ENDPOINT = `https://${SITE}.chargebee.com/api/v2/features`;
 const FEATURE_ENTITLEMENTS_ENDPOINT = `https://${SITE}.chargebee.com/api/v2/features/:featureId/item_entitlements`;
 
-/** What the default mapping requests — enough to switch the features pass on. */
-const FEATURES_MAPPED = { feature: ["feature_name"] };
+/**
+ * What the default mapping requests — enough to switch the features and
+ * entitlements pass on.
+ *
+ * Both keys, because the two objects come off one pass: a rule set mapping only
+ * `entitlement` still pays the `/features` request, and only `feature` still
+ * fans out. The handler makes an entitlement page from the same data.
+ */
+const FEATURES_MAPPED = { feature: ["name"], entitlement: ["value"] };
 
 const CREDENTIALS = {
   accessToken: `${SITE}:chb_test_key`,
@@ -105,15 +112,15 @@ describe("Chargebee Catalog Handler Sync & Pagination", () => {
   });
 });
 
-describe("Chargebee features (item entitlements)", () => {
-  it("makes no entitlement request when nothing is mapped to the object", async () => {
+describe("Chargebee features (definitions) and entitlements (links)", () => {
+  it("makes no feature request at all when nothing is mapped to either object", async () => {
     // `onUnhandledRequest: "error"` would fail the run on any /features call,
     // but the count is asserted too so the intent survives a config change.
-    let entitlementRequests = 0;
+    let featureListRequests = 0;
     server.use(
       ...catalogEndpoints(),
       http.get(FEATURES_ENDPOINT, () => {
-        entitlementRequests += 1;
+        featureListRequests += 1;
         return HttpResponse.json(CHARGEBEE_FIXTURE_FEATURES_PAGE_1);
       })
     );
@@ -121,8 +128,9 @@ describe("Chargebee features (item entitlements)", () => {
     const { ctx } = testContext(CREDENTIALS);
     const { byObject } = await collect(chargebeeCatalogHandler, ctx);
 
-    expect(entitlementRequests).toBe(0);
+    expect(featureListRequests).toBe(0);
     expect(byObject.feature).toEqual([]);
+    expect(byObject.entitlement).toEqual([]);
   });
 
   it("makes one request, and no fan-out, when the site defines no features", async () => {
@@ -141,9 +149,10 @@ describe("Chargebee features (item entitlements)", () => {
 
     expect(featureRequests).toEqual([]);
     expect(byObject.feature).toEqual([]);
+    expect(byObject.entitlement).toEqual([]);
   });
 
-  it("yields one row per item entitlement, after every catalog page", async () => {
+  it("yields definitions first, then one row per item entitlement", async () => {
     const featureRequests: string[] = [];
     server.use(
       ...catalogEndpoints(),
@@ -160,53 +169,61 @@ describe("Chargebee features (item entitlements)", () => {
     const { ctx } = testContext({ ...CREDENTIALS, sources: FEATURES_MAPPED });
     const { pages, byObject } = await collect(chargebeeCatalogHandler, ctx);
 
-    // Last, so every offering a feature names is already in the index.
+    // The definitions come off the `/features` list, the links off each
+    // definition's fan-out — and the definitions are yielded as they stream, so
+    // the single feature page lands before the two entitlement pages.
     expect(pages.map((p) => p.object)).toEqual([
       "product",
       "offering",
       "price",
       "feature",
-      "feature",
+      "entitlement",
+      "entitlement",
     ]);
     expect(featureRequests).toEqual([
       "cb_feat_advanced_reports",
       "cb_feat_dashboards",
     ]);
 
-    // Keyed on the attachment, so one feature on two items is two rows.
+    // Definitions, keyed on the definition id.
     expect(byObject.feature.map((f) => f["id"])).toEqual([
+      "cb_feat_advanced_reports",
+      "cb_feat_dashboards",
+    ]);
+    expect(byObject.feature[0]?.["name"]).toBe("Advanced Reports");
+    expect(byObject.feature[0]?.["metered"]).toBe(false);
+
+    // Links, keyed on the item entitlement id — one feature on two items is two
+    // rows here and one definition above.
+    expect(byObject.entitlement.map((e) => e["id"])).toEqual([
       "item-ent-reports-pro",
       "item-ent-dash-pro",
       "item-ent-dash-seats",
     ]);
 
-    const [reports, dashPro, dashSeats] = byObject.feature;
-    expect(reports?.["feature_name"]).toBe("Advanced Reports");
+    const [reports, dashPro, dashSeats] = byObject.entitlement;
     expect(reports?.["feature_id"]).toBe("cb_feat_advanced_reports");
 
-    // `metered` is read off the feature definition and carried onto every row
-    // of that definition, since the entitlement itself never states it.
-    expect(reports?.["feature_metered"]).toBe(false);
-    expect(dashPro?.["feature_metered"]).toBe(false);
-
-    // The offering comes from the payload's own `item_id`.
+    // The offering and the feature both come from the payload's own ids.
     expect(
-      byObject.feature.map((f) => chargebeeCatalogHandler.externalRefsOf(f, "feature"))
+      byObject.entitlement.map((e) =>
+        chargebeeCatalogHandler.externalRefsOf(e, "entitlement")
+      )
     ).toEqual([
-      { offering: "cb_item_analytics_pro" },
-      { offering: "cb_item_analytics_pro" },
-      { offering: "cb_item_extra_seats" },
+      { offering: "cb_item_analytics_pro", feature: "cb_feat_advanced_reports" },
+      { offering: "cb_item_analytics_pro", feature: "cb_feat_dashboards" },
+      { offering: "cb_item_extra_seats", feature: "cb_feat_dashboards" },
     ]);
 
-    // The entitlement level travels with the row, for a custom-field mapping.
+    // The entitlement level travels with the link, for a custom-field mapping.
     expect([dashPro?.["value"], dashPro?.["name"]]).toEqual(["50", "Maximum"]);
     expect([dashSeats?.["value"], dashSeats?.["name"]]).toEqual(["1", "Minimum"]);
   });
 
-  it("carries each definition's metered flag onto its entitlement rows", async () => {
-    // The flag lives on the feature definition, and the entitlement that
-    // attaches it to an item does not repeat it. The handler crosses the two so
-    // a mapped `feature.metered` has something to read.
+  it("keeps metered on the definition and off the links", async () => {
+    // `metered` lives on the feature definition, and the item entitlement that
+    // attaches it to an item does not repeat it. The definition is its own page
+    // now, so it is read there rather than copied onto every link.
     server.use(
       ...catalogEndpoints(),
       http.get(FEATURES_ENDPOINT, () =>
@@ -237,11 +254,14 @@ describe("Chargebee features (item entitlements)", () => {
     const { ctx } = testContext({ ...CREDENTIALS, sources: FEATURES_MAPPED });
     const { byObject } = await collect(chargebeeCatalogHandler, ctx);
 
-    expect(
-      byObject.feature.map((f) => [f["id"], f["feature_metered"]])
-    ).toEqual([
-      ["ent-cb_feat_usage", true],
-      ["ent-cb_feat_flag", false],
+    expect(byObject.feature.map((f) => [f["id"], f["metered"]])).toEqual([
+      ["cb_feat_usage", true],
+      ["cb_feat_flag", false],
+    ]);
+    // The link carries no metered flag of its own.
+    expect(byObject.entitlement.map((e) => e["feature_metered"])).toEqual([
+      undefined,
+      undefined,
     ]);
   });
 
@@ -289,6 +309,10 @@ describe("Chargebee features (item entitlements)", () => {
       "cb_feat_b:null",
     ]);
     expect(byObject.feature.map((f) => f["id"])).toEqual([
+      "cb_feat_a",
+      "cb_feat_b",
+    ]);
+    expect(byObject.entitlement.map((e) => e["id"])).toEqual([
       "ent-cb_feat_a-1",
       "ent-cb_feat_a-2",
       "ent-cb_feat_b-1",
@@ -341,7 +365,7 @@ describe("Chargebee Catalog Failure Policy", () => {
 });
 
 describe("Chargebee Catalog Field Discovery", () => {
-  it("discovers catalog fields for all 4 target objects", async () => {
+  it("discovers catalog fields for all 5 target objects", async () => {
     const { ctx } = testContext({
       accessToken: `${SITE}:key`,
       metadata: { site: SITE },
@@ -359,24 +383,38 @@ describe("Chargebee Catalog Field Discovery", () => {
     expect(priceFields.map((f) => f.path)).toContain("price");
     expect(priceFields.map((f) => f.path)).toContain("currency_code");
 
+    // The definition's own fields — `metered` and `unit` live here, not on the
+    // entitlement that attaches it to an item.
     const featureFields = await chargebeeFieldDiscovery.discover(ctx, "feature");
-    expect(featureFields.map((f) => f.path)).toContain("feature_name");
+    expect(featureFields.map((f) => f.path)).toContain("name");
+    expect(featureFields.map((f) => f.path)).toContain("metered");
+    expect(featureFields.map((f) => f.path)).toContain("unit");
+
+    const entitlementFields = await chargebeeFieldDiscovery.discover(
+      ctx,
+      "entitlement"
+    );
+    expect(entitlementFields.map((f) => f.path)).toContain("value");
+    expect(entitlementFields.map((f) => f.path)).toContain("item_id");
   });
 
-  it("offers every source path the default feature mapping names", async () => {
+  it("offers every source path the default mappings name", async () => {
     // Otherwise the editor would show a shipped rule pointing at a field it
-    // claims does not exist.
+    // claims does not exist. Both objects, since the pass produces both.
     const { ctx } = testContext(CREDENTIALS);
-    const paths = (await chargebeeFieldDiscovery.discover(ctx, "feature")).map(
-      (f) => f.path
-    );
-    const defaultSources = chargebeeCatalogDefaults
-      .filter((rule) => rule.targetObject === "feature")
-      .map((rule) => rule.sourceFieldPath);
 
-    expect(defaultSources.length).toBeGreaterThan(0);
-    for (const source of defaultSources) {
-      expect(paths).toContain(source);
+    for (const object of ["feature", "entitlement"] as const) {
+      const paths = (await chargebeeFieldDiscovery.discover(ctx, object)).map(
+        (f) => f.path
+      );
+      const defaultSources = chargebeeCatalogDefaults
+        .filter((rule) => rule.targetObject === object)
+        .map((rule) => rule.sourceFieldPath);
+
+      expect(defaultSources.length).toBeGreaterThan(0);
+      for (const source of defaultSources) {
+        expect(paths).toContain(source);
+      }
     }
   });
 });

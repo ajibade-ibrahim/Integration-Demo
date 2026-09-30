@@ -1,22 +1,19 @@
 /**
  * Chargebee catalog sync handler — Item Families (Products), Items (Offerings),
- * Item Prices (Prices), and Item Entitlements (Features).
+ * Item Prices (Prices), Features (Feature definitions), and Item Entitlements
+ * (Entitlements).
  *
  * Features come from Chargebee's Entitlements API, which is separate from the
  * item catalog: `/features` lists the definitions, and each definition's
- * `/item_entitlements` lists the items that include it. An item entitlement is
- * the attachment of one feature to one item, which is exactly what a `Feature`
- * row is — so each one becomes a row, linked to the offering its `item_id`
- * names.
+ * `/item_entitlements` lists the items that include it. The definition becomes a
+ * `Feature` row and the item entitlement becomes an `Entitlement` linking it to
+ * an offering — which is exactly the definition/link split the two tables
+ * express. `metered` is a property of the definition and now stays there, rather
+ * than being carried onto every attachment.
  *
  * That pass is conditional, as Stripe's is: it runs only when a mapping rule
- * targets `feature`, and a site with no feature definitions costs the one list
- * request that says so.
- *
- * The definitions are read for more than their ids: `metered` is a property of
- * the definition, so the handler carries it onto each of that definition's
- * entitlement rows as the synthesized `feature_metered` the mapping layer
- * targets.
+ * targets `feature` or `entitlement`, and a site with no feature definitions
+ * costs the one list request that says so.
  */
 
 import type { RawRecord, TargetObject } from "../../types/common";
@@ -152,60 +149,47 @@ export const chargebeeCatalogHandler: SyncHandler = {
       offset = body.nextOffset;
     }
 
-    // 4. Fetch Item Entitlements -> Features
+    // 4. Fetch Feature definitions -> Features, then Item Entitlements -> Entitlements
     //
-    // Last, so every offering a feature names was written before it. Skipped
-    // entirely when nothing is mapped to `feature`: the pass is one request per
-    // feature definition, and without a rule there is nowhere to put the rows.
-    const featuresAreMapped =
+    // Last, so every offering an entitlement names was written before it. The
+    // pass runs when either object is mapped: the definitions come off
+    // `/features` and the links off each definition's `/item_entitlements`, so a
+    // rule set mapping only `entitlement` still pays the first request, and one
+    // mapping neither makes no request at all.
+    const definitionsAreMapped =
       (ctx.requestedSourcePaths.get("feature") ?? []).length > 0;
-    if (!featuresAreMapped) return;
+    const linksAreMapped =
+      (ctx.requestedSourcePaths.get("entitlement") ?? []).length > 0;
+    if (!definitionsAreMapped && !linksAreMapped) return;
 
-    // Collected before the fan-out rather than interleaved with it, so a
-    // feature page and an entitlement page never share an offset variable.
-    //
-    // `metered` is captured here and not at the entitlement, because it lives
-    // on the feature *definition*: the item entitlement that attaches the
-    // feature to an item never carries it. Capturing it now avoids a second
-    // read of the definition per entitlement.
     const featureIds: string[] = [];
-    const meteredByFeatureId = new Map<string, boolean>();
     for await (const records of pageList((next) =>
       session
         .getJson(featuresUrl(site, perPage, next))
         .then(parseFeaturesPage)
     )) {
+      if (definitionsAreMapped && records.length > 0) {
+        yield { object: "feature", records };
+      }
+      // Collected regardless of whether the definition itself is mapped: the
+      // entitlement fan-out below still needs their ids.
       for (const feature of records) {
         const id = asString(feature["id"]);
         if (id === undefined || id === "") continue;
         featureIds.push(id);
-        const metered = feature["metered"];
-        if (typeof metered === "boolean") meteredByFeatureId.set(id, metered);
       }
     }
 
+    if (!linksAreMapped) return;
+
     for (const featureId of featureIds) {
-      // Chargebee documents `metered` as required, but an absent one is left
-      // absent rather than written as `false`: only a real boolean is a claim
-      // the provider made, and the column is nullable precisely to hold the
-      // difference.
-      const metered = meteredByFeatureId.get(featureId);
       for await (const records of pageList((next) =>
         session
           .getJson(featureItemEntitlementsUrl(site, featureId, perPage, next))
           .then(parseItemEntitlementsPage)
       )) {
         if (records.length > 0) {
-          yield {
-            object: "feature",
-            records:
-              metered === undefined
-                ? records
-                : records.map((record) => ({
-                    ...record,
-                    feature_metered: metered,
-                  })),
-          };
+          yield { object: "entitlement", records };
         }
       }
     }
@@ -227,9 +211,16 @@ export const chargebeeCatalogHandler: SyncHandler = {
           offering:
             asString(record["item_id"]) ?? asString(record["offering_id"]),
         };
-      // Read from the payload: every item entitlement names its own item.
+      // A definition is a root record: it hangs off nothing.
       case "feature":
-        return { offering: asString(record["item_id"]) };
+        return {};
+      // Read from the payload: every item entitlement names both its item and
+      // the feature definition it attaches.
+      case "entitlement":
+        return {
+          offering: asString(record["item_id"]),
+          feature: asString(record["feature_id"]),
+        };
       default:
         return {};
     }

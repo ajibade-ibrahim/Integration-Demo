@@ -1,24 +1,28 @@
 /**
- * The two pure pieces of the product-feature pass: the URL that names the
- * parent, and the flattening that copies that name onto every row.
+ * The pure pieces of the product-feature pass: the URL that names the parent,
+ * and the two builders that split one attachment into a definition and a link.
  *
  * Unit-tested apart from the handler because between them they carry the one
  * hazard this object introduced. A ProductFeature response contains no
- * reference to the product it belongs to, so the association is built entirely
- * from a string the caller was holding. Every other association in this system
- * is read from the payload and therefore fails loudly when it is wrong; this one
- * fails silently, producing a full table of rows linked to the wrong products
- * with no error and no null anywhere.
+ * reference to the product it belongs to, so the link's association is built
+ * entirely from a string the caller was holding. Every other association in
+ * this system is read from the payload and therefore fails loudly when it is
+ * wrong; this one fails silently, producing a full table of rows linked to the
+ * wrong products with no error and no null anywhere.
+ *
+ * The split adds a second hazard of the same kind: a definition record must be
+ * keyed on the nested `feat_…`, not on the attachment's `prodft_…`.
  *
  * `tests/integration/stripe-catalog.test.ts` pins the handler keeping track.
- * These tests pin the two functions it keeps track *with*.
+ * These tests pin the functions it keeps track *with*.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   entitlementFeaturesUrl,
-  flattenFeature,
+  flattenFeatureDefinition,
+  flattenFeatureEntitlement,
   listUrl,
   productFeaturesUrl,
 } from "@/core/providers/stripe/api";
@@ -74,8 +78,9 @@ describe("entitlementFeaturesUrl", () => {
     const url = new URL(entitlementFeaturesUrl(1));
 
     expect(url.pathname).toBe("/v1/entitlements/features");
-    // `limit=1` is the whole point: this request exists only to learn whether
-    // the list is empty, never to read it.
+    // `limit=1` is the whole point of the sync's use of it: the request exists
+    // only to learn whether the list is empty, never to read it. (Discovery
+    // samples the same endpoint with a larger limit, for metadata keys.)
     expect(url.searchParams.get("limit")).toBe("1");
   });
 });
@@ -100,7 +105,7 @@ describe("listUrl after the paginatedUrl extraction", () => {
   });
 });
 
-describe("flattenFeature", () => {
+describe("flattenFeatureDefinition", () => {
   const attachment = {
     id: "prodft_1",
     object: "product_feature",
@@ -114,19 +119,77 @@ describe("flattenFeature", () => {
     },
   };
 
-  it("lifts the nested name, lookup key and feature id", () => {
-    const flat = flattenFeature(attachment, "prod_support");
+  it("keys the definition on the feature id, not the attachment id", () => {
+    // The whole hazard of the split. `externalIdOf` reads a bare `id` and knows
+    // nothing about the object, so a definition record left carrying the
+    // attachment's `prodft_…` would be upserted under the wrong key — silently,
+    // and for every row.
+    const definition = flattenFeatureDefinition(attachment);
 
-    expect(flat["feature_name"]).toBe("Premium support");
-    expect(flat["lookup_key"]).toBe("premium-support");
-    // Renamed rather than passed through: a top-level `id` on this record is
-    // the attachment's `prodft_…`, and storing that where the `feat_…` belongs
-    // is exactly the confusion `externalFeatureId` exists to prevent.
-    expect(flat["feature_id"]).toBe("feat_support");
+    expect(definition?.["id"]).toBe("feat_support");
+    expect(definition?.["feature_name"]).toBe("Premium support");
+    expect(definition?.["lookup_key"]).toBe("premium-support");
+  });
+
+  it("returns nothing for an attachment with no definition", () => {
+    // A definitionless attachment is not a feature, and writing it with no id
+    // would only produce a rejection.
+    expect(flattenFeatureDefinition({ id: "prodft_1" })).toBeUndefined();
+    expect(
+      flattenFeatureDefinition({ id: "prodft_1", entitlement_feature: { name: "x" } })
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for a lookup key the merchant left unset", () => {
+    // Stripe sends `lookup_key: null` for a feature created without one, and
+    // null must not become the string "null" in a column code gates on.
+    const noKey = {
+      ...attachment,
+      entitlement_feature: { ...attachment.entitlement_feature, lookup_key: null },
+    };
+
+    expect(flattenFeatureDefinition(noKey)?.["lookup_key"]).toBeUndefined();
+    expect(flattenFeatureDefinition(noKey)?.["feature_name"]).toBe(
+      "Premium support"
+    );
+  });
+
+  it("keeps the nested feature metadata reachable", () => {
+    // Discovery offers `entitlement_feature.metadata.*` for the definition, so
+    // the nested object has to travel with the record.
+    expect(
+      (flattenFeatureDefinition(attachment)?.["entitlement_feature"] as
+        | Record<string, unknown>
+        | undefined)?.["metadata"]
+    ).toEqual({ tier: "gold" });
+  });
+});
+
+describe("flattenFeatureEntitlement", () => {
+  const attachment = {
+    id: "prodft_1",
+    object: "product_feature",
+    livemode: false,
+    entitlement_feature: {
+      id: "feat_support",
+      object: "entitlements.feature",
+      name: "Premium support",
+      lookup_key: "premium-support",
+    },
+  };
+
+  it("keys the link on the attachment id and names the feature", () => {
+    // The link is the attachment: the same feature on two products is two
+    // links, so the id has to be the `prodft_…`.
+    const link = flattenFeatureEntitlement(attachment, "prod_support");
+
+    expect(link["id"]).toBe("prodft_1");
+    expect(link["feature_id"]).toBe("feat_support");
+    expect(link["offering_id"]).toBe("prod_support");
   });
 
   it("takes the offering id from the argument", () => {
-    expect(flattenFeature(attachment, "prod_support")["offering_id"]).toBe(
+    expect(flattenFeatureEntitlement(attachment, "prod_support")["offering_id"]).toBe(
       "prod_support"
     );
   });
@@ -143,36 +206,8 @@ describe("flattenFeature", () => {
       offering_id: "prod_STILL_WRONG",
     };
 
-    expect(flattenFeature(misleading, "prod_support")["offering_id"]).toBe(
-      "prod_support"
-    );
-  });
-
-  it("returns undefined fields rather than inventing them when the nested feature is missing", () => {
-    // Undefined, not an empty string: the writer reads a blank name as a reason
-    // to reject the row and reports it, which is the visible outcome we want.
-    // An empty string would be stored as a name nobody can search for.
-    const flat = flattenFeature({ id: "prodft_1" }, "prod_1");
-
-    expect(flat["feature_name"]).toBeUndefined();
-    expect(flat["lookup_key"]).toBeUndefined();
-    expect(flat["feature_id"]).toBeUndefined();
-    // The one field that is still there, because it never came from the
-    // payload in the first place.
-    expect(flat["offering_id"]).toBe("prod_1");
-  });
-
-  it("returns undefined for a lookup key the merchant left unset", () => {
-    // Stripe sends `lookup_key: null` for a feature created without one, and
-    // null must not become the string "null" in a column code gates on.
-    const noKey = {
-      ...attachment,
-      entitlement_feature: { ...attachment.entitlement_feature, lookup_key: null },
-    };
-
-    expect(flattenFeature(noKey, "prod_1")["lookup_key"]).toBeUndefined();
-    expect(flattenFeature(noKey, "prod_1")["feature_name"]).toBe(
-      "Premium support"
-    );
+    const link = flattenFeatureEntitlement(misleading, "prod_support");
+    expect(link["offering_id"]).toBe("prod_support");
+    expect(link["id"]).toBe("prodft_1");
   });
 });

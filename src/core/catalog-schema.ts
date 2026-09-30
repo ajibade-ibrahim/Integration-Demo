@@ -95,19 +95,35 @@ const FEATURE_SCHEMA: ObjectSchema = {
       maxLength: 255,
     },
     {
-      name: "externalFeatureId",
-      label: "Feature ID (provider's own)",
-      kind: "string",
-      maxLength: 255,
-    },
-    {
       name: "isMetered",
       label: "Is metered",
       kind: "boolean",
     },
     {
+      name: "unit",
+      label: "Unit",
+      kind: "string",
+      maxLength: 100,
+    },
+  ],
+};
+
+const ENTITLEMENT_SCHEMA: ObjectSchema = {
+  object: "entitlement",
+  label: "Entitlement",
+  fields: [
+    { name: "value", label: "Value", kind: "string", maxLength: 255 },
+    { name: "valueName", label: "Value name", kind: "string", maxLength: 255 },
+    { name: "limitValue", label: "Limit value", kind: "number" },
+    {
       name: "associatedOfferingId",
       label: "Associated offering",
+      kind: "string",
+      readOnly: true,
+    },
+    {
+      name: "associatedFeatureId",
+      label: "Associated feature",
       kind: "string",
       readOnly: true,
     },
@@ -119,4 +135,5 @@ export const CATALOG_SCHEMA = {
   offering: OFFERING_SCHEMA,
   price: PRICE_SCHEMA,
   feature: FEATURE_SCHEMA,
+  entitlement: ENTITLEMENT_SCHEMA,
 } as const;
