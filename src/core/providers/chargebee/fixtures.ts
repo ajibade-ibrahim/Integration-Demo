@@ -217,3 +217,115 @@ export const CHARGEBEE_FIXTURE_ITEM_PRICES_PAGE_1 = {
     },
   ],
 };
+
+// ---------------------------------------------------------------------------
+// Subscriptions (agreements), their effective entitlements, and discounts
+// ---------------------------------------------------------------------------
+
+export const CHARGEBEE_FIXTURE_SUBSCRIPTION_1 = {
+  id: "cb_sub_acme",
+  customer_id: "cb_cust_acme",
+  status: "active",
+  auto_collection: "on",
+  currency_code: "USD",
+  billing_period: 1,
+  billing_period_unit: "month",
+  started_at: 1672531200,
+  current_term_start: 1672531200,
+  current_term_end: 1675209600,
+  next_billing_at: 1675209600,
+  trial_start: 1672531200,
+  trial_end: 1672617600,
+  meta_data: { po: "PO-42" },
+  subscription_items: [
+    {
+      item_price_id: "cb_price_analytics_pro_monthly",
+      item_type: "plan",
+      quantity: 1,
+      unit_price: 9900,
+      free_quantity: 0,
+      billing_cycles: 1,
+      amount: 9900,
+    },
+    {
+      item_price_id: "cb_price_extra_seats",
+      item_type: "addon",
+      quantity: 5,
+      unit_price: 500,
+      amount: 2500,
+    },
+  ],
+  discounts: [
+    {
+      id: "cb_disc_acme_1",
+      coupon_id: "cb_coupon_launch",
+      invoice_name: "Launch 10% off",
+      type: "percentage",
+      percentage: 10,
+      duration_type: "forever",
+      created_at: 1672531200,
+    },
+  ],
+};
+
+export const CHARGEBEE_FIXTURE_SUBSCRIPTION_2 = {
+  id: "cb_sub_globex",
+  customer_id: "cb_cust_globex",
+  status: "non_renewing",
+  auto_collection: "off",
+  currency_code: "USD",
+  billing_period: 1,
+  billing_period_unit: "month",
+  started_at: 1675209600,
+  current_term_start: 1675209600,
+  current_term_end: 1677888000,
+  cancelled_at: 1677888000,
+  subscription_items: [
+    {
+      item_price_id: "cb_price_analytics_pro_monthly",
+      item_type: "plan",
+      quantity: 1,
+      unit_price: 9900,
+      amount: 9900,
+    },
+  ],
+  discounts: [],
+};
+
+export const CHARGEBEE_FIXTURE_SUBSCRIPTIONS_PAGE_1 = {
+  list: [
+    { subscription: CHARGEBEE_FIXTURE_SUBSCRIPTION_1 },
+    { subscription: CHARGEBEE_FIXTURE_SUBSCRIPTION_2 },
+  ],
+};
+
+export const CHARGEBEE_FIXTURE_SUBSCRIPTION_ENTITLEMENTS_1 = {
+  list: [
+    {
+      subscription_entitlement: {
+        subscription_id: "cb_sub_acme",
+        feature_id: "cb_feat_dashboards",
+        feature_name: "Dashboards",
+        value: "50",
+        name: "Maximum",
+        is_overridden: true,
+        is_enabled: true,
+      },
+    },
+    {
+      subscription_entitlement: {
+        subscription_id: "cb_sub_acme",
+        feature_id: "cb_feat_advanced_reports",
+        feature_name: "Advanced Reports",
+        value: "false",
+        name: "Enabled",
+        is_overridden: false,
+        is_enabled: false,
+      },
+    },
+  ],
+};
+
+export const CHARGEBEE_FIXTURE_SUBSCRIPTION_ENTITLEMENTS_EMPTY = {
+  list: [],
+};

@@ -172,3 +172,285 @@ export const chargebeeCatalogDefaults: readonly FieldMappingRule[] = [
     transform: "none",
   },
 ];
+
+/**
+ * Agreement defaults for Chargebee.
+ *
+ * Covers all five objects the function writes, because Chargebee syncs them all
+ * off one list plus one fan-out and a rule set covering only the agreement
+ * would leave the rest blank.
+ *
+ * `agreement_name` is load-bearing for the same reason it is on Stripe:
+ * `Agreement.name` is required and Chargebee gives a subscription none, so
+ * without this rule every record is rejected every sync. `provider-defaults.test.ts`
+ * asserts it.
+ *
+ * Most source paths are synthesized by `flattenChargebeeSubscription` rather
+ * than read from the response: the dates are epoch seconds, the status is
+ * Chargebee's vocabulary, and `currency_code` is the raw field mapped with a
+ * lowercase transform. The item's `unit_price`, `free_quantity`, `quantity` and
+ * `billing_cycles` are read raw — Chargebee inlines them on the subscription
+ * item. `billing_model` is deliberately unmapped and stays null: the pricing
+ * model lives on the item price this payload does not inline.
+ */
+export const chargebeeAgreementDefaults: readonly FieldMappingRule[] = [
+  // --- agreement ---
+  {
+    sourceFieldPath: "agreement_name",
+    targetObject: "agreement",
+    targetFieldPath: "name",
+    transform: "trim",
+  },
+  {
+    sourceFieldPath: "agreement_type",
+    targetObject: "agreement",
+    targetFieldPath: "agreementType",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "status",
+    targetObject: "agreement",
+    targetFieldPath: "status",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "effective_date",
+    targetObject: "agreement",
+    targetFieldPath: "effectiveDate",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "ended_at",
+    targetObject: "agreement",
+    targetFieldPath: "endDate",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "currency_code",
+    targetObject: "agreement",
+    targetFieldPath: "currency",
+    transform: "lowercase",
+  },
+  {
+    sourceFieldPath: "chargebee_status",
+    targetObject: "agreement",
+    targetFieldPath: "customFields.chargebee_status",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "provider_metadata",
+    targetObject: "agreement",
+    targetFieldPath: "providerMetadata",
+    transform: "none",
+  },
+
+  // --- subscription ---
+  {
+    sourceFieldPath: "current_period_start",
+    targetObject: "subscription",
+    targetFieldPath: "currentPeriodStart",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "current_period_end",
+    targetObject: "subscription",
+    targetFieldPath: "currentPeriodEnd",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "next_billing_at",
+    targetObject: "subscription",
+    targetFieldPath: "nextBillingAt",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "trial_starts_at",
+    targetObject: "subscription",
+    targetFieldPath: "trialStartsAt",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "trial_ends_at",
+    targetObject: "subscription",
+    targetFieldPath: "trialEndsAt",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "canceled_at",
+    targetObject: "subscription",
+    targetFieldPath: "canceledAt",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "cancel_at",
+    targetObject: "subscription",
+    targetFieldPath: "cancelAt",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "cancel_at_period_end",
+    targetObject: "subscription",
+    targetFieldPath: "cancelAtPeriodEnd",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "collection_method",
+    targetObject: "subscription",
+    targetFieldPath: "collectionMethod",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "billing_period",
+    targetObject: "subscription",
+    targetFieldPath: "billingPeriod",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "billing_period_count",
+    targetObject: "subscription",
+    targetFieldPath: "billingPeriodCount",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "item_count",
+    targetObject: "subscription",
+    targetFieldPath: "itemCount",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "provider_metadata",
+    targetObject: "subscription",
+    targetFieldPath: "providerMetadata",
+    transform: "none",
+  },
+
+  // --- agreementItem ---
+  // `price_id` is the raw `item_price_id`; `associatedPriceId` and
+  // `externalPriceId` are derived by the engine from the ref, so neither has a
+  // rule. `offeringId` stays null: the item price's product is not inlined.
+  {
+    sourceFieldPath: "item_type",
+    targetObject: "agreementItem",
+    targetFieldPath: "itemType",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "quantity",
+    targetObject: "agreementItem",
+    targetFieldPath: "quantity",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "unit_price",
+    targetObject: "agreementItem",
+    targetFieldPath: "unitPriceMinor",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "free_quantity",
+    targetObject: "agreementItem",
+    targetFieldPath: "freeQuantity",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "billing_cycles",
+    targetObject: "agreementItem",
+    targetFieldPath: "billingCycles",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "position",
+    targetObject: "agreementItem",
+    targetFieldPath: "position",
+    transform: "none",
+  },
+
+  // --- agreementEntitlement ---
+  // The catalog entitlement rules' shape, one level over: `value` is the raw
+  // provider string and `limitValue` its numeric form, and `name` is the
+  // entitlement *level* label rather than the feature name.
+  {
+    sourceFieldPath: "value",
+    targetObject: "agreementEntitlement",
+    targetFieldPath: "value",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "name",
+    targetObject: "agreementEntitlement",
+    targetFieldPath: "valueName",
+    transform: "trim",
+  },
+  {
+    sourceFieldPath: "value",
+    targetObject: "agreementEntitlement",
+    targetFieldPath: "limitValue",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "is_overridden",
+    targetObject: "agreementEntitlement",
+    targetFieldPath: "isOverride",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "is_enabled",
+    targetObject: "agreementEntitlement",
+    targetFieldPath: "isEnabled",
+    transform: "none",
+  },
+
+  // --- agreementDiscount ---
+  // Chargebee's discount object is flat, so most paths are its own field names;
+  // `discount_kind`, `discount_status`, `starts_at` and `ends_at` are
+  // synthesized by `flattenChargebeeDiscount` from `type`, `duration_type`,
+  // `created_at` and `apply_till`.
+  {
+    sourceFieldPath: "coupon_id",
+    targetObject: "agreementDiscount",
+    targetFieldPath: "externalCouponId",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "invoice_name",
+    targetObject: "agreementDiscount",
+    targetFieldPath: "label",
+    transform: "trim",
+  },
+  {
+    sourceFieldPath: "discount_kind",
+    targetObject: "agreementDiscount",
+    targetFieldPath: "kind",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "percentage",
+    targetObject: "agreementDiscount",
+    targetFieldPath: "percentOff",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "amount",
+    targetObject: "agreementDiscount",
+    targetFieldPath: "amountOffMinor",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "discount_status",
+    targetObject: "agreementDiscount",
+    targetFieldPath: "status",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "starts_at",
+    targetObject: "agreementDiscount",
+    targetFieldPath: "startsAt",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "ends_at",
+    targetObject: "agreementDiscount",
+    targetFieldPath: "endsAt",
+    transform: "none",
+  },
+];

@@ -23,11 +23,15 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { prisma } from "@/lib/prisma";
 import {
+  relinkOrphanedAgreementEntitlements,
   relinkOrphanedAgreementItems,
   relinkOrphanedAgreements,
+  writeAgreementDiscounts,
+  writeAgreementEntitlements,
   writeAgreementItems,
   writeAgreements,
   writeCustomers,
+  writeFeatureDefinitions,
   writeOfferings,
   writePrices,
   writeProducts,
@@ -38,6 +42,7 @@ import {
 import type { TargetObject } from "@/core/types/common";
 import type { MappedRecord } from "@/core/types/mapping";
 import { loadAgreements } from "@/core/repositories/agreement-repository";
+import { readJsonObject } from "@/core/repositories/json-column";
 
 const USER_ID = "user-agreement-writer";
 const INTEGRATION_ID = "integration-agreement-writer";
@@ -932,6 +937,8 @@ describe("per-function dispatch", () => {
       agreement: 1,
       subscription: 1,
       agreementItem: 0,
+      agreementEntitlement: 0,
+      agreementDiscount: 0,
     });
     const row = await prisma.subscription.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
@@ -940,7 +947,7 @@ describe("per-function dispatch", () => {
     expect(row.agreement.externalSourceId).toBe("sub_1");
   });
 
-  it("counts its own three objects, and no others", async () => {
+  it("counts its own five objects, and no others", async () => {
     const collected = new Map<TargetObject, CollectedRecord[]>();
     collected.set("agreement", [agreementRecord("sub_1", {})]);
     collected.set("subscription", [subscriptionRecord("sub_1", "sub_1")]);
@@ -955,6 +962,8 @@ describe("per-function dispatch", () => {
     // run report should say for an agreement sync.
     expect(Object.keys(result.counts).sort()).toEqual([
       "agreement",
+      "agreementDiscount",
+      "agreementEntitlement",
       "agreementItem",
       "subscription",
     ]);
@@ -1043,5 +1052,358 @@ describe("what the agreements page reads", () => {
     // Trialing and past_due are in force; draft never started and the two
     // terminal states are over.
     expect(page.totals.active).toBe(3);
+  });
+});
+
+function entitlementRecord(
+  externalSourceId: string,
+  agreement: string | undefined,
+  refs: { feature?: string } = {},
+  fields: Record<string, string | null> = {}
+): CollectedRecord {
+  return {
+    externalSourceId,
+    externalRefs: { agreement, feature: refs.feature },
+    mapped: {
+      object: "agreementEntitlement",
+      fields: { value: "10", ...fields },
+      customFields: {},
+      crossRefs: {},
+    } as MappedRecord,
+  };
+}
+
+describe("the completed subscription shape", () => {
+  it("parses the new columns, warning on a value outside the union", async () => {
+    const agreements = await writeAgreements(INTEGRATION_ID, [
+      agreementRecord("sub_1"),
+    ]);
+
+    const result = await writeSubscriptions(
+      INTEGRATION_ID,
+      [
+        subscriptionRecord("sub_1", "sub_1", {
+          // Both deliberately outside the unions: the writer warns and leaves
+          // the column null rather than storing a provider word.
+          billingPeriod: "fortnight",
+          collectionMethod: "charge_automatically",
+          billingPeriodCount: "3",
+          nextBillingAt: "2026-02-01T00:00:00.000Z",
+          cancelAt: "2026-03-01T00:00:00.000Z",
+          trialStartsAt: "2026-01-01T00:00:00.000Z",
+          providerMetadata: JSON.stringify({ po: "PO-9" }),
+        }),
+      ],
+      agreements.externalToInternal
+    );
+
+    expect(result.issues.map((i) => i.fieldName).sort()).toEqual([
+      "billingPeriod",
+      "collectionMethod",
+    ]);
+    expect(result.issues.every((i) => i.severity === "warning")).toBe(true);
+
+    const row = await prisma.subscription.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+    });
+    expect(row.billingPeriod).toBeNull();
+    expect(row.collectionMethod).toBeNull();
+    // The valid ones still land.
+    expect(row.billingPeriodCount).toBe(3);
+    expect(row.nextBillingAt).not.toBeNull();
+    expect(row.cancelAt).not.toBeNull();
+    expect(row.trialStartsAt).not.toBeNull();
+    expect(readJsonObject(row.providerMetadata)).toEqual({ po: "PO-9" });
+  });
+
+  it("warns once when an agreement carries two plan lines", async () => {
+    const agreements = await writeAgreements(INTEGRATION_ID, [
+      agreementRecord("sub_1"),
+    ]);
+
+    const result = await writeAgreementItems(
+      INTEGRATION_ID,
+      [
+        itemRecord("si_1", { agreement: "sub_1" }, { itemType: "plan" }),
+        itemRecord("si_2", { agreement: "sub_1" }, { itemType: "plan" }),
+      ],
+      agreements.externalToInternal
+    );
+
+    expect(
+      result.issues.some((i) => i.reason.includes("plan lines"))
+    ).toBe(true);
+  });
+
+  it("does not warn about a single plan line", async () => {
+    const agreements = await writeAgreements(INTEGRATION_ID, [
+      agreementRecord("sub_1"),
+    ]);
+
+    const result = await writeAgreementItems(
+      INTEGRATION_ID,
+      [itemRecord("si_1", { agreement: "sub_1" }, { itemType: "plan" })],
+      agreements.externalToInternal
+    );
+
+    expect(
+      result.issues.some((i) => i.reason.includes("plan lines"))
+    ).toBe(false);
+  });
+});
+
+describe("agreement entitlements", () => {
+  it("rejects an entitlement whose agreement did not resolve", async () => {
+    const result = await writeAgreementEntitlements(
+      INTEGRATION_ID,
+      [entitlementRecord("e1", "missing_sub")],
+      new Map(),
+      { writtenAgreementIds: new Set(), mapped: true, complete: true }
+    );
+
+    expect(result.written).toBe(0);
+    expect(result.issues[0]?.severity).toBe("rejected");
+  });
+
+  it("keeps a row whose optional feature did not resolve", async () => {
+    // The feature belongs to a different function; its absence is a warning,
+    // not a rejection.
+    const agreements = await writeAgreements(INTEGRATION_ID, [
+      agreementRecord("sub_1"),
+    ]);
+
+    const result = await writeAgreementEntitlements(
+      INTEGRATION_ID,
+      [entitlementRecord("e1", "sub_1", { feature: "feat_missing" })],
+      agreements.externalToInternal,
+      {
+        writtenAgreementIds: new Set(agreements.externalToInternal.values()),
+        mapped: true,
+        complete: true,
+      }
+    );
+
+    expect(result.written).toBe(1);
+    expect(result.issues[0]?.severity).toBe("warning");
+    const row = await prisma.agreementEntitlement.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+    });
+    expect(row.featureId).toBeNull();
+    expect(row.externalFeatureId).toBe("feat_missing");
+  });
+
+  it("deletes only when the list is declared complete", async () => {
+    const agreements = await writeAgreements(INTEGRATION_ID, [
+      agreementRecord("sub_1"),
+    ]);
+    const agreementId = agreements.externalToInternal.get("sub_1")!;
+    const index = agreements.externalToInternal;
+    const written = new Set([agreementId]);
+
+    await writeAgreementEntitlements(
+      INTEGRATION_ID,
+      [entitlementRecord("e1", "sub_1"), entitlementRecord("e2", "sub_1")],
+      index,
+      { writtenAgreementIds: written, mapped: true, complete: true }
+    );
+    expect(
+      await prisma.agreementEntitlement.count({ where: { agreementId } })
+    ).toBe(2);
+
+    // An empty list with completeness withheld: nothing may be deleted.
+    await writeAgreementEntitlements(INTEGRATION_ID, [], index, {
+      writtenAgreementIds: written,
+      mapped: true,
+      complete: false,
+    });
+    expect(
+      await prisma.agreementEntitlement.count({ where: { agreementId } })
+    ).toBe(2);
+
+    // The object unmapped is the second independent reason not to delete.
+    await writeAgreementEntitlements(INTEGRATION_ID, [], index, {
+      writtenAgreementIds: written,
+      mapped: false,
+      complete: true,
+    });
+    expect(
+      await prisma.agreementEntitlement.count({ where: { agreementId } })
+    ).toBe(2);
+
+    // An exhausted, empty list is the only thing that licenses the delete.
+    const result = await writeAgreementEntitlements(INTEGRATION_ID, [], index, {
+      writtenAgreementIds: written,
+      mapped: true,
+      complete: true,
+    });
+    expect(
+      await prisma.agreementEntitlement.count({ where: { agreementId } })
+    ).toBe(0);
+    expect(result.issues.some((i) => i.reason.includes("removed"))).toBe(true);
+  });
+
+  it("never touches an agreement this run did not write", async () => {
+    // Reconciliation is scoped to `writtenAgreementIds`; an agreement absent
+    // from the run keeps every row it has.
+    const agreements = await writeAgreements(INTEGRATION_ID, [
+      agreementRecord("sub_1"),
+    ]);
+    const agreementId = agreements.externalToInternal.get("sub_1")!;
+
+    await writeAgreementEntitlements(
+      INTEGRATION_ID,
+      [entitlementRecord("e1", "sub_1")],
+      agreements.externalToInternal,
+      { writtenAgreementIds: new Set([agreementId]), mapped: true, complete: true }
+    );
+
+    await writeAgreementEntitlements(INTEGRATION_ID, [], new Map(), {
+      writtenAgreementIds: new Set(),
+      mapped: true,
+      complete: true,
+    });
+
+    expect(
+      await prisma.agreementEntitlement.count({ where: { agreementId } })
+    ).toBe(1);
+  });
+
+  it("relinks an orphaned feature once the catalog arrives", async () => {
+    const agreements = await writeAgreements(INTEGRATION_ID, [
+      agreementRecord("sub_1"),
+    ]);
+    await writeAgreementEntitlements(
+      INTEGRATION_ID,
+      [entitlementRecord("e1", "sub_1", { feature: "feat_1" })],
+      agreements.externalToInternal,
+      {
+        writtenAgreementIds: new Set(agreements.externalToInternal.values()),
+        mapped: true,
+        complete: true,
+      }
+    );
+
+    await writeFeatureDefinitions(INTEGRATION_ID, [
+      {
+        externalSourceId: "feat_1",
+        mapped: {
+          object: "feature",
+          fields: { name: "SSO" },
+          customFields: {},
+          crossRefs: {},
+        } as MappedRecord,
+      },
+    ]);
+
+    const relinked = await relinkOrphanedAgreementEntitlements(INTEGRATION_ID);
+    expect(relinked).toBe(1);
+    const row = await prisma.agreementEntitlement.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+      include: { feature: true },
+    });
+    expect(row.feature?.name).toBe("SSO");
+  });
+});
+
+describe("agreement discounts", () => {
+  it("writes the stated values and reconciles under the same gate", async () => {
+    const agreements = await writeAgreements(INTEGRATION_ID, [
+      agreementRecord("sub_1"),
+    ]);
+    const agreementId = agreements.externalToInternal.get("sub_1")!;
+
+    const record: CollectedRecord = {
+      externalSourceId: "d1",
+      externalRefs: { agreement: "sub_1" },
+      mapped: {
+        object: "agreementDiscount",
+        fields: {
+          externalCouponId: "coupon_1",
+          label: "Launch 10% off",
+          kind: "percentage",
+          percentOff: "10",
+          status: "active",
+        },
+        customFields: {},
+        crossRefs: {},
+      } as MappedRecord,
+    };
+
+    await writeAgreementDiscounts(
+      INTEGRATION_ID,
+      [record],
+      agreements.externalToInternal,
+      {
+        writtenAgreementIds: new Set([agreementId]),
+        mapped: true,
+        complete: true,
+      }
+    );
+
+    const row = await prisma.agreementDiscount.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+    });
+    expect(row.externalCouponId).toBe("coupon_1");
+    expect(row.kind).toBe("percentage");
+    expect(row.percentOff).toBe(10);
+    expect(row.label).toBe("Launch 10% off");
+
+    // Withheld completeness: the discount survives.
+    await writeAgreementDiscounts(INTEGRATION_ID, [], agreements.externalToInternal, {
+      writtenAgreementIds: new Set([agreementId]),
+      mapped: true,
+      complete: false,
+    });
+    expect(
+      await prisma.agreementDiscount.count({ where: { agreementId } })
+    ).toBe(1);
+
+    // Declared complete: it goes.
+    await writeAgreementDiscounts(INTEGRATION_ID, [], agreements.externalToInternal, {
+      writtenAgreementIds: new Set([agreementId]),
+      mapped: true,
+      complete: true,
+    });
+    expect(
+      await prisma.agreementDiscount.count({ where: { agreementId } })
+    ).toBe(0);
+  });
+
+  it("warns and leaves an unreadable kind and status unset", async () => {
+    const agreements = await writeAgreements(INTEGRATION_ID, [
+      agreementRecord("sub_1"),
+    ]);
+
+    const record: CollectedRecord = {
+      externalSourceId: "d1",
+      externalRefs: { agreement: "sub_1" },
+      mapped: {
+        object: "agreementDiscount",
+        fields: { kind: "mystery", status: "vibing" },
+        customFields: {},
+        crossRefs: {},
+      } as MappedRecord,
+    };
+
+    const result = await writeAgreementDiscounts(
+      INTEGRATION_ID,
+      [record],
+      agreements.externalToInternal,
+      {
+        writtenAgreementIds: new Set(agreements.externalToInternal.values()),
+        mapped: true,
+        complete: true,
+      }
+    );
+
+    expect(result.issues.map((i) => i.fieldName).sort()).toEqual([
+      "kind",
+      "status",
+    ]);
+    const row = await prisma.agreementDiscount.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+    });
+    expect(row.kind).toBeNull();
+    expect(row.status).toBeNull();
   });
 });

@@ -4,6 +4,8 @@ import { bootstrap } from "@/core/bootstrap";
 import { currentUserId } from "@/lib/current-user";
 import {
   loadAgreements,
+  type AgreementDiscountRow,
+  type AgreementEntitlementRow,
   type AgreementItemRow,
 } from "@/core/repositories/agreement-repository";
 import { Empty, Table, Td } from "../data-table";
@@ -102,7 +104,12 @@ export default async function AgreementsPage() {
               <tr key={row.id} className="border-t border-slate-100">
                 <Td className="font-medium">
                   {row.name}
-                  <ItemsCell items={row.items} itemCount={row.itemCount} />
+                  <DetailsCell
+                    items={row.items}
+                    itemCount={row.itemCount}
+                    entitlements={row.entitlements}
+                    discounts={row.discounts}
+                  />
                 </Td>
                 <Td className="text-slate-600">
                   {row.agreementType.replace("_", " ")}
@@ -111,6 +118,7 @@ export default async function AgreementsPage() {
                   <StatusCell
                     status={row.status}
                     cancelAtPeriodEnd={row.cancelAtPeriodEnd}
+                    cancelAt={row.cancelAt}
                     trialEndsAt={row.trialEndsAt}
                   />
                 </Td>
@@ -139,6 +147,14 @@ export default async function AgreementsPage() {
                   ) : (
                     row.currentPeriodEnd.toISOString().slice(0, 10)
                   )}
+                  {row.billingPeriod !== null && (
+                    <span className="ml-1 rounded bg-slate-100 px-1 py-0.5 text-xs text-slate-600">
+                      {billingPeriodLabel(
+                        row.billingPeriod,
+                        row.billingPeriodCount
+                      )}
+                    </span>
+                  )}
                 </Td>
                 <Td className="text-xs text-slate-400">
                   {row.integrationLabel}
@@ -156,34 +172,40 @@ export default async function AgreementsPage() {
 }
 
 /**
- * The agreement's priced lines, disclosed on demand.
+ * Everything an agreement carries below its header, disclosed on demand.
  *
  * A `<details>` element rather than a click handler, which keeps this page a
  * server component — the whole route renders without shipping any JavaScript,
  * and one expandable cell is not worth giving that up for.
  *
- * Nothing is shown for a single-line agreement. That is the overwhelming
- * majority of them, and a disclosure triangle revealing the same offering
- * already named in the Price column would be noise on every row to serve the
- * few that have something to say.
+ * One disclosure for lines, entitlements and discounts rather than three,
+ * because they answer one question — "what is under this agreement" — and three
+ * triangles on a row with all three would be more chrome than content. Nothing
+ * is shown when there is nothing to show and the provider's line count matches,
+ * which is the overwhelming majority of rows.
  *
- * No total, deliberately. Summing the lines needs each one's price times its
- * quantity, and a line whose offering did not resolve has no price — so the
- * sum would silently under-report exactly when something is already wrong.
- * The provider's own API is where a trustworthy total comes from.
+ * The one case worth a word even with nothing to disclose is the provider
+ * saying there were more lines than we stored, which means some were rejected;
+ * silence there would read as a single-line subscription.
  */
-function ItemsCell({
+function DetailsCell({
   items,
   itemCount,
+  entitlements,
+  discounts,
 }: {
   items: AgreementItemRow[];
   itemCount: number | null;
+  entitlements: AgreementEntitlementRow[];
+  discounts: AgreementDiscountRow[];
 }) {
-  if (items.length < 2) {
-    // The one case worth a word even with nothing to disclose: the provider
-    // said there were lines and we stored none, which means they were
-    // rejected. Silence here would read as a single-line subscription.
-    if (itemCount !== null && itemCount > items.length) {
+  const missingLines = itemCount !== null && itemCount > items.length;
+  const hasLines = items.length >= 2;
+  const hasEntitlements = entitlements.length > 0;
+  const hasDiscounts = discounts.length > 0;
+
+  if (!hasLines && !hasEntitlements && !hasDiscounts) {
+    if (missingLines) {
       return (
         <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-normal text-amber-800">
           {itemCount} lines reported, {items.length} stored
@@ -193,37 +215,209 @@ function ItemsCell({
     return null;
   }
 
+  const summary = [
+    hasLines ? `${items.length} lines` : null,
+    hasEntitlements ? `${entitlements.length} entitlements` : null,
+    hasDiscounts ? `${discounts.length} discounts` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+
   return (
     <details className="mt-1 font-normal">
       <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-800">
-        {items.length} lines
+        {summary}
       </summary>
-      <ul className="mt-1 space-y-0.5">
-        {items.map((item) => (
-          <li key={item.id} className="text-xs text-slate-600">
-            <LinkCell
-              name={item.offeringName}
-              externalId={item.externalOfferingId}
-            />
-            {item.quantity !== null && item.quantity > 1 && (
-              <span className="ml-1 text-slate-500">× {item.quantity}</span>
-            )}
-            {/*
-              Rendered only when the provider actually typed the line. Stripe
-              does not, so this is absent on every Stripe row today — and an
-              "add-on" badge inferred from position would be the guess the
-              column exists to avoid.
-            */}
-            {item.itemType !== null && (
-              <span className="ml-1 rounded bg-slate-100 px-1 py-0.5 text-slate-600">
-                {item.itemType.replace("_", " ")}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
+      <div className="mt-1 space-y-1">
+        {hasLines && <LineList items={items} />}
+        {hasEntitlements && <EntitlementList entitlements={entitlements} />}
+        {hasDiscounts && <DiscountList discounts={discounts} />}
+        {missingLines && (
+          <p className="text-xs text-amber-800">
+            {itemCount} lines reported, {items.length} stored
+          </p>
+        )}
+      </div>
     </details>
   );
+}
+
+/**
+ * The agreement's priced lines.
+ *
+ * No total, deliberately. Summing the lines needs each one's price times its
+ * quantity, and a line whose offering did not resolve has no price — so the
+ * sum would silently under-report exactly when something is already wrong.
+ * The provider's own API is where a trustworthy total comes from.
+ */
+function LineList({ items }: { items: AgreementItemRow[] }) {
+  return (
+    <ul className="space-y-0.5">
+      {items.map((item) => (
+        <li key={item.id} className="text-xs text-slate-600">
+          <LinkCell
+            name={item.offeringName}
+            externalId={item.externalOfferingId}
+          />
+          {item.quantity !== null && item.quantity > 1 && (
+            <span className="ml-1 text-slate-500">× {item.quantity}</span>
+          )}
+          {/*
+            Rendered only when the provider actually typed the line. Stripe
+            does not, so this is absent on every Stripe row today — and an
+            "add-on" badge inferred from position would be the guess the column
+            exists to avoid.
+          */}
+          {item.itemType !== null && (
+            <span className="ml-1 rounded bg-slate-100 px-1 py-0.5 text-slate-600">
+              {item.itemType.replace("_", " ")}
+            </span>
+          )}
+          {item.billingModel !== null && (
+            <span className="ml-1 rounded bg-slate-100 px-1 py-0.5 text-slate-600">
+              {item.billingModel.replace("_", " ")}
+            </span>
+          )}
+          {/*
+            Stated values only, and only when the provider stated one. Chargebee
+            puts a unit price on every line whether or not anything was
+            overridden, so this is a fact about the line rather than an
+            assertion that it differs from the catalog.
+          */}
+          {item.unitPriceMinor !== null && (
+            <span
+              className="ml-1 text-slate-500"
+              title="What this line bills per unit for this subscription, in minor units"
+            >
+              {item.unitPriceMinor}/unit
+            </span>
+          )}
+          {item.freeQuantity !== null && item.freeQuantity > 0 && (
+            <span className="ml-1 text-slate-500">
+              incl. {item.freeQuantity} free
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The effective entitlements — what this subscriber actually gets.
+ *
+ * Distinct from the catalog's baseline list and never shown alongside it as a
+ * total, because the two overlap by construction: an inherited value appears in
+ * both. `isEnabled === false` is called out rather than rendered as a value,
+ * because "not included" and "included with a limit of zero" are different
+ * facts and only one of them is a limit.
+ */
+function EntitlementList({
+  entitlements,
+}: {
+  entitlements: AgreementEntitlementRow[];
+}) {
+  return (
+    <ul className="space-y-0.5">
+      {entitlements.map((entitlement) => (
+        <li key={entitlement.id} className="text-xs text-slate-600">
+          <span className="font-medium">
+            {entitlement.featureName ??
+              entitlement.externalFeatureId ??
+              "unlinked feature"}
+          </span>
+          {entitlement.isEnabled === false ? (
+            <span className="ml-1 rounded bg-slate-100 px-1 py-0.5 text-slate-500">
+              not enabled
+            </span>
+          ) : (
+            entitlement.value !== null && (
+              <span className="ml-1">
+                {entitlement.value}
+                {entitlement.valueName !== null && (
+                  <span className="text-slate-400"> ({entitlement.valueName})</span>
+                )}
+              </span>
+            )
+          )}
+          {entitlement.isOverride === true && (
+            <span className="ml-1 rounded bg-sky-100 px-1 py-0.5 text-sky-700">
+              override
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The stated discounts, as a badge each.
+ *
+ * The amount is shown as the provider stated it — a percentage or a minor-unit
+ * figure — and never resolved against a price, for the reason the lines have no
+ * total: the arithmetic would be ours, not the provider's.
+ */
+function DiscountList({ discounts }: { discounts: AgreementDiscountRow[] }) {
+  return (
+    <ul className="space-y-0.5">
+      {discounts.map((discount) => (
+        <li key={discount.id} className="text-xs text-slate-600">
+          <span className="rounded bg-emerald-50 px-1 py-0.5 text-emerald-700">
+            {discountLabel(discount)}
+          </span>
+          {discount.label !== null && (
+            <span className="ml-1">{discount.label}</span>
+          )}
+          {discount.endsAt !== null && (
+            <span className="ml-1 text-slate-500">
+              until {discount.endsAt.toISOString().slice(0, 10)}
+            </span>
+          )}
+          {discount.status !== null && discount.status !== "active" && (
+            <span className="ml-1 text-slate-500">{discount.status}</span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function discountLabel(discount: AgreementDiscountRow): string {
+  if (discount.kind === "percentage" && discount.percentOff !== null) {
+    return `${discount.percentOff}% off`;
+  }
+  if (discount.kind === "fixed_amount" && discount.amountOffMinor !== null) {
+    return `${discount.amountOffMinor} off`;
+  }
+  if (discount.kind === "free_items") return "free items";
+  return discount.kind ?? "discount";
+}
+
+/**
+ * A cadence rendered as words: "monthly", "every 3 months".
+ *
+ * The count is only spelled out when it is more than one, because "every 1
+ * month" reads as a machine talking. An unrecognised unit is shown as-is rather
+ * than hidden, so a new provider value is visible rather than silently blank.
+ */
+function billingPeriodLabel(period: string, count: number | null): string {
+  const every = count === null || count <= 1;
+  if (every) {
+    switch (period) {
+      case "day":
+        return "daily";
+      case "week":
+        return "weekly";
+      case "month":
+        return "monthly";
+      case "year":
+        return "yearly";
+      default:
+        return period;
+    }
+  }
+  return `every ${count} ${period}s`;
 }
 
 /**
@@ -264,10 +458,12 @@ function LinkCell({
 function StatusCell({
   status,
   cancelAtPeriodEnd,
+  cancelAt,
   trialEndsAt,
 }: {
   status: string | null;
   cancelAtPeriodEnd: boolean | null;
+  cancelAt: Date | null;
   trialEndsAt: Date | null;
 }) {
   if (status === null) return <Empty />;
@@ -288,10 +484,21 @@ function StatusCell({
       <span className={`rounded px-1.5 py-0.5 text-xs ${tone}`}>
         {status.replace("_", " ")}
       </span>
-      {cancelAtPeriodEnd === true && (
-        <span className="ml-1 rounded bg-rose-50 px-1.5 py-0.5 text-xs text-rose-700">
-          cancelling
+      {/*
+        The exact date beats the flag when the provider states one: "cancelling"
+        says a cancellation is scheduled, "cancels on 2026-04-01" says when, and
+        a reader deciding whether to act needs the second.
+      */}
+      {cancelAt !== null ? (
+        <span className="ml-1 text-xs text-slate-500">
+          cancels on {cancelAt.toISOString().slice(0, 10)}
         </span>
+      ) : (
+        cancelAtPeriodEnd === true && (
+          <span className="ml-1 rounded bg-rose-50 px-1.5 py-0.5 text-xs text-rose-700">
+            cancelling
+          </span>
+        )
       )}
       {status === "trialing" && trialEndsAt !== null && (
         <span className="ml-1 text-xs text-slate-500">

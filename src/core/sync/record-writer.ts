@@ -38,14 +38,19 @@ import {
   isAgreementStatus,
   isAgreementType,
   isBillingInterval,
+  isBillingModel,
+  isCollectionMethod,
   isCustomerType,
+  isDiscountKind,
+  isDiscountStatus,
+  isSubscriptionBillingPeriod,
   type RecordIssue,
   type TargetObject,
 } from "../types/common";
 import { MAX_CUSTOM_FIELDS, OBJECT_SCHEMAS } from "../object-schema";
 import type { MappedRecord } from "../types/mapping";
 import type { ExternalRefs } from "../types/registry";
-import { writeJsonObject } from "../repositories/json-column";
+import { readJsonObject, writeJsonObject } from "../repositories/json-column";
 // Imported rather than defined here: identity resolution matches on the same
 // addresses this writer validates, and two definitions of "a valid address"
 // would let the writer store something the matcher silently refuses to join on.
@@ -518,6 +523,41 @@ function parseBoolean(value: string | null): boolean | null {
     default:
       return null;
   }
+}
+
+/**
+ * Serialize a handler's provider bag for a `providerMetadata` column.
+ *
+ * The handler maps a JSON *string* — `JSON.stringify` of its provider bag — so
+ * this parses that string back and re-serializes it through the same
+ * `writeJsonObject` and bound `customFields` uses. Parsing rather than storing
+ * the raw string unexamined is what makes a malformed value degrade to `{}`
+ * instead of a row whose JSON column will not parse for any later reader.
+ *
+ * Over-long or over-count values are dropped silently, which the column comment
+ * says: a provider bag is a convenience, not a load-bearing fact, and warning
+ * every run about a chatty `meta_data` would be noise.
+ */
+function parseProviderMetadata(value: string | null): string {
+  return writeJsonObject(boundedCustomFields(readJsonObject(value)));
+}
+
+/**
+ * Read a mapped enum-like field against a union guard.
+ *
+ * Returns the lowercased candidate when it is a member, otherwise `null`, and
+ * reports an unrecognised value through the caller's issue list. Null is the
+ * right landing state either way: every one of these columns is nullable
+ * *because* "the provider did not say" is a real answer, so an unreadable value
+ * arrives at the same place as an omission rather than inventing a default.
+ */
+function parseEnum<T extends string>(
+  raw: string | null,
+  guard: (v: unknown) => v is T
+): T | null {
+  if (raw === null) return null;
+  const candidate = raw.trim().toLowerCase();
+  return guard(candidate) ? candidate : null;
 }
 
 export interface ProductWriteResult extends WriteOutcome {
@@ -1232,6 +1272,9 @@ export async function writeAgreements(
         maxLengthOf("agreement", "currency")
       ),
       customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+      providerMetadata: parseProviderMetadata(
+        mapped.fields["providerMetadata"] ?? null
+      ),
     };
 
     const row = await prisma.agreement.upsert({
@@ -1330,24 +1373,65 @@ export async function writeSubscriptions(
       });
     }
 
+    // Warned and left unset, the policy `agreement.status` gets below: a
+    // subscription whose cadence or collection method we cannot read is still a
+    // subscription, and a wrong value is worse than a missing one. Both are
+    // nullable for exactly this landing state.
+    const rawCollectionMethod = normalize(mapped.fields["collectionMethod"] ?? null);
+    const collectionMethod = parseEnum(
+      rawCollectionMethod,
+      isCollectionMethod
+    );
+    if (rawCollectionMethod !== null && collectionMethod === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "subscription",
+        reason: `Unrecognised collection method '${rawCollectionMethod}'; left unset`,
+        fieldName: "collectionMethod",
+        severity: "warning",
+      });
+    }
+
+    const rawBillingPeriod = normalize(mapped.fields["billingPeriod"] ?? null);
+    const billingPeriod = parseEnum(
+      rawBillingPeriod,
+      isSubscriptionBillingPeriod
+    );
+    if (rawBillingPeriod !== null && billingPeriod === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "subscription",
+        reason: `Unrecognised billing period '${rawBillingPeriod}'; left unset`,
+        fieldName: "billingPeriod",
+        severity: "warning",
+      });
+    }
+
     const data = {
       agreementId,
       currentPeriodStart: parseDate(
         mapped.fields["currentPeriodStart"] ?? null
       ),
       currentPeriodEnd: parseDate(mapped.fields["currentPeriodEnd"] ?? null),
+      trialStartsAt: parseDate(mapped.fields["trialStartsAt"] ?? null),
       trialEndsAt: parseDate(mapped.fields["trialEndsAt"] ?? null),
       canceledAt: parseDate(mapped.fields["canceledAt"] ?? null),
+      cancelAt: parseDate(mapped.fields["cancelAt"] ?? null),
+      nextBillingAt: parseDate(mapped.fields["nextBillingAt"] ?? null),
       cancelAtPeriodEnd: parseBoolean(
         mapped.fields["cancelAtPeriodEnd"] ?? null
       ),
-      collectionMethod: normalize(
-        mapped.fields["collectionMethod"] ?? null,
-        maxLengthOf("subscription", "collectionMethod")
+      billingPeriod,
+      billingPeriodCount: parseInteger(
+        mapped.fields["billingPeriodCount"] ?? null
       ),
+      collectionMethod,
       quantity: parseInteger(mapped.fields["quantity"] ?? null),
       itemCount,
       customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+      providerMetadata: parseProviderMetadata(
+        mapped.fields["providerMetadata"] ?? null
+      ),
     };
 
     await prisma.subscription.upsert({
@@ -1460,11 +1544,25 @@ export async function relinkOrphanedAgreements(
  * that yields nothing can none of them delete a thing. The destructive
  * direction is closed; the harmless one, a stale row surviving an extra run,
  * is left open deliberately.
+ *
+ * A **second, optional** guard arrived with the completeness flag: a caller may
+ * pass `SourcePage.complete` for this object, and a `false` withholds
+ * reconciliation even for agreements that did write a line. Chargebee needs it,
+ * because a list response can omit `subscription_items` altogether — under the
+ * wrote-at-least-one guard alone that would merely leave those agreements
+ * unreconciled, but stating the flag makes the withholding explicit rather than
+ * incidental. `undefined` preserves the historical behaviour exactly.
  */
 export async function writeAgreementItems(
   integrationId: string,
   records: readonly CollectedRecord[],
-  agreementIndex: Map<string, string>
+  agreementIndex: Map<string, string>,
+  /**
+   * `SourcePage.complete` for `agreementItem`, when a caller declared one.
+   * `undefined` — a bare-map caller — leaves the historical guard alone; `false`
+   * withholds reconciliation entirely.
+   */
+  completeFlag?: boolean
 ): Promise<WriteOutcome> {
   const issues: RecordIssue[] = [];
   let written = 0;
@@ -1479,6 +1577,16 @@ export async function writeAgreementItems(
   // run. Only agreements appearing as keys here are reconciled, and only
   // against the ids in their set, which is the guard in its entirety.
   const writtenByAgreement = new Map<string, Set<string>>();
+
+  // How many `plan`-typed lines each agreement carries this run, and the
+  // provider's own id for it so the warning can name the agreement rather than
+  // an internal UUID. Decision 4: the handler nominates the primary line, and
+  // two plan lines is the state that makes "which plan is this subscription"
+  // unanswerable — warned about rather than resolved by an arbitrary pick.
+  const planLinesByAgreement = new Map<
+    string,
+    { externalAgreementId: string | undefined; count: number }
+  >();
 
   for (const { externalSourceId, externalRefs, mapped } of records) {
     if (externalSourceId === undefined || externalSourceId === "") {
@@ -1581,6 +1689,22 @@ export async function writeAgreementItems(
       }
     }
 
+    // Same policy as `itemType`: a line whose billing model we cannot read is
+    // still a line, and null already means "the provider did not say". Stripe
+    // synthesizes one; Chargebee leaves it null because metering lives on the
+    // item price it does not inline.
+    const rawBillingModel = normalize(mapped.fields["billingModel"] ?? null);
+    const billingModel = parseEnum(rawBillingModel, isBillingModel);
+    if (rawBillingModel !== null && billingModel === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreementItem",
+        reason: `Unrecognised billing model '${rawBillingModel}'; left unset`,
+        fieldName: "billingModel",
+        severity: "warning",
+      });
+    }
+
     const data = {
       agreementId,
       offeringId,
@@ -1590,10 +1714,17 @@ export async function writeAgreementItems(
       quantity: parseInteger(mapped.fields["quantity"] ?? null),
       position: parseInteger(mapped.fields["position"] ?? null),
       itemType,
+      billingModel,
+      unitPriceMinor: parseInteger(mapped.fields["unitPriceMinor"] ?? null),
+      freeQuantity: parseInteger(mapped.fields["freeQuantity"] ?? null),
+      billingCycles: parseInteger(mapped.fields["billingCycles"] ?? null),
       // Required rather than decorative: `resolveTargetField` validates
       // `customFields.*` for every object, so without this call a rule
       // writing one saves cleanly in the editor and silently does nothing.
       customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+      providerMetadata: parseProviderMetadata(
+        mapped.fields["providerMetadata"] ?? null
+      ),
     };
 
     const row = await prisma.agreementItem.upsert({
@@ -1609,10 +1740,41 @@ export async function writeAgreementItems(
     seen.add(row.id);
     writtenByAgreement.set(agreementId, seen);
 
+    if (itemType === "plan") {
+      const plans = planLinesByAgreement.get(agreementId) ?? {
+        externalAgreementId,
+        count: 0,
+      };
+      plans.count += 1;
+      planLinesByAgreement.set(agreementId, plans);
+    }
+
     written += 1;
   }
 
-  issues.push(...(await reconcileAgreementItems(integrationId, writtenByAgreement)));
+  for (const plans of planLinesByAgreement.values()) {
+    if (plans.count > 1) {
+      issues.push({
+        sourceRecordId: plans.externalAgreementId ?? "(unknown)",
+        targetObject: "agreementItem",
+        reason: `Agreement has ${plans.count} plan lines; the primary one is ambiguous`,
+        fieldName: "itemType",
+        severity: "warning",
+      });
+    }
+  }
+
+  // The second guard, and it only ever tightens. `completeFlag === false`
+  // means the handler could not promise this run's item list was whole — the
+  // Chargebee case, where a list response may omit `subscription_items`
+  // entirely — and reconciliation is withheld for the object. `undefined`
+  // (a bare-map caller from before the flag existed) leaves the
+  // wrote-at-least-one guard doing the whole job, which is how it always ran.
+  if (completeFlag !== false) {
+    issues.push(
+      ...(await reconcileAgreementItems(integrationId, writtenByAgreement))
+    );
+  }
 
   return { written, issues };
 }
@@ -1726,6 +1888,400 @@ export async function relinkOrphanedAgreementItems(
 }
 
 // ---------------------------------------------------------------------------
+// Agreement entitlements and discounts
+//
+// The two children added last, and the first child writers whose rows can
+// legitimately be *absent* rather than merely unchanged. `writeAgreementItems`
+// could get away with "reconcile any agreement that produced at least one row"
+// because a subscription always has a line; an entitlement list or a discount
+// list can honestly be empty, so "produced nothing" and "the handler never got
+// here" have to be told apart by something other than a record count. That
+// something is `SourcePage.complete` (see `SyncHandler`), and the gate below is
+// where it is honoured.
+// ---------------------------------------------------------------------------
+
+/**
+ * What the writer needs to decide whether it may delete.
+ *
+ * Both halves are required, and they answer different questions.
+ * `mapped` — a mapping rule targets this object, so the handler was asked to
+ * fetch it; an object with no rule never yields records, and "no records"
+ * must not read as "no entitlements". `complete` — the handler declared that
+ * what it yielded is the whole list for every parent it covered, ANDed across
+ * pages by the engine.
+ *
+ * `writtenAgreementIds` bounds *which* parents are considered at all: only the
+ * agreements this run wrote. An agreement from an earlier run that this run
+ * missed keeps every child row it has, whatever the reason for its absence.
+ */
+export interface GatedReconcileContext {
+  readonly writtenAgreementIds: ReadonlySet<string>;
+  readonly mapped: boolean;
+  readonly complete: boolean;
+}
+
+/**
+ * Delete the child rows an agreement no longer has — only when both gates are
+ * open, and never for an agreement this run did not write.
+ *
+ * Shared by entitlements and discounts because the shape is identical and the
+ * alternative is the reconciliation predicate drifting between two copies. The
+ * caller passes the keys written this run; an agreement absent from that map is
+ * treated as having kept nothing, so an agreement that legitimately has zero
+ * rows loses its stale ones.
+ *
+ * Reported rather than silent, on `reconcileAgreementItems`' terms: this is a
+ * place a sync can lose data, so the run has to say what it removed.
+ */
+async function reconcileGatedChildren(
+  integrationId: string,
+  object: "agreementEntitlement" | "agreementDiscount",
+  writtenByAgreement: ReadonlyMap<string, Set<string>>,
+  ctx: GatedReconcileContext
+): Promise<RecordIssue[]> {
+  // Either gate absent means no deletion at all. Defaulting to "do not
+  // reconcile" is the whole safety argument: the worst case is a stale row,
+  // never a vanished live one.
+  if (!ctx.mapped || !ctx.complete) return [];
+
+  const issues: RecordIssue[] = [];
+  const noun = object === "agreementEntitlement" ? "entitlement" : "discount";
+
+  for (const agreementId of ctx.writtenAgreementIds) {
+    const keptIds = writtenByAgreement.get(agreementId) ?? new Set<string>();
+    const where = {
+      integrationId,
+      agreementId,
+      id: { notIn: [...keptIds] },
+    };
+
+    const { count } =
+      object === "agreementEntitlement"
+        ? await prisma.agreementEntitlement.deleteMany({ where })
+        : await prisma.agreementDiscount.deleteMany({ where });
+
+    if (count > 0) {
+      issues.push({
+        sourceRecordId: agreementId,
+        targetObject: object,
+        reason: `${count} ${noun}${count === 1 ? "" : "s"} no longer on this agreement; removed`,
+        severity: "warning",
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Write an agreement's effective entitlements.
+ *
+ * Shaped like `writeEntitlements` — two parents, each resolved through its own
+ * index and warned about independently — with one difference that matters: the
+ * feature half is *optional*, because `catalog` may not be on this integration
+ * at all. The row is kept with `externalFeatureId` retained, exactly as an
+ * unlinkable `Offering.productId` is, and `relinkOrphanedAgreementEntitlements`
+ * repairs it the moment the catalog arrives.
+ *
+ * The agreement half is required and rejecting, on `writeSubscriptions`'
+ * reasoning: the foreign key cascades and a row without its agreement describes
+ * nothing. Both rows come off one source record in one run with agreements
+ * written first, so an unresolvable agreement means that agreement was itself
+ * rejected.
+ */
+export async function writeAgreementEntitlements(
+  integrationId: string,
+  records: readonly CollectedRecord[],
+  agreementIndex: Map<string, string>,
+  reconcile: GatedReconcileContext
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  let written = 0;
+
+  const featureIndex = new Map<string, string>();
+  const writtenByAgreement = new Map<string, Set<string>>();
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "agreementEntitlement",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const externalAgreementId = externalRefs?.agreement;
+    const agreementId = await resolveAssociation(
+      integrationId,
+      "agreement",
+      externalAgreementId,
+      agreementIndex
+    );
+
+    if (agreementId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreementEntitlement",
+        reason:
+          externalAgreementId === undefined
+            ? "Entitlement claims no agreement; nothing to attach it to"
+            : `Agreement '${externalAgreementId}' was not written; entitlement dropped`,
+        fieldName: "associatedAgreementId",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const externalFeatureId = externalRefs?.feature;
+    const featureId = await resolveAssociation(
+      integrationId,
+      "feature",
+      externalFeatureId,
+      featureIndex
+    );
+
+    if (externalFeatureId !== undefined && featureId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreementEntitlement",
+        reason: `Feature '${externalFeatureId}' not found; entitlement saved without a link`,
+        fieldName: "associatedFeatureId",
+        severity: "warning",
+      });
+    }
+
+    const value = normalize(
+      mapped.fields["value"] ?? null,
+      maxLengthOf("agreementEntitlement", "value")
+    );
+
+    // The numeric form, from whichever of the two the mapping set, on
+    // `writeEntitlements`' terms: a non-numeric `value` (Chargebee's boolean
+    // features arrive as "true") is an ordinary entitlement, not a warning.
+    const limitValue = parseInteger(
+      mapped.fields["limitValue"] ?? mapped.fields["value"] ?? null
+    );
+
+    const data = {
+      agreementId,
+      featureId,
+      externalFeatureId: externalFeatureId ?? null,
+      value,
+      valueName: normalize(
+        mapped.fields["valueName"] ?? null,
+        maxLengthOf("agreementEntitlement", "valueName")
+      ),
+      limitValue,
+      isOverride: parseBoolean(mapped.fields["isOverride"] ?? null),
+      isEnabled: parseBoolean(mapped.fields["isEnabled"] ?? null),
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+      providerMetadata: parseProviderMetadata(
+        mapped.fields["providerMetadata"] ?? null
+      ),
+    };
+
+    const row = await prisma.agreementEntitlement.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+      select: { id: true },
+    });
+
+    const seen = writtenByAgreement.get(agreementId) ?? new Set<string>();
+    seen.add(row.id);
+    writtenByAgreement.set(agreementId, seen);
+
+    written += 1;
+  }
+
+  issues.push(
+    ...(await reconcileGatedChildren(
+      integrationId,
+      "agreementEntitlement",
+      writtenByAgreement,
+      reconcile
+    ))
+  );
+
+  return { written, issues };
+}
+
+/**
+ * Write the discounts stated on an agreement.
+ *
+ * One parent, the agreement — required and rejecting, for
+ * `writeAgreementEntitlements`' reason — and no association to resolve beyond
+ * it. Every field is stated verbatim: `kind` and `status` are translated by the
+ * handler into our vocabulary before mapping, so the writer validates them
+ * against the union and warns on anything else, the policy every enum here
+ * gets.
+ */
+export async function writeAgreementDiscounts(
+  integrationId: string,
+  records: readonly CollectedRecord[],
+  agreementIndex: Map<string, string>,
+  reconcile: GatedReconcileContext
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  let written = 0;
+
+  const writtenByAgreement = new Map<string, Set<string>>();
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "agreementDiscount",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const externalAgreementId = externalRefs?.agreement;
+    const agreementId = await resolveAssociation(
+      integrationId,
+      "agreement",
+      externalAgreementId,
+      agreementIndex
+    );
+
+    if (agreementId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreementDiscount",
+        reason:
+          externalAgreementId === undefined
+            ? "Discount claims no agreement; nothing to attach it to"
+            : `Agreement '${externalAgreementId}' was not written; discount dropped`,
+        fieldName: "associatedAgreementId",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const rawKind = normalize(mapped.fields["kind"] ?? null);
+    const kind = parseEnum(rawKind, isDiscountKind);
+    if (rawKind !== null && kind === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreementDiscount",
+        reason: `Unrecognised discount kind '${rawKind}'; left unset`,
+        fieldName: "kind",
+        severity: "warning",
+      });
+    }
+
+    const rawStatus = normalize(mapped.fields["status"] ?? null);
+    const status = parseEnum(rawStatus, isDiscountStatus);
+    if (rawStatus !== null && status === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "agreementDiscount",
+        reason: `Unrecognised discount status '${rawStatus}'; left unset`,
+        fieldName: "status",
+        severity: "warning",
+      });
+    }
+
+    const data = {
+      agreementId,
+      externalCouponId: normalize(
+        mapped.fields["externalCouponId"] ?? null,
+        maxLengthOf("agreementDiscount", "externalCouponId")
+      ),
+      label: normalize(
+        mapped.fields["label"] ?? null,
+        maxLengthOf("agreementDiscount", "label")
+      ),
+      kind,
+      percentOff: parseInteger(mapped.fields["percentOff"] ?? null),
+      amountOffMinor: parseInteger(mapped.fields["amountOffMinor"] ?? null),
+      status,
+      startsAt: parseDate(mapped.fields["startsAt"] ?? null),
+      endsAt: parseDate(mapped.fields["endsAt"] ?? null),
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+      providerMetadata: parseProviderMetadata(
+        mapped.fields["providerMetadata"] ?? null
+      ),
+    };
+
+    const row = await prisma.agreementDiscount.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+      select: { id: true },
+    });
+
+    const seen = writtenByAgreement.get(agreementId) ?? new Set<string>();
+    seen.add(row.id);
+    writtenByAgreement.set(agreementId, seen);
+
+    written += 1;
+  }
+
+  issues.push(
+    ...(await reconcileGatedChildren(
+      integrationId,
+      "agreementDiscount",
+      writtenByAgreement,
+      reconcile
+    ))
+  );
+
+  return { written, issues };
+}
+
+/**
+ * Retry the feature links agreement entitlements were written without.
+ *
+ * One edge, unlike the agreement-item counterpart, because the only nullable
+ * association here is the feature; the agreement edge is required and cannot be
+ * an orphan. Worth having where `writeEntitlements` needs none: that writer's
+ * two parents both come from `catalog`, written earlier in the same run, but an
+ * agreement entitlement's feature belongs to a different function that may not
+ * be on the integration yet.
+ */
+export async function relinkOrphanedAgreementEntitlements(
+  integrationId: string
+): Promise<number> {
+  const orphans = await prisma.agreementEntitlement.findMany({
+    where: {
+      integrationId,
+      featureId: null,
+      externalFeatureId: { not: null },
+    },
+    select: { id: true, externalFeatureId: true },
+  });
+
+  let relinked = 0;
+  for (const orphan of orphans) {
+    if (orphan.externalFeatureId === null) continue;
+
+    const feature = await findByExternalId(
+      integrationId,
+      "feature",
+      orphan.externalFeatureId
+    );
+
+    if (feature !== null) {
+      await prisma.agreementEntitlement.update({
+        where: { id: orphan.id },
+        data: { featureId: feature.id },
+      });
+      relinked += 1;
+    }
+  }
+  return relinked;
+}
+
+// ---------------------------------------------------------------------------
 // Per-function dispatch
 // ---------------------------------------------------------------------------
 
@@ -1737,6 +2293,23 @@ export interface FunctionWriteResult {
    */
   counts: Partial<Record<TargetObject, number>>;
   issues: RecordIssue[];
+}
+
+/**
+ * What a function's writers need beyond the records themselves.
+ *
+ * An options object rather than more positional parameters, because the last
+ * two travel together and are meaningless apart: both exist only to decide
+ * whether a writer may delete. Callers that predate the completeness signal pass
+ * the bare collected map instead — see the overload — and get the old
+ * upsert-only behaviour for the gated objects.
+ */
+export interface FunctionWriteInput {
+  readonly collected: ReadonlyMap<TargetObject, CollectedRecord[]>;
+  /** Objects a mapping rule targets this run. Absent objects are never reconciled. */
+  readonly mappedObjects: ReadonlySet<TargetObject>;
+  /** `SourcePage.complete`, ANDed per object. Absent means "never declared". */
+  readonly complete: ReadonlyMap<TargetObject, boolean>;
 }
 
 /**
@@ -1762,8 +2335,34 @@ export interface FunctionWriteResult {
 export async function writeRecordsForFunction(
   integrationId: string,
   functionName: string,
+  input: FunctionWriteInput
+): Promise<FunctionWriteResult>;
+export async function writeRecordsForFunction(
+  integrationId: string,
+  functionName: string,
   collected: ReadonlyMap<TargetObject, CollectedRecord[]>
+): Promise<FunctionWriteResult>;
+export async function writeRecordsForFunction(
+  integrationId: string,
+  functionName: string,
+  input:
+    | FunctionWriteInput
+    | ReadonlyMap<TargetObject, CollectedRecord[]>
 ): Promise<FunctionWriteResult> {
+  // A bare map is the pre-completeness call shape. It cannot express "this
+  // object's list is complete", so the gated writers reconcile nothing — the
+  // safe default — while the item writer keeps the guard it has always had.
+  const isOptions = "collected" in input && !(input instanceof Map);
+  const collected = isOptions
+    ? (input as FunctionWriteInput).collected
+    : (input as ReadonlyMap<TargetObject, CollectedRecord[]>);
+  const complete = isOptions
+    ? (input as FunctionWriteInput).complete
+    : undefined;
+  const mappedObjects = isOptions
+    ? (input as FunctionWriteInput).mappedObjects
+    : undefined;
+
   const at = (object: TargetObject): readonly CollectedRecord[] =>
     collected.get(object) ?? [];
 
@@ -1829,6 +2428,13 @@ export async function writeRecordsForFunction(
       // behaves this way for Stripe, whose contacts are derived from its
       // customers, so the run report is consistent about it.
       const agreements = await writeAgreements(integrationId, at("agreement"));
+
+      // Captured *now*, before the child writers run. They share the index and
+      // cache database lookups into it, so by the time the last one finishes it
+      // holds agreements this run never wrote. Reconciliation must only ever
+      // consider the ones it did, so the set is taken while it still means that.
+      const writtenAgreementIds = new Set(agreements.externalToInternal.values());
+
       // Both children resolve against the *same* agreement index, and each is
       // passed the map rather than a copy so the items benefit from any
       // database lookups the subscriptions pass already cached.
@@ -1840,18 +2446,54 @@ export async function writeRecordsForFunction(
       const items = await writeAgreementItems(
         integrationId,
         at("agreementItem"),
-        agreements.externalToInternal
+        agreements.externalToInternal,
+        // The item writer keeps its own "wrote at least one line" guard, and
+        // additionally honours the completeness flag when a caller supplies
+        // one. Absent (a bare-map caller) leaves that guard alone.
+        complete?.get("agreementItem")
       );
+
+      const entitlementReconcile: GatedReconcileContext = {
+        writtenAgreementIds,
+        mapped:
+          mappedObjects === undefined ||
+          mappedObjects.has("agreementEntitlement"),
+        complete: complete?.get("agreementEntitlement") === true,
+      };
+      const discountReconcile: GatedReconcileContext = {
+        writtenAgreementIds,
+        mapped:
+          mappedObjects === undefined || mappedObjects.has("agreementDiscount"),
+        complete: complete?.get("agreementDiscount") === true,
+      };
+
+      const entitlements = await writeAgreementEntitlements(
+        integrationId,
+        at("agreementEntitlement"),
+        agreements.externalToInternal,
+        entitlementReconcile
+      );
+      const discounts = await writeAgreementDiscounts(
+        integrationId,
+        at("agreementDiscount"),
+        agreements.externalToInternal,
+        discountReconcile
+      );
+
       return {
         counts: {
           agreement: agreements.written,
           subscription: subscriptions.written,
           agreementItem: items.written,
+          agreementEntitlement: entitlements.written,
+          agreementDiscount: discounts.written,
         },
         issues: [
           ...agreements.issues,
           ...subscriptions.issues,
           ...items.issues,
+          ...entitlements.issues,
+          ...discounts.issues,
         ],
       };
     }
@@ -1883,11 +2525,14 @@ export async function relinkOrphansForFunction(
         (await relinkOrphanedPrices(integrationId))
       );
     case "agreement":
-      // Summed across both tables. Each answers "how many rows changed", and
-      // the caller wants the total for the function rather than a breakdown.
+      // Summed across the tables that have a nullable edge. Each answers "how
+      // many rows changed", and the caller wants the total for the function
+      // rather than a breakdown. Subscriptions have none, their agreement FK
+      // being required; discounts likewise, having only that one parent.
       return (
         (await relinkOrphanedAgreements(integrationId)) +
-        (await relinkOrphanedAgreementItems(integrationId))
+        (await relinkOrphanedAgreementItems(integrationId)) +
+        (await relinkOrphanedAgreementEntitlements(integrationId))
       );
     default:
       return 0;

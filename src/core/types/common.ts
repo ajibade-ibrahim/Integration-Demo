@@ -84,6 +84,14 @@ export const TARGET_OBJECTS = [
   // where one offering link almost suffices. Naming this `subscriptionItem`
   // would name the object after one provider's case rather than what it is.
   "agreementItem",
+  // The *effective* entitlement one agreement confers — Chargebee's
+  // `subscription_entitlements`. Distinct from `entitlement`, which is the
+  // catalog baseline ("the Pro offering includes 50 seats"): this is what the
+  // subscriber actually gets, overrides already folded in. The two overlap by
+  // construction and must never be summed.
+  "agreementEntitlement",
+  // A discount stated on an agreement. Stated values only — no computed net.
+  "agreementDiscount",
 ] as const;
 
 export type TargetObject = (typeof TARGET_OBJECTS)[number];
@@ -166,6 +174,12 @@ export function isAgreementType(v: unknown): v is AgreementType {
  *
  * `expired` and `canceled` are both terminal but are not the same fact: a
  * contract that ran its term to the end is not a customer who left.
+ *
+ * `scheduled` is the fourth distinction and the one Chargebee and Stigg forced:
+ * an agreement that is agreed but does not start yet — Chargebee `future`,
+ * Stigg `NOT_STARTED`. `draft` cannot hold it, because `draft` means *never
+ * agreed* (which is what Stripe's `incomplete` maps to), and putting a signed
+ * future subscription there would say the opposite of the truth.
  */
 export const AGREEMENT_STATUSES = [
   "draft",
@@ -175,6 +189,7 @@ export const AGREEMENT_STATUSES = [
   "paused",
   "canceled",
   "expired",
+  "scheduled",
 ] as const;
 
 export type AgreementStatus = (typeof AGREEMENT_STATUSES)[number];
@@ -200,13 +215,24 @@ export function isAgreementStatus(v: unknown): v is AgreementStatus {
  * Chargebee and Stigg both type their items first-class, which is what this
  * union is waiting for.
  *
- * The three members are subscription-shaped, and knowingly so: they are the
- * vocabulary of the only provider with a handler today. A contract line is
- * none of the three and will stay null until an order-form provider arrives
- * with a word of its own — at which point adding a member here is a line,
- * exactly as `AGREEMENT_TYPES` argues for its own unbuilt three.
+ * `charge` is the fourth member, and the first that is not subscription-shaped:
+ * it is Chargebee's third line type, a one-off amount on the same subscription.
+ * It sits here rather than in a separate union because it answers the same
+ * question — what kind of line is this — and a reader that handles `add_on`
+ * already knows how to skip a `charge`.
+ *
+ * The three subscription-shaped members are knowingly not the whole vocabulary:
+ * a contract line is none of the four and will stay null until an order-form
+ * provider arrives with a word of its own — at which point adding a member
+ * here is a line, exactly as `AGREEMENT_TYPES` argues for its own unbuilt
+ * three.
  */
-export const AGREEMENT_ITEM_TYPES = ["plan", "add_on", "usage"] as const;
+export const AGREEMENT_ITEM_TYPES = [
+  "plan",
+  "add_on",
+  "usage",
+  "charge",
+] as const;
 
 export type AgreementItemType = (typeof AGREEMENT_ITEM_TYPES)[number];
 
@@ -214,6 +240,137 @@ export function isAgreementItemType(v: unknown): v is AgreementItemType {
   return (
     typeof v === "string" &&
     (AGREEMENT_ITEM_TYPES as readonly string[]).includes(v)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Subscription billing period
+// ---------------------------------------------------------------------------
+
+/**
+ * How often a subscription's primary line recurs.
+ *
+ * Deliberately not `BILLING_INTERVALS`, which includes `one_time`: a
+ * subscription's cadence is never one-time, so a union that can say so is
+ * wider than the fact it describes. A provider that reported a one-time
+ * primary line would be reporting something that is not a subscription, and
+ * the handler declines rather than fitting it to this list.
+ */
+export const SUBSCRIPTION_BILLING_PERIODS = [
+  "day",
+  "week",
+  "month",
+  "year",
+] as const;
+
+export type SubscriptionBillingPeriod =
+  (typeof SUBSCRIPTION_BILLING_PERIODS)[number];
+
+export function isSubscriptionBillingPeriod(
+  v: unknown
+): v is SubscriptionBillingPeriod {
+  return (
+    typeof v === "string" &&
+    (SUBSCRIPTION_BILLING_PERIODS as readonly string[]).includes(v)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Billing model
+// ---------------------------------------------------------------------------
+
+/**
+ * How a line is priced, in our vocabulary rather than any provider's.
+ *
+ * Stripe states it across two fields (`billing_scheme` and `recurring.usage_type`)
+ * and Chargebee keeps it on the item price as `pricing_model`; the handler is
+ * the only place either spelling should appear. `flat_fee` and `per_unit` are
+ * distinct because a flat line bills the same regardless of quantity, which is
+ * a different commitment from a per-seat one.
+ */
+export const BILLING_MODELS = [
+  "flat_fee",
+  "per_unit",
+  "tiered",
+  "usage_based",
+  "one_time",
+] as const;
+
+export type BillingModel = (typeof BILLING_MODELS)[number];
+
+export function isBillingModel(v: unknown): v is BillingModel {
+  return (
+    typeof v === "string" && (BILLING_MODELS as readonly string[]).includes(v)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Discount
+// ---------------------------------------------------------------------------
+
+/**
+ * What kind of discount a provider stated.
+ *
+ * `free_items` is not a monetary discount at all but the same slot in the
+ * provider's vocabulary (Chargebee's `offer_quantity`-style grants); keeping it
+ * here means a handler can map it instead of dropping it.
+ */
+export const DISCOUNT_KINDS = [
+  "percentage",
+  "fixed_amount",
+  "free_items",
+] as const;
+
+export type DiscountKind = (typeof DISCOUNT_KINDS)[number];
+
+export function isDiscountKind(v: unknown): v is DiscountKind {
+  return (
+    typeof v === "string" && (DISCOUNT_KINDS as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * Where a stated discount stands.
+ *
+ * `removed` is a lifecycle state rather than an absence: the provider applied a
+ * discount and later took it off, which is different from never having had one
+ * and is worth keeping for the same reason `canceled` is.
+ */
+export const DISCOUNT_STATUSES = [
+  "active",
+  "expired",
+  "removed",
+  "scheduled",
+] as const;
+
+export type DiscountStatus = (typeof DISCOUNT_STATUSES)[number];
+
+export function isDiscountStatus(v: unknown): v is DiscountStatus {
+  return (
+    typeof v === "string" && (DISCOUNT_STATUSES as readonly string[]).includes(v)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Collection method
+// ---------------------------------------------------------------------------
+
+/**
+ * How a subscription is paid for, in our vocabulary.
+ *
+ * Three words for what providers state in more: Stripe has
+ * `charge_automatically`/`send_invoice`, Chargebee an `auto_collection` boolean,
+ * and Stigg `payment_collection` including `NOT_REQUIRED`. `none` exists so
+ * that last case is expressible — "no collection happens" is a fact, not a
+ * missing value, and folding it into null would lose it.
+ */
+export const COLLECTION_METHODS = ["automatic", "manual", "none"] as const;
+
+export type CollectionMethod = (typeof COLLECTION_METHODS)[number];
+
+export function isCollectionMethod(v: unknown): v is CollectionMethod {
+  return (
+    typeof v === "string" && (COLLECTION_METHODS as readonly string[]).includes(v)
   );
 }
 

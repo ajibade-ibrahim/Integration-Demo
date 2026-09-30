@@ -43,8 +43,49 @@ export interface AgreementItemRow {
    */
   externalPriceId: string | null;
   quantity: number | null;
-  /** plan | add_on | usage, or null where the provider did not say. */
+  /** plan | add_on | usage | charge, or null where the provider did not say. */
   itemType: string | null;
+  /** flat_fee | per_unit | tiered | usage_based | one_time, or null. */
+  billingModel: string | null;
+  /**
+   * What the provider says this line bills per unit *for this subscription*,
+   * in minor units. Null for Stripe, which states no such price on a line.
+   */
+  unitPriceMinor: number | null;
+  /** Units included at no charge — Chargebee's `free_quantity`. */
+  freeQuantity: number | null;
+}
+
+/**
+ * One effective entitlement under an agreement, as the page renders it.
+ *
+ * Distinct from a catalog `Entitlement` — this is what *this subscriber* gets,
+ * inherited values and overrides already folded together — so the page reads
+ * one or the other and never sums them. `featureName` is joined from `Feature`
+ * because the payload's own name is deliberately not denormalized; when the
+ * catalog feature is not linked, `externalFeatureId` is the fallback label.
+ */
+export interface AgreementEntitlementRow {
+  id: string;
+  featureName: string | null;
+  externalFeatureId: string | null;
+  value: string | null;
+  valueName: string | null;
+  limitValue: number | null;
+  isOverride: boolean | null;
+  isEnabled: boolean | null;
+}
+
+/** One discount stated on an agreement. Stated values only — no computed net. */
+export interface AgreementDiscountRow {
+  id: string;
+  label: string | null;
+  kind: string | null;
+  percentOff: number | null;
+  amountOffMinor: number | null;
+  status: string | null;
+  startsAt: Date | null;
+  endsAt: Date | null;
 }
 
 export interface AgreementRow {
@@ -69,6 +110,22 @@ export interface AgreementRow {
   /** Joined from the detail table; null for an agreement of another type. */
   currentPeriodEnd: Date | null;
   trialEndsAt: Date | null;
+  trialStartsAt: Date | null;
+  /**
+   * The moment the provider says the subscription stops. Distinct from
+   * `cancelAtPeriodEnd`, which is only whether it will, and from `endDate`,
+   * which is the shared node's view of when it did.
+   */
+  cancelAt: Date | null;
+  /**
+   * The next scheduled renewal. The date the page sorts on, falling back to
+   * `currentPeriodEnd`; Stripe never states it, so most Stripe rows rely on
+   * the fallback.
+   */
+  nextBillingAt: Date | null;
+  /** The primary line's cadence — day | week | month | year | null. */
+  billingPeriod: string | null;
+  billingPeriodCount: number | null;
   cancelAtPeriodEnd: boolean | null;
   quantity: number | null;
   /**
@@ -82,7 +139,14 @@ export interface AgreementRow {
   /** Every priced line, in the provider's own order. */
   items: AgreementItemRow[];
 
+  /** The effective entitlements, with the catalog feature joined where it linked. */
+  entitlements: AgreementEntitlementRow[];
+
+  /** The discounts the provider stated on the agreement. */
+  discounts: AgreementDiscountRow[];
+
   customFields: Record<string, string>;
+  providerMetadata: Record<string, string>;
   integrationLabel: string;
 }
 
@@ -111,53 +175,127 @@ export interface AgreementPage {
 /** Statuses that mean the agreement is currently in force. */
 const LIVE_STATUSES = ["trialing", "active", "past_due"];
 
+/**
+ * The includes every agreement read shares.
+ *
+ * Hoisted because the ordering split below needs two `findMany` calls over the
+ * same shape, and two copies of an eleven-line include is two places for them
+ * to drift.
+ */
+const AGREEMENT_INCLUDE = {
+  integration: { select: { instanceLabel: true } },
+  customer: { select: { name: true } },
+  offering: { select: { name: true } },
+  subscription: true,
+  // Ordered by the provider's own sequence rather than by name or price,
+  // because the order a subscription lists its lines in is information — the
+  // base plan first, the things added to it after. Nulls last, which is where
+  // Postgres puts them ascending.
+  items: {
+    orderBy: { position: "asc" as const },
+    select: {
+      id: true,
+      externalOfferingId: true,
+      externalPriceId: true,
+      quantity: true,
+      itemType: true,
+      billingModel: true,
+      unitPriceMinor: true,
+      freeQuantity: true,
+      offering: { select: { name: true } },
+      // Read for the agreement-level price below, which is the *sold* price
+      // rather than the offering's first one.
+      price: {
+        select: {
+          amountMinor: true,
+          currency: true,
+          interval: true,
+          intervalCount: true,
+        },
+      },
+    },
+  },
+  entitlements: {
+    orderBy: { id: "asc" as const },
+    select: {
+      id: true,
+      externalFeatureId: true,
+      value: true,
+      valueName: true,
+      limitValue: true,
+      isOverride: true,
+      isEnabled: true,
+      feature: { select: { name: true } },
+    },
+  },
+  discounts: {
+    orderBy: { id: "asc" as const },
+    select: {
+      id: true,
+      label: true,
+      kind: true,
+      percentOff: true,
+      amountOffMinor: true,
+      status: true,
+      startsAt: true,
+      endsAt: true,
+    },
+  },
+} as const;
+
+/**
+ * The date a row renews on: `nextBillingAt` when the provider stated it,
+ * otherwise `currentPeriodEnd`. Null when neither is present.
+ */
+function renewalAt(row: {
+  subscription: {
+    nextBillingAt: Date | null;
+    currentPeriodEnd: Date | null;
+  } | null;
+}): Date | null {
+  return (
+    row.subscription?.nextBillingAt ?? row.subscription?.currentPeriodEnd ?? null
+  );
+}
+
 export async function loadAgreements(
   userId: string,
   take = 200
 ): Promise<AgreementPage> {
   const scope = { integration: { userId } };
 
-  const [agreements, total, active, unlinkedCustomers, unlinkedOfferings, multiItem] =
+  // Two queries rather than one `orderBy`, because the sort key is
+  // `COALESCE(nextBillingAt, currentPeriodEnd)` and Prisma has no expression
+  // ordering. Splitting on whether `nextBillingAt` is present lets each half
+  // be ordered by the column that is actually populated — the fallback is
+  // exact rather than "nextBillingAt first, and rows without one last" — and
+  // taking `take` from each before merging is enough, because no row outside a
+  // half's own top-`take` can be inside the merged top-`take`.
+  const [withNext, withoutNext, total, active, unlinkedCustomers, unlinkedOfferings, multiItem] =
     await Promise.all([
       prisma.agreement.findMany({
-        where: scope,
-        // Soonest renewal first among the live ones, because "what is coming
-        // up" is the question this page exists to answer. Agreements with no
-        // period sort last rather than first — Postgres puts NULLs last on an
-        // ascending sort, which is the order we want here.
-        orderBy: [{ subscription: { currentPeriodEnd: "asc" } }, { name: "asc" }],
+        where: { ...scope, subscription: { nextBillingAt: { not: null } } },
+        orderBy: [
+          { subscription: { nextBillingAt: "asc" } },
+          { name: "asc" },
+        ],
         take,
-        include: {
-          integration: { select: { instanceLabel: true } },
-          customer: { select: { name: true } },
-          offering: { select: { name: true } },
-          subscription: true,
-          // Ordered by the provider's own sequence rather than by name or
-          // price, because the order a subscription lists its lines in is
-          // information — the base plan first, the things added to it after.
-          // Nulls last, which is where Postgres puts them ascending.
-          items: {
-            orderBy: { position: "asc" },
-            select: {
-              id: true,
-              externalOfferingId: true,
-              externalPriceId: true,
-              quantity: true,
-              itemType: true,
-              offering: { select: { name: true } },
-              // Read for the agreement-level price below, which is the *sold*
-              // price rather than the offering's first one.
-              price: {
-                select: {
-                  amountMinor: true,
-                  currency: true,
-                  interval: true,
-                  intervalCount: true,
-                },
-              },
-            },
-          },
+        include: AGREEMENT_INCLUDE,
+      }),
+      prisma.agreement.findMany({
+        where: {
+          ...scope,
+          OR: [{ subscription: null }, { subscription: { nextBillingAt: null } }],
         },
+        // `currentPeriodEnd` is the fallback key, so it orders this half. Rows
+        // with neither date still sort by name last, via the primary key,
+        // which is the "nulls last" the page wants.
+        orderBy: [
+          { subscription: { currentPeriodEnd: "asc" } },
+          { name: "asc" },
+        ],
+        take,
+        include: AGREEMENT_INCLUDE,
       }),
       prisma.agreement.count({ where: scope }),
       prisma.agreement.count({
@@ -173,6 +311,22 @@ export async function loadAgreements(
         where: { integration: { userId }, itemCount: { gt: 1 } },
       }),
     ]);
+
+  const agreements = [...withNext, ...withoutNext]
+    .sort((a, b) => {
+      const left = renewalAt(a);
+      const right = renewalAt(b);
+      if (left !== null && right !== null) {
+        const delta = left.getTime() - right.getTime();
+        if (delta !== 0) return delta;
+      } else if (left !== null) {
+        return -1;
+      } else if (right !== null) {
+        return 1;
+      }
+      return a.name.localeCompare(b.name);
+    })
+    .slice(0, take);
 
   return {
     agreements: agreements.map((row) => {
@@ -211,23 +365,54 @@ export async function loadAgreements(
                 intervalCount: primaryPrice.intervalCount,
               }),
 
-      currentPeriodEnd: row.subscription?.currentPeriodEnd ?? null,
-      trialEndsAt: row.subscription?.trialEndsAt ?? null,
-      cancelAtPeriodEnd: row.subscription?.cancelAtPeriodEnd ?? null,
-      quantity: row.subscription?.quantity ?? null,
-      itemCount: row.subscription?.itemCount ?? null,
+        currentPeriodEnd: row.subscription?.currentPeriodEnd ?? null,
+        trialEndsAt: row.subscription?.trialEndsAt ?? null,
+        trialStartsAt: row.subscription?.trialStartsAt ?? null,
+        cancelAt: row.subscription?.cancelAt ?? null,
+        nextBillingAt: row.subscription?.nextBillingAt ?? null,
+        billingPeriod: row.subscription?.billingPeriod ?? null,
+        billingPeriodCount: row.subscription?.billingPeriodCount ?? null,
+        cancelAtPeriodEnd: row.subscription?.cancelAtPeriodEnd ?? null,
+        quantity: row.subscription?.quantity ?? null,
+        itemCount: row.subscription?.itemCount ?? null,
 
-      items: row.items.map((item) => ({
-        id: item.id,
-        offeringName: item.offering?.name ?? null,
-        externalOfferingId: item.externalOfferingId,
-        externalPriceId: item.externalPriceId,
-        quantity: item.quantity,
-        itemType: item.itemType,
-      })),
+        items: row.items.map((item) => ({
+          id: item.id,
+          offeringName: item.offering?.name ?? null,
+          externalOfferingId: item.externalOfferingId,
+          externalPriceId: item.externalPriceId,
+          quantity: item.quantity,
+          itemType: item.itemType,
+          billingModel: item.billingModel,
+          unitPriceMinor: item.unitPriceMinor,
+          freeQuantity: item.freeQuantity,
+        })),
 
-      customFields: readJsonObject(row.customFields),
-      integrationLabel: row.integration.instanceLabel,
+        entitlements: row.entitlements.map((entitlement) => ({
+          id: entitlement.id,
+          featureName: entitlement.feature?.name ?? null,
+          externalFeatureId: entitlement.externalFeatureId,
+          value: entitlement.value,
+          valueName: entitlement.valueName,
+          limitValue: entitlement.limitValue,
+          isOverride: entitlement.isOverride,
+          isEnabled: entitlement.isEnabled,
+        })),
+
+        discounts: row.discounts.map((discount) => ({
+          id: discount.id,
+          label: discount.label,
+          kind: discount.kind,
+          percentOff: discount.percentOff,
+          amountOffMinor: discount.amountOffMinor,
+          status: discount.status,
+          startsAt: discount.startsAt,
+          endsAt: discount.endsAt,
+        })),
+
+        customFields: readJsonObject(row.customFields),
+        providerMetadata: readJsonObject(row.providerMetadata),
+        integrationLabel: row.integration.instanceLabel,
       };
     }),
     totals: {

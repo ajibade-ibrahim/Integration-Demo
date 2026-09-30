@@ -225,6 +225,13 @@ export const stripeFieldDiscovery: FieldDiscovery = {
       // `items.data[].metadata` rather than from the subscription's own.
       case "agreementItem":
         return withItemMetadataKeys(session, STRIPE_AGREEMENT_ITEM_FIELDS);
+      // Stripe has no source for either of these: it states no per-subscription
+      // entitlement list and no discount attachment on a subscription. An empty
+      // list is the honest answer; offering fields here would be the
+      // "customer fields for everything" bug this switch was written to stop.
+      case "agreementEntitlement":
+      case "agreementDiscount":
+        return [];
     }
   },
 };

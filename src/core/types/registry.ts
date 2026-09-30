@@ -235,6 +235,26 @@ export interface HandlerContext {
 export interface SourcePage {
   readonly object: TargetObject;
   readonly records: readonly RawRecord[];
+  /**
+   * Whether `records` is the complete list for **every** parent the handler
+   * yielded for this object in this run. Defaults to false, and the default is
+   * the safe direction: a writer only deletes rows for an object whose list is
+   * declared complete, so an omitted flag means "stale rows", never "gone
+   * rows".
+   *
+   * Why this cannot live inside `records`: the writer reads
+   * `collected.get(object) ?? []`, which makes "the handler yielded an empty
+   * list" and "the handler never yielded this object" the same value. They are
+   * not the same fact — the first licenses reconciliation, the second does not
+   * — so the flag travels beside the map rather than in it.
+   *
+   * Aggregated across an object's pages as a logical AND: one page that omits
+   * it withholds the guarantee for the whole object. That is what lets a
+   * per-parent fan-out (Chargebee's per-subscription entitlements) withhold the
+   * guarantee for one subscription — a 404 on a site feature, say — without the
+   * other subscriptions' rows being deleted.
+   */
+  readonly complete?: boolean;
 }
 
 /**
@@ -255,25 +275,37 @@ export type ExternalRefs = Readonly<Partial<Record<TargetObject, string>>>;
  * **One obligation, and it is the only place in this interface where an
  * omission destroys data rather than merely losing it.**
  *
- * > A handler that yields any `agreementItem` for an agreement must yield
- * > **all** of that agreement's items, or fail. A partial list licenses
- * > `writeAgreementItems` to delete the remainder.
+ * > A handler that yields any `agreementItem`, `agreementEntitlement` or
+ * > `agreementDiscount` for an agreement must yield **all** of that
+ * > agreement's rows of that object, or fail. A partial list licenses the
+ * > corresponding writer to delete the remainder.
  *
  * Every other object here is written by upsert, so a record a handler fails to
  * yield simply keeps its previous value — the known gap that lets a detached
- * `Feature` attachment linger. Agreement items are the exception: they are
- * reconciled, because a removed add-on that lingers makes the line list wrong
- * in a way nothing else on the row contradicts. That trade only holds while
- * "the handler yielded every line" is true, so it is stated here as a contract
- * rather than left as a property of whichever provider happened to be first.
+ * `Feature` attachment linger. The three child objects above are the exception:
+ * they are reconciled, because a removed add-on, a withdrawn entitlement or a
+ * discount the customer no longer has that lingers makes the row's own list
+ * wrong in a way nothing else on the row contradicts. That trade only holds
+ * while "the handler yielded every row" is true, so it is stated here as a
+ * contract rather than left as a property of whichever provider happened to be
+ * first.
+ *
+ * Because the three child objects can legitimately be empty for a given
+ * agreement, "yielded every row" is not observable from record counts. A
+ * handler therefore *states* it with `SourcePage.complete`, and may only set
+ * that flag when it honours the obligation above — an incomplete fan-out must
+ * fail the run, exactly as Stripe's item paging does. Setting it while yielding
+ * a partial list is the one bug this flag cannot catch for the handler.
  *
  * Meeting it is provider-specific work. Stripe inlines only the first ten
  * subscription items and sets `items.has_more` beyond that, so its handler
- * pages `/v1/subscription_items` to finish the list. A provider whose items
- * are a separate association — Salesforce `ContractLineItem`, HubSpot deal
- * line items — must page that association to exhaustion. Failing the run is
- * always the correct answer to a list that cannot be completed: a failed sync
- * costs a retry, and a successful one that deleted live lines costs the data.
+ * pages `/v1/subscription_items` to finish the list. Chargebee inlines its
+ * lines fully but pages entitlements per subscription; both must reach
+ * exhaustion before they may set `complete`. A provider whose items are a
+ * separate association — Salesforce `ContractLineItem`, HubSpot deal line
+ * items — must page that association to exhaustion. Failing the run is always
+ * the correct answer to a list that cannot be completed: a failed sync costs a
+ * retry, and a successful one that deleted live lines costs the data.
  */
 export interface SyncHandler {
   fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage>;

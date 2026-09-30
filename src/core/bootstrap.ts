@@ -64,6 +64,7 @@ import {
 } from "./providers/stripe/provider";
 import {
   chargebeeProvider,
+  CHARGEBEE_AGREEMENT_SCOPES,
   CHARGEBEE_CATALOG_SCOPES,
   CHARGEBEE_IDENTITY_SCOPES,
   CHARGEBEE_PROVIDER_NAME,
@@ -76,6 +77,7 @@ import { stripeAgreementHandler } from "./providers/stripe/agreement-handler";
 import { stripeCatalogHandler } from "./providers/stripe/catalog-handler";
 import { stripeFieldDiscovery } from "./providers/stripe/discovery";
 import { chargebeeCatalogHandler } from "./providers/chargebee/catalog-handler";
+import { chargebeeAgreementHandler } from "./providers/chargebee/agreement-handler";
 import { chargebeeIdentityHandler } from "./providers/chargebee/identity-handler";
 import { chargebeeFieldDiscovery } from "./providers/chargebee/discovery";
 import { mockIdentityHandler } from "./providers/mock/identity-handler";
@@ -205,6 +207,12 @@ export function bootstrap(): void {
   // lines. Only Stripe has a handler today, so only subscriptions produce
   // them; the table is shaped for the other three regardless.
   //
+  // `agreementEntitlement` and `agreementDiscount` are the fourth and fifth:
+  // what this subscriber actually gets and what was taken off, both off the
+  // same subscription record. They are the first agreement objects that can
+  // legitimately be empty per subscription, which is why the writer's
+  // completeness signal exists.
+  //
   // The rest of the twelve-object zoom-in (terms, amendments, acceptance,
   // renewals, concessions) is still additive and still unbuilt — modelling
   // amendments before anything reads them would be the opposite mistake.
@@ -213,6 +221,7 @@ export function bootstrap(): void {
     [SALESFORCE_PROVIDER_NAME, SALESFORCE_AGREEMENT_SCOPES],
     [METRIFOX_PROVIDER_NAME, METRIFOX_AGREEMENT_SCOPES],
     [STRIPE_PROVIDER_NAME, STRIPE_AGREEMENT_SCOPES],
+    [CHARGEBEE_PROVIDER_NAME, CHARGEBEE_AGREEMENT_SCOPES],
   ];
   if (isMockEnabled()) {
     agreementScopes.push([MOCK_PROVIDER_NAME, MOCK_AGREEMENT_SCOPES]);
@@ -223,7 +232,13 @@ export function bootstrap(): void {
     label: "Agreement",
     description:
       "Subscriptions, order forms and contracts — what the customer agreed to, on what terms, and when it changes.",
-    dataModels: ["agreement", "subscription", "agreementItem"],
+    dataModels: [
+      "agreement",
+      "subscription",
+      "agreementItem",
+      "agreementEntitlement",
+      "agreementDiscount",
+    ],
     scopesByProvider: scopeMap(agreementScopes),
   });
 
@@ -364,6 +379,20 @@ export function bootstrap(): void {
     AGREEMENT_FUNCTION,
     STRIPE_PROVIDER_NAME,
     stripeFieldDiscovery
+  );
+
+  // Chargebee joins Stripe as an agreement provider. Its scopes were not
+  // declared before this handler existed, unlike Stripe's, so the picker gains
+  // a provider at the same moment the handler does.
+  registerSyncHandler(
+    AGREEMENT_FUNCTION,
+    CHARGEBEE_PROVIDER_NAME,
+    chargebeeAgreementHandler
+  );
+  registerFieldDiscovery(
+    AGREEMENT_FUNCTION,
+    CHARGEBEE_PROVIDER_NAME,
+    chargebeeFieldDiscovery
   );
 
   if (isMockEnabled()) {

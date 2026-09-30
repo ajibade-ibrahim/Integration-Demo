@@ -271,6 +271,11 @@ export const STRIPE_AGREEMENT_FIELDS: DiscoveredFieldDef[] = [
     label: "Stripe's own status — map `status` instead unless you need the original",
     type: "string",
   },
+  {
+    path: "provider_metadata",
+    label: "Stripe metadata (JSON, synthesized from metadata)",
+    type: "string",
+  },
   { path: "description", label: "Description", type: "string" },
   {
     path: "start_date",
@@ -303,14 +308,34 @@ export const STRIPE_SUBSCRIPTION_FIELDS: DiscoveredFieldDef[] = [
     type: "datetime",
   },
   {
+    path: "trial_starts_at",
+    label: "Trial starts at (ISO 8601, synthesized from trial_start)",
+    type: "datetime",
+  },
+  {
     path: "canceled_at",
     label: "Canceled at (ISO 8601, synthesized)",
+    type: "datetime",
+  },
+  {
+    path: "cancel_at",
+    label: "Cancels at (ISO 8601, synthesized from cancel_at)",
     type: "datetime",
   },
   {
     path: "cancel_at_period_end",
     label: "Cancels at period end",
     type: "boolean",
+  },
+  {
+    path: "billing_period",
+    label: "Primary line's billing period (synthesized)",
+    type: "string",
+  },
+  {
+    path: "billing_period_count",
+    label: "Primary line's billing period count (synthesized)",
+    type: "number",
   },
   {
     path: "item_count",
@@ -324,7 +349,12 @@ export const STRIPE_SUBSCRIPTION_FIELDS: DiscoveredFieldDef[] = [
   },
   {
     path: "collection_method",
-    label: "Collection method (charge_automatically or send_invoice)",
+    label: "Collection method (translated to automatic or manual)",
+    type: "string",
+  },
+  {
+    path: "provider_metadata",
+    label: "Stripe metadata for the subscription (JSON, synthesized)",
     type: "string",
   },
   {
@@ -367,6 +397,17 @@ export const STRIPE_AGREEMENT_ITEM_FIELDS: DiscoveredFieldDef[] = [
   {
     path: "item_type",
     label: "Line type (synthesized; 'usage' for a metered price, else unset)",
+    type: "string",
+  },
+  {
+    path: "billing_model",
+    label:
+      "Billing model (synthesized; usage_based/tiered/per_unit/one_time, else unset)",
+    type: "string",
+  },
+  {
+    path: "provider_metadata",
+    label: "Stripe metadata for the line (JSON, synthesized)",
     type: "string",
   },
   {

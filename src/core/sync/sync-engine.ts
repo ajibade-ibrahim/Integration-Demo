@@ -247,11 +247,18 @@ async function runOnce(
 
     const collected = new Map<TargetObject, CollectedRecord[]>();
 
+    // Per-object `SourcePage.complete`, ANDed across pages. An object the
+    // handler never yielded simply has no entry, which the writer reads as
+    // "never yielded" and refuses to reconcile — as it must, since that is
+    // also how an object with no mapping rule looks from here.
+    const complete = new Map<TargetObject, boolean>();
+
+    const sourcePaths = requestedSourcePaths(rules);
     for await (const page of handler.fetchPages({
       integrationId: integration.id,
       accessToken: token.accessToken,
       metadata: token.metadata,
-      requestedSourcePaths: requestedSourcePaths(rules),
+      requestedSourcePaths: sourcePaths,
       clock,
       // A long sync can outlive its access token. Handing handlers a way to
       // refresh mid-run means a 401 on page 40 costs one extra request rather
@@ -282,17 +289,29 @@ async function runOnce(
         });
       }
       collected.set(page.object, bucket);
+
+      const previous = complete.get(page.object);
+      const thisPage = page.complete === true;
+      complete.set(
+        page.object,
+        previous === undefined ? thisPage : previous && thisPage
+      );
     }
 
     // Parents before children, in the order the function declares. Which
     // writers run, and in what sequence, is the writer module's business —
     // this loop knows only that a function produced records and that someone
     // has to persist them.
-    const result = await writeRecordsForFunction(
-      integration.id,
-      functionName,
-      collected
-    );
+    //
+    // `mappedObjects` and `complete` are passed rather than re-derived in the
+    // writer: the engine already holds the mapping rules and has just seen the
+    // pages, and a second derivation is a second thing that can disagree with
+    // the first — which here would mean deleting rows a run never covered.
+    const result = await writeRecordsForFunction(integration.id, functionName, {
+      collected,
+      mappedObjects: new Set(sourcePaths.keys()),
+      complete,
+    });
 
     for (const [object, count] of Object.entries(result.counts)) {
       const key = object as TargetObject;

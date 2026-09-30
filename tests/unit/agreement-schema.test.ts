@@ -121,14 +121,16 @@ describe("the subscription schema", () => {
     }
   });
 
-  it("shares no field with its parent", () => {
+  it("shares only providerMetadata with its parent", () => {
     // The split is only worth anything if each field lives in exactly one
-    // place. A field on both would be two columns that must agree and cannot
-    // be made to.
+    // place. `providerMetadata` is the one deliberate exception — decision 9
+    // puts it on all five of the function's tables — so a second shared field
+    // appearing here would be two columns that must agree and cannot be made
+    // to.
     const shared = fieldNames("agreement").filter((name) =>
       fieldNames("subscription").includes(name)
     );
-    expect(shared).toEqual([]);
+    expect(shared).toEqual(["providerMetadata"]);
   });
 
   it("keeps the type-specific fields off the shared node", () => {
@@ -204,19 +206,28 @@ describe("the line-item schema", () => {
       "quantity",
       "position",
       "itemType",
+      "billingModel",
+      "unitPriceMinor",
+      "freeQuantity",
+      "billingCycles",
+      "providerMetadata",
     ]);
   });
 });
 
 describe("write order", () => {
-  it("writes the agreement before both of its children", () => {
+  it("writes the agreement before its children, and lines before entitlements", () => {
     // Not presentational and not merely efficient: `Subscription.agreementId`
     // and `AgreementItem.agreementId` are both required columns, so a child
-    // written first is rejected outright rather than saved unlinked.
+    // written first is rejected outright rather than saved unlinked. The
+    // entitlements and discounts come last because an entitlement resolves the
+    // agreement written above it and (optionally) a feature catalog wrote.
     expect(objectsForFunction(AGREEMENT_FUNCTION)).toEqual([
       "agreement",
       "subscription",
       "agreementItem",
+      "agreementEntitlement",
+      "agreementDiscount",
     ]);
   });
 
@@ -264,12 +275,14 @@ describe("function scoping of agreement rules", () => {
     ).toEqual([...objectsForFunction(AGREEMENT_FUNCTION)].sort());
   });
 
-  it("accepts rules for all three of its own objects", () => {
+  it("accepts rules for all five of its own objects", () => {
     expect(
       validateMappings(AGREEMENT_FUNCTION, [
         rule("agreement", "name"),
         rule("subscription", "currentPeriodEnd"),
         rule("agreementItem", "quantity"),
+        rule("agreementEntitlement", "value"),
+        rule("agreementDiscount", "label"),
       ]).valid
     ).toBe(true);
   });
@@ -301,10 +314,16 @@ describe("function scoping of agreement rules", () => {
     ).toBe(false);
   });
 
-  it("shows the editor all three sections and nothing else", () => {
+  it("shows the editor all five sections and nothing else", () => {
     expect(
       schemasForFunction(AGREEMENT_FUNCTION).map((s) => s.label)
-    ).toEqual(["Agreement", "Subscription", "Line item"]);
+    ).toEqual([
+      "Agreement",
+      "Subscription",
+      "Line item",
+      "Agreement entitlement",
+      "Discount",
+    ]);
   });
 
   it("offers no cross-reference targets", () => {

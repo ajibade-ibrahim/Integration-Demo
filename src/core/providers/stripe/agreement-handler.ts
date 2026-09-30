@@ -198,9 +198,15 @@ async function* pageSubscriptions(
     // subscription yields one agreement, one subscription and as many items as
     // it has lines, so its records are flat-mapped out of the same fetch
     // rather than being the same array under a third name.
+    //
+    // Its page alone declares `complete: true`, and it may because
+    // `itemRecords` pages `/v1/subscription_items` to exhaustion first. Stripe
+    // always sends an `items` block on a subscription, so there is no
+    // key-presence question here — unlike Chargebee, whose list payload can
+    // omit `subscription_items` and must withhold the flag when it does.
     for (const object of objects) {
       yield object === "agreementItem"
-        ? { object, records: await itemRecords(session, records) }
+        ? { object, records: await itemRecords(session, records), complete: true }
         : { object, records };
     }
 

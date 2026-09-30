@@ -125,7 +125,17 @@ export const OBJECT_SCHEMAS: Readonly<Record<TargetObject, ObjectSchema>> = {
 const FUNCTION_OBJECTS: Readonly<Record<string, readonly TargetObject[]>> = {
   identity: ["customer", "contact"],
   catalog: ["product", "offering", "price", "feature", "entitlement"],
-  agreement: ["agreement", "subscription", "agreementItem"],
+  // The last two are after `agreementItem` because write order is load-bearing:
+  // an entitlement resolves the agreement written this run and (optionally) a
+  // feature written by catalog, so both parents must be in hand first. The
+  // agreement is the required edge; the feature is the one that may dangle.
+  agreement: [
+    "agreement",
+    "subscription",
+    "agreementItem",
+    "agreementEntitlement",
+    "agreementDiscount",
+  ],
 };
 
 /**

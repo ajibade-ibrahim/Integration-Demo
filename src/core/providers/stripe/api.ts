@@ -604,6 +604,106 @@ export function agreementStatusOf(subscription: RawRecord): string | undefined {
 }
 
 /**
+ * Our collection method, from Stripe's two words.
+ *
+ * Stripe states this as `charge_automatically` or `send_invoice`; ours is
+ * `automatic` and `manual`, and the third member of our union — `none` — has no
+ * Stripe spelling. `FieldTransform` has no enum-remap member, which is why this
+ * translation lives here rather than as a mapping rule, exactly as status does
+ * one function up. An unrecognised value returns `undefined` and the rule does
+ * not fire, so the column stays null rather than holding a word the writer
+ * would warn about.
+ */
+export function collectionMethodOf(
+  subscription: RawRecord
+): string | undefined {
+  switch (asString(subscription["collection_method"])) {
+    case "charge_automatically":
+      return "automatic";
+    case "send_invoice":
+      return "manual";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The primary line's cadence, and how many of those make a cycle.
+ *
+ * Read from the **first item's price**, which is the same line
+ * `Agreement.offeringId` points at — so the cadence shown belongs to the price
+ * shown. Stripe states `recurring.interval` and `interval_count` only on a
+ * recurring price; a one-time price has neither, and a subscription whose lines
+ * carry different intervals has no single cadence to report. Both cases return
+ * `undefined` and the column stays null, which the column comment calls the
+ * honest answer rather than a guess at the first line's rhythm.
+ */
+export function primaryBillingPeriod(
+  subscription: RawRecord
+): string | undefined {
+  const recurring = asRecord(firstItemPrice(subscription)?.["recurring"]);
+  return asString(recurring?.["interval"]);
+}
+
+export function primaryBillingPeriodCount(
+  subscription: RawRecord
+): number | undefined {
+  const recurring = asRecord(firstItemPrice(subscription)?.["recurring"]);
+  const count = recurring?.["interval_count"];
+  // `interval_count` is numeric and never absent on a recurring price; a
+  // non-number means something other than a Stripe recurring price, so there is
+  // nothing to report.
+  return typeof count === "number" && Number.isFinite(count) ? count : undefined;
+}
+
+/**
+ * A record's `metadata` bag, serialized for a `providerMetadata` column.
+ *
+ * Stripe's `metadata` is flat and string-valued, so `JSON.stringify` is the
+ * whole translation — no nesting to lose. Absent metadata returns `undefined`
+ * rather than `"{}"`, so the mapping rule does not fire and the writer leaves
+ * its default; an empty bag and no bag then read the same on the row, which is
+ * correct because Stripe does not distinguish them.
+ */
+export function providerMetadataOf(record: RawRecord): string | undefined {
+  const metadata = asRecord(record["metadata"]);
+  return metadata === undefined ? undefined : JSON.stringify(metadata);
+}
+
+/**
+ * How a line is priced, in our vocabulary.
+ *
+ * Stripe spreads this over `price.type`, `price.recurring.usage_type` and
+ * `price.billing_scheme`, none of which is a thing a mapping rule can combine —
+ * so it is read here and written as one word. The order matters: a one-time
+ * price has no recurring block at all, and a metered price may still carry
+ * `billing_scheme: "per_unit"`, so the more specific facts are tested first.
+ *
+ * `flat_fee` is deliberately never produced: Stripe has no spelling for it.
+ * `billing_scheme` is only `per_unit` or `tiered`, and a flat price is
+ * indistinguishable from a per-unit one in the payload. Returning `undefined`
+ * for anything else is the same "we were not told" the column is nullable for.
+ */
+export function billingModelOf(item: RawRecord): string | undefined {
+  const price = asRecord(item["price"]);
+  if (price === undefined) return undefined;
+
+  if (asString(price["type"]) === "one_time") return "one_time";
+
+  const recurring = asRecord(price["recurring"]);
+  if (asString(recurring?.["usage_type"]) === "metered") return "usage_based";
+
+  switch (asString(price["billing_scheme"])) {
+    case "tiered":
+      return "tiered";
+    case "per_unit":
+      return "per_unit";
+    default:
+      return undefined;
+  }
+}
+
+/**
  * The subscription items list, which Stripe returns inline on each record.
  *
  * **The first ten only.** Stripe paginates this list inside the subscription
@@ -734,6 +834,12 @@ function periodBoundary(
  *                       for it: see `subscriptionOfferingId`.
  *   `item_count`      — how many priced lines exist, so that only-the-first is
  *                       a visible fact rather than a silent one.
+ *   `collection_method` — translated to our `automatic`/`manual`, because a
+ *                       `FieldTransform` cannot remap an enum.
+ *   `billing_period`/  — the first item's price cadence, and its count. Read
+ *   `billing_period_count` here rather than mapped from `items.0.price.recurring`,
+ *                       which no single mapping path reaches.
+ *   `provider_metadata` — Stripe's flat `metadata` bag, serialized to JSON.
  *   dates             — Unix epoch seconds through `epochToIso`, because every
  *                       date the writer accepts goes through `new Date(string)`.
  */
@@ -742,12 +848,21 @@ export function flattenSubscription(subscription: RawRecord): RawRecord {
   const firstQuantity = items[0]?.["quantity"];
 
   const status = agreementStatusOf(subscription);
+  const collectionMethod = collectionMethodOf(subscription);
+  const billingPeriod = primaryBillingPeriod(subscription);
+  const billingPeriodCount = primaryBillingPeriodCount(subscription);
+  const providerMetadata = providerMetadataOf(subscription);
 
   const dates: Record<string, string> = {};
   for (const [ours, theirs] of [
     ["effective_date", "start_date"],
+    ["trial_starts_at", "trial_start"],
     ["trial_ends_at", "trial_end"],
     ["canceled_at", "canceled_at"],
+    // The *scheduled* cancellation moment, when there is one. Distinct from
+    // `canceled_at` (requested) and from `cancel_at_period_end` (a flag), and
+    // null for most subscriptions, which `epochToIso` turns into no key.
+    ["cancel_at", "cancel_at"],
     ["ended_at", "ended_at"],
     ["created_at", "created"],
   ] as const) {
@@ -781,6 +896,18 @@ export function flattenSubscription(subscription: RawRecord): RawRecord {
     offering_id: subscriptionOfferingId(subscription),
     item_count: items.length,
     ...(typeof firstQuantity === "number" ? { quantity: firstQuantity } : {}),
+    ...(collectionMethod === undefined
+      ? {}
+      : { collection_method: collectionMethod }),
+    ...(billingPeriod === undefined
+      ? {}
+      : { billing_period: billingPeriod }),
+    ...(billingPeriodCount === undefined
+      ? {}
+      : { billing_period_count: billingPeriodCount }),
+    ...(providerMetadata === undefined
+      ? {}
+      : { provider_metadata: providerMetadata }),
     ...dates,
   };
 }
@@ -851,6 +978,10 @@ export function itemTypeOf(item: RawRecord): string | undefined {
  * they answer different questions: *which* of an offering's prices was sold
  * (monthly or yearly), and *what* was sold. Only the price can answer the first,
  * which is exactly why the item table needs the column.
+ *
+ * `billing_model` and `provider_metadata` join `item_type` as synthesized
+ * fields, for the same reason: both are readings of nested or split payload
+ * facts a single mapping path cannot reach — see `billingModelOf`.
  */
 export function flattenAgreementItem(
   item: RawRecord,
@@ -859,6 +990,8 @@ export function flattenAgreementItem(
 ): RawRecord {
   const price = asRecord(item["price"]);
   const itemType = itemTypeOf(item);
+  const billingModel = billingModelOf(item);
+  const providerMetadata = providerMetadataOf(item);
 
   return {
     agreement_id: subscriptionId,
@@ -869,6 +1002,10 @@ export function flattenAgreementItem(
     // unrecognised status: no value means no mapping rule fires and the writer
     // never sees something to warn about.
     ...(itemType === undefined ? {} : { item_type: itemType }),
+    ...(billingModel === undefined ? {} : { billing_model: billingModel }),
+    ...(providerMetadata === undefined
+      ? {}
+      : { provider_metadata: providerMetadata }),
   };
 }
 

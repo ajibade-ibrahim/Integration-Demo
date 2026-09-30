@@ -31,10 +31,37 @@ export const CHARGEBEE_IDENTITY_SCOPES = [
   "contacts:read",
 ] as const;
 
+/**
+ * Scope strings for the Chargebee catalog function.
+ *
+ * These are *symbolic*, not OAuth scopes: Chargebee authenticates with an API
+ * key (HTTP Basic), so there is nothing to grant and nothing enforced. The list
+ * feeds the provider picker and the "what this sync reads" copy, which is why
+ * it has to name the endpoints the handler actually calls — the last two were
+ * missing while the catalog handler already called `/features` and
+ * `/item_entitlements`, which made the list quietly false.
+ */
 export const CHARGEBEE_CATALOG_SCOPES = [
   "item_families:read",
   "items:read",
   "item_prices:read",
+  "features:read",
+  "item_entitlements:read",
+] as const;
+
+/**
+ * Scope strings for the Chargebee agreement function.
+ *
+ * Symbolic, like the catalog list above — see its comment. The first two are
+ * what the handler actually reads; the second two are listed because
+ * subscription entitlements are meaningless without the feature definitions
+ * they reference, which belong to the catalog function.
+ */
+export const CHARGEBEE_AGREEMENT_SCOPES = [
+  "subscriptions:read",
+  "subscription_entitlements:read",
+  "features:read",
+  "item_entitlements:read",
 ] as const;
 
 /** Cap on connect-time probe timeout. */

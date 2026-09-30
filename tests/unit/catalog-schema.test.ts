@@ -228,6 +228,8 @@ describe("function scoping of mapping rules", () => {
       "agreement",
       "subscription",
       "agreementItem",
+      "agreementEntitlement",
+      "agreementDiscount",
     ]);
     expect(schemasForFunction("usage")).toEqual([]);
   });

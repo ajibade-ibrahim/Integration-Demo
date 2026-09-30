@@ -305,6 +305,8 @@ describe("an agreement sync, end to end", () => {
       agreement: 1,
       subscription: 1,
       agreementItem: 1,
+      agreementEntitlement: 0,
+      agreementDiscount: 0,
     });
   });
 
@@ -705,6 +707,8 @@ describe("the other functions still sync alongside it", () => {
       agreement: 1,
       subscription: 1,
       agreementItem: 1,
+      agreementEntitlement: 0,
+      agreementDiscount: 0,
     });
   });
 });

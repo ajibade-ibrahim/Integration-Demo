@@ -148,25 +148,49 @@ export const stripeAgreementDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "currency", targetObject: "agreement", targetFieldPath: "currency", transform: "lowercase" },
   { sourceFieldPath: "raw_status", targetObject: "agreement", targetFieldPath: "customFields.stripe_status", transform: "none" },
   { sourceFieldPath: "created_at", targetObject: "agreement", targetFieldPath: "customFields.created_at", transform: "none" },
+  // Stripe's flat `metadata`, serialized to JSON by `flattenSubscription`.
+  { sourceFieldPath: "provider_metadata", targetObject: "agreement", targetFieldPath: "providerMetadata", transform: "none" },
 
   // --- subscription ---
-  { sourceFieldPath: "current_period_start", targetObject: "subscription", targetFieldPath: "currentPeriodStart", transform: "none" },
-  { sourceFieldPath: "current_period_end", targetObject: "subscription", targetFieldPath: "currentPeriodEnd", transform: "none" },
+  {
+    sourceFieldPath: "current_period_start",
+    targetObject: "subscription",
+    targetFieldPath: "currentPeriodStart",
+    transform: "none",
+  },
+  {
+    sourceFieldPath: "current_period_end",
+    targetObject: "subscription",
+    targetFieldPath: "currentPeriodEnd",
+    transform: "none",
+  },
+  { sourceFieldPath: "trial_starts_at", targetObject: "subscription", targetFieldPath: "trialStartsAt", transform: "none" },
   { sourceFieldPath: "trial_ends_at", targetObject: "subscription", targetFieldPath: "trialEndsAt", transform: "none" },
   { sourceFieldPath: "canceled_at", targetObject: "subscription", targetFieldPath: "canceledAt", transform: "none" },
+  { sourceFieldPath: "cancel_at", targetObject: "subscription", targetFieldPath: "cancelAt", transform: "none" },
   { sourceFieldPath: "cancel_at_period_end", targetObject: "subscription", targetFieldPath: "cancelAtPeriodEnd", transform: "none" },
+  // `collection_method` is synthesized from Stripe's `charge_automatically` /
+  // `send_invoice` into our `automatic` / `manual`; the raw field would store a
+  // word the writer rejects into a null.
   { sourceFieldPath: "collection_method", targetObject: "subscription", targetFieldPath: "collectionMethod", transform: "none" },
+  // The primary line's cadence. Both synthesize from `items.0.price.recurring`,
+  // which no single mapping path reaches; absent for a subscription whose
+  // primary line does not recur.
+  { sourceFieldPath: "billing_period", targetObject: "subscription", targetFieldPath: "billingPeriod", transform: "none" },
+  { sourceFieldPath: "billing_period_count", targetObject: "subscription", targetFieldPath: "billingPeriodCount", transform: "none" },
   { sourceFieldPath: "quantity", targetObject: "subscription", targetFieldPath: "quantity", transform: "none" },
   { sourceFieldPath: "item_count", targetObject: "subscription", targetFieldPath: "itemCount", transform: "none" },
+  { sourceFieldPath: "provider_metadata", targetObject: "subscription", targetFieldPath: "providerMetadata", transform: "none" },
 
   // --- agreementItem ---
   // `quantity` is the item's own field, read raw: a subscription item really
   // does carry one, unlike the subscription above whose `quantity` is
-  // synthesized from its first item. The other two are synthesized, and both
-  // for reasons the raw payload cannot supply — `position` is the caller's
-  // index across the completed item list, and `item_type` is a reading of
-  // `price.recurring.usage_type` that resolves to nothing at all unless the
-  // line is metered.
+  // synthesized from its first item. The rest are synthesized, each for a
+  // reason the raw payload cannot supply — `position` is the caller's index
+  // across the completed item list, `item_type` is a reading of
+  // `price.recurring.usage_type`, `billing_model` combines `price.type`,
+  // `recurring.usage_type` and `billing_scheme`, and `provider_metadata` is the
+  // item's own flat `metadata` serialized.
   //
   // No defaults for `associatedAgreementId` or `associatedOfferingId`: both
   // are `readOnly` and derived by the engine from the refs. The agreement one
@@ -176,4 +200,6 @@ export const stripeAgreementDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "quantity", targetObject: "agreementItem", targetFieldPath: "quantity", transform: "none" },
   { sourceFieldPath: "position", targetObject: "agreementItem", targetFieldPath: "position", transform: "none" },
   { sourceFieldPath: "item_type", targetObject: "agreementItem", targetFieldPath: "itemType", transform: "none" },
+  { sourceFieldPath: "billing_model", targetObject: "agreementItem", targetFieldPath: "billingModel", transform: "none" },
+  { sourceFieldPath: "provider_metadata", targetObject: "agreementItem", targetFieldPath: "providerMetadata", transform: "none" },
 ];

@@ -23,6 +23,7 @@ import { MOCK_PROVIDER_NAME } from "./mock/provider";
 import { METRIFOX_PROVIDER_NAME } from "./metrifox/provider";
 import { STRIPE_PROVIDER_NAME } from "./stripe/provider";
 import {
+  chargebeeAgreementDefaults,
   chargebeeCatalogDefaults,
   chargebeeIdentityDefaults,
 } from "./chargebee/defaults";
@@ -38,6 +39,7 @@ const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
   [`catalog:${STRIPE_PROVIDER_NAME}`]: stripeCatalogDefaults,
   [`catalog:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeCatalogDefaults,
   [`agreement:${STRIPE_PROVIDER_NAME}`]: stripeAgreementDefaults,
+  [`agreement:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeAgreementDefaults,
 };
 
 export function defaultMappingsFor(

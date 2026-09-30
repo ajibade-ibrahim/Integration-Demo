@@ -145,6 +145,7 @@ describe("the agreement function", () => {
     // Breadth is the claim being made: one agreement model spanning a
     // sales-led Contract, a self-serve subscription, and both at once.
     expect(providerNamesForFunction("agreement")).toEqual([
+      "chargebee",
       "hubspot",
       "metrifox",
       "mock",
@@ -192,6 +193,8 @@ describe("the agreement function", () => {
       "agreement",
       "subscription",
       "agreementItem",
+      "agreementEntitlement",
+      "agreementDiscount",
     ]);
     expect(functionRegistry.require("billing").dataModels).not.toContain(
       "subscription"

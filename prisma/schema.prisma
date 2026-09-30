@@ -115,6 +115,8 @@ model Integration {
   agreements       Agreement[]
   subscriptions    Subscription[]
   agreementItems   AgreementItem[]
+  agreementEntitlements AgreementEntitlement[]
+  agreementDiscounts    AgreementDiscount[]
   syncRuns         SyncRun[]
 
   @@index([userId])
@@ -492,6 +494,7 @@ model Feature {
   updatedAt DateTime @updatedAt
 
   entitlements Entitlement[]
+  agreementEntitlements AgreementEntitlement[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
@@ -616,10 +619,26 @@ model Agreement {
   /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
   customFields String @default("{}")
 
+  /// Provider-specific facts that have no column of their own, as JSON.
+  ///
+  /// Same name as `OAuthToken.providerMetadata`, deliberately a different
+  /// thing: there it is extras from the token response (Salesforce's
+  /// `instance_url`) that every later API call needs; here it is the raw
+  /// provider bag on an agreement — Chargebee's `meta_data`, Stripe's
+  /// `metadata`. Both are "the provider's own key/values we did not model",
+  /// which is why the name is shared, but nothing reads across the two.
+  ///
+  /// Per decision 9 this column is on the agreement function's five tables
+  /// only; identity and catalog keep using `customFields`. Serialized JSON via
+  /// src/core/repositories/json-column.ts, bounded by MAX_CUSTOM_FIELDS.
+  providerMetadata String @default("{}")
+
   updatedAt DateTime @updatedAt
 
   subscription Subscription?
   items        AgreementItem[]
+  entitlements AgreementEntitlement[]
+  discounts    AgreementDiscount[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
@@ -654,6 +673,7 @@ model Subscription {
 
   currentPeriodStart DateTime?
   currentPeriodEnd   DateTime?
+  trialStartsAt      DateTime?
   trialEndsAt        DateTime?
 
   /// When cancellation was requested, which can precede the period end by a
@@ -661,6 +681,36 @@ model Subscription {
   canceledAt        DateTime?
   cancelAtPeriodEnd Boolean?
 
+  /// The moment the provider says the subscription stops — Chargebee's
+  /// `cancel_at`. Distinct from `canceledAt`, which is when cancellation was
+  /// requested, and from `Agreement.endDate`, which is the shared node's view.
+  cancelAt DateTime?
+
+  /// The next renewal the provider has scheduled. The date that answers "what
+  /// renews next", which is why the read model sorts on it and falls back to
+  /// `currentPeriodEnd`.
+  nextBillingAt DateTime?
+
+  /// The cadence of the subscription's *primary* line — Chargebee's
+  /// `billing_period_unit`, Stripe's primary price `recurring.interval`.
+  /// SUBSCRIPTION_BILLING_PERIODS: day | week | month | year.
+  ///
+  /// States the primary line's cadence and only that: a subscription whose
+  /// lines carry different intervals does not have one cadence, and the
+  /// handler leaves this null there rather than picking. Null is also the
+  /// honest answer for a provider that did not say.
+  billingPeriod String?
+
+  /// How many `billingPeriod`s make up one cycle — every 3 months is
+  /// `billingPeriod: "month"`, `billingPeriodCount: 3`.
+  billingPeriodCount Int?
+
+  /// CollectionMethod: automatic | manual | none. Validated in app code
+  /// against the union rather than free text.
+  ///
+  /// Rows written before this vocabulary arrived hold the provider's raw word
+  /// (`charge_automatically`); they are corrected by the next sync, which
+  /// overwrites them, and are wrong until then.
   collectionMethod String?
   quantity         Int?
 
@@ -672,11 +722,23 @@ model Subscription {
 
   customFields String @default("{}")
 
+  /// Provider-specific facts with no column of their own, as JSON. See
+  /// `Agreement.providerMetadata` for why the name matches `OAuthToken`'s and
+  /// how it is the raw bag, not token extras. Serialized via
+  /// src/core/repositories/json-column.ts, bounded by MAX_CUSTOM_FIELDS;
+  /// values over the bound are dropped silently, so this is a place to look
+  /// when a provider fact is missing rather than a guarantee it is kept.
+  providerMetadata String @default("{}")
+
   updatedAt DateTime @updatedAt
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
-  /// Renewal and churn questions are date-ranged over one integration.
+  /// Renewal and churn questions are date-ranged over one integration, and the
+  /// read model orders on `nextBillingAt` falling back to `currentPeriodEnd`.
+  /// `cancelAt` joins the rationale because "what cancels next" is the same
+  /// query one lifecycle stage later; no separate index for two nullable dates
+  /// until a sort actually leads with one.
   @@index([integrationId, currentPeriodEnd])
 }
 
@@ -759,8 +821,42 @@ model AgreementItem {
   /// arrives with a word of its own.
   itemType String?
 
+  /// How the provider says this line is priced — BILLING_MODELS: flat_fee |
+  /// per_unit | tiered | usage_based | one_time. Null when the provider did
+  /// not say; Stripe's `price.billing_scheme`/`recurring.usage_type` and
+  /// Chargebee's `pricing_model` are the sources.
+  ///
+  /// Null for Chargebee today: it states metering on the *item price*, which
+  /// the subscription list payload does not inline, so the handler declines
+  /// rather than guess. The follow-up is `Price.pricingModel` on the catalog
+  /// function; faking it here would put a wrong value behind a right column.
+  billingModel String?
+
+  /// What the provider says this line bills per unit for *this subscription*,
+  /// in the currency's minor unit — Chargebee's always-present `unit_price`,
+  /// even when nothing was overridden.
+  ///
+  /// Named for what it is rather than `unitPriceOverride`: an "override" column
+  /// would be populated on every Chargebee line whether or not anything was
+  /// overridden, so the name would assert a comparison the column cannot make.
+  /// Null for Stripe, which states no per-unit price on a subscription item.
+  unitPriceMinor Int?
+
+  /// Units included at no charge — Chargebee's `free_quantity`.
+  freeQuantity Int?
+
+  /// How many billing cycles this line runs for; null means it recurs without
+  /// a stated end — Chargebee's `billing_cycles`.
+  billingCycles Int?
+
   /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
   customFields String @default("{}")
+
+  /// Provider-specific facts with no column of their own, as JSON. See
+  /// `Agreement.providerMetadata`; serialized via
+  /// src/core/repositories/json-column.ts, bounded by MAX_CUSTOM_FIELDS, with
+  /// over-long values dropped silently.
+  providerMetadata String @default("{}")
 
   updatedAt DateTime @updatedAt
 
@@ -770,6 +866,155 @@ model AgreementItem {
   @@index([agreementId])
   @@index([offeringId])
   @@index([priceId])
+}
+
+/// The *effective* entitlement a customer holds under one agreement — what this
+/// subscriber actually gets, not what the plan offers.
+///
+/// Distinct from `Entitlement`, deliberately and confusingly so. `Entitlement`
+/// is the catalog baseline: "the Pro offering includes 50 seats." This is the
+/// per-agreement answer Chargebee's `subscription_entitlements` gives:
+/// inherited values and per-subscription overrides folded into one list, which
+/// is why `isOverride` is here — it is the only place the difference is
+/// visible. The two overlap by construction, so an aggregate that adds this
+/// table to `Entitlement` double-counts; a reader picks one.
+///
+/// Stigg's customer-level promotional grants are a different fact again and are
+/// out of scope, so there is no `startsAt`/`expiresAt` window and no
+/// `externalEntityId`: the effective list already folds entity-level overrides
+/// in, and pre-modelling a window with no handler behind it would repeat the
+/// mistake of modelling amendments before anything reads them.
+///
+/// Rows are only deleted when the provider declares its list complete (see
+/// `SyncHandler`); until then the table is upsert-only, so a vanished grant
+/// lingers rather than the destructive direction being taken on a guess.
+model AgreementEntitlement {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider-assigned id where there is one. Chargebee's payload carries none,
+  /// so the handler synthesizes `<subscriptionId>:<featureId>`. The upsert key,
+  /// and what reconciliation compares.
+  externalSourceId String
+
+  /// Required and Cascade, on `Subscription`'s exact reasoning: both rows come
+  /// off one source record in one run, so "arrived before its parent" — the
+  /// case that keeps an `externalAgreementId` on the other children — cannot
+  /// happen, and a row without its agreement is about nothing.
+  agreementId String
+  agreement   Agreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+
+  /// Nullable because `feature` is a different function that may not be
+  /// connected, with the provider's own id kept beside it — `Offering.productId`'s
+  /// rule. Unlike the agreement edge this *does* need a relink pass:
+  /// `catalog` can arrive in a later run.
+  featureId         String?
+  feature           Feature? @relation(fields: [featureId], references: [id], onDelete: SetNull)
+  externalFeatureId String?
+
+  /// The provider's answer verbatim — Chargebee's "50", "true". Mirrors
+  /// `Entitlement` so the two levels read alike.
+  value String?
+
+  /// The entitlement's *level* label — "Maximum", "Available".
+  valueName String?
+
+  /// The numeric form of `value`, null when there is no number. Null means "no
+  /// stated limit", which is also how unlimited arrives; `value` tells a reader
+  /// which of the two it was. Always null on Stripe, which states no limit.
+  limitValue Int?
+
+  /// Whether this value overrides the catalog baseline rather than inheriting
+  /// it — Chargebee's `is_overridden`. Null means the provider did not say.
+  isOverride Boolean?
+
+  /// Whether the feature is granted at all — Chargebee's `is_enabled`. Shown on
+  /// `/agreements` so a feature the customer does *not* have is not read as a
+  /// limit of zero.
+  isEnabled Boolean?
+
+  /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
+  ///
+  /// Present even though this table's rows are written by a reconciling writer,
+  /// for a reason that is not symmetry: `resolveTargetField` accepts a
+  /// `customFields.*` rule for *every* object, so a table whose writer dropped
+  /// the bag would let a user map one, save it cleanly, and watch it do nothing
+  /// on every sync. The writer persists it for the same reason the others do.
+  customFields String @default("{}")
+
+  /// Provider-specific facts with no column of their own, as JSON.
+  providerMetadata String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  @@index([agreementId])
+  @@index([featureId])
+}
+
+/// A discount attached to one agreement, as the provider *stated* it.
+///
+/// Stated values only, deliberately: there is no computed net, no post-discount
+/// total and no amount column on the agreement to reconcile one against. A
+/// discount is an assertion the provider made about a price, and the moment we
+/// start computing what it comes to we own an arithmetic the provider never
+/// agreed to. A subscription's true total is the provider's to state.
+///
+/// Allowed to carry an amount (`amountOffMinor`) even though `AgreementItem`
+/// refuses money: a line is a *selection*, whose money lives on the Offering;
+/// a discount's value *is* its amount, so there is nothing to defer to.
+///
+/// Same parent rule and same delete caveat as `AgreementEntitlement`.
+model AgreementDiscount {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// The provider's discount/attachment id — what reconciliation compares.
+  externalSourceId String
+
+  /// Required and Cascade, for `AgreementEntitlement`'s reason.
+  agreementId String
+  agreement   Agreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+
+  /// The coupon the discount came from, when the provider names one. Kept
+  /// beside the attachment id because a coupon can be applied to many
+  /// agreements; no relation, because there is no coupon table to point at.
+  externalCouponId String?
+
+  label String?
+
+  /// DiscountKind: percentage | fixed_amount | free_items. Our vocabulary, not
+  /// the provider's — Chargebee's own `type` (with `offer_quantity` for the
+  /// third) is translated by the handler.
+  kind String?
+
+  /// The stated percentage off, in whole percent.
+  percentOff Int?
+
+  /// The stated amount off, in the currency's minor unit.
+  amountOffMinor Int?
+
+  /// DiscountStatus: active | expired | removed | scheduled.
+  status String?
+
+  startsAt DateTime?
+  endsAt   DateTime?
+
+  /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
+  /// See `AgreementEntitlement.customFields` for why the reconciling writers
+  /// carry it: a `customFields.*` rule validates for every object.
+  customFields String @default("{}")
+
+  providerMetadata String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  @@index([agreementId])
 }
 
 // ---------------------------------------------------------------------------
