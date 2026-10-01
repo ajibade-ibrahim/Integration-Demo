@@ -415,9 +415,15 @@
     { name: "salesforce", label: "Salesforce", kind: "OAuth" },
     { name: "metrifox", label: "Metrifox", kind: "API key" },
     { name: "stripe", label: "Stripe", kind: "API key" },
+    { name: "chargebee", label: "Chargebee", kind: "API key" },
     { name: "mock", label: "Mock CRM", kind: "OAuth" }
   ];
 
+  // Chargebee's lists are *symbolic*, not OAuth scopes: it authenticates with an
+  // API key over HTTP Basic, so nothing is granted or enforced. They are
+  // transcribed anyway because they feed the picker and the "what this sync
+  // reads" copy — which is exactly why they have to name the endpoints the
+  // handlers actually call.
   var SCOPES = {
     identity: {
       hubspot: ["crm.objects.companies.read", "crm.objects.contacts.read",
@@ -427,6 +433,7 @@
       // Customers only: Stripe has no contact resource, so ours are synthesized
       // from customer fields and nothing extra is read.
       stripe: ["customers:read"],
+      chargebee: ["customers:read", "contacts:read"],
       mock: ["crm.objects.companies.read", "crm.objects.contacts.read", "crm.schemas.read"]
     },
     support: {
@@ -435,17 +442,22 @@
       mock: ["crm.objects.tickets.read", "crm.schemas.read"]
     },
     catalog: {
-      stripe: ["products:read", "prices:read"]
+      stripe: ["products:read", "prices:read"],
+      chargebee: ["item_families:read", "items:read", "item_prices:read",
+                  "features:read", "item_entitlements:read"]
     },
     agreement: {
       hubspot: ["crm.objects.deals.read", "crm.schemas.deals.read"],
       salesforce: ["api", "refresh_token"],
       stripe: ["subscriptions:read"],
       metrifox: ["orders:read", "subscriptions:read"],
+      chargebee: ["subscriptions:read", "subscription_entitlements:read",
+                  "features:read", "item_entitlements:read"],
       mock: ["crm.objects.deals.read", "crm.schemas.read"]
     },
     billing: {
       stripe: ["invoices:read", "invoice_payments:read", "charges:read", "refunds:read"],
+      chargebee: ["invoices:read", "transactions:read"],
       mock: ["billing.invoices.read"]
     },
     usage: {},

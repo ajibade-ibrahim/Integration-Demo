@@ -2,9 +2,9 @@
 
 A map of the codebase for someone who has never opened it. The
 [README](../README.md) explains *what the platform does* and *why the decisions
-went the way they did*; [`data-model.md`](./data-model.md) covers the fifteen
-tables. This document covers **where the code lives and how a request moves
-through it**.
+went the way they did*; [`data-model.md`](./data-model.md) covers the
+twenty-eight tables. This document covers **where the code lives and how a
+request moves through it**.
 
 Read the first two sections and you can find anything. The rest is one section
 per aspect, each answering a single question.
@@ -36,8 +36,8 @@ flowchart TB
 
     subgraph registries["Registries — the extension seam"]
         direction LR
-        FREG["functionRegistry<br/><i>identity, catalog, agreement,<br/>support, billing, usage, comms</i>"]
-        PREG["providerRegistry<br/><i>hubspot, salesforce,<br/>metrifox, stripe, mock</i>"]
+        FREG["functionRegistry<br/><i>identity, catalog, agreement,<br/>billing, support,<br/>usage, communication</i>"]
+        PREG["providerRegistry<br/><i>hubspot, salesforce,<br/>metrifox, stripe,<br/>chargebee, mock</i>"]
         HREG["handler + discovery<br/>keyed <b>function:provider</b>"]
     end
 
@@ -53,7 +53,7 @@ flowchart TB
 
     subgraph pure["Pure logic — no I/O, no database, trivially testable"]
         direction LR
-        SCHEMA["identity-schema.ts<br/><i>the target contract</i>"]
+        SCHEMA["object-schema.ts<br/><i>the target contract</i>"]
         MAPPER["field-mapper/<br/><i>validate, apply, serialize</i>"]
         CRYPTO["oauth/crypto.ts<br/><i>AES-256-GCM</i>"]
         IDENT["identity/<br/><i>normalize · evidence ·<br/>survivorship · assertions</i>"]
@@ -65,12 +65,13 @@ flowchart TB
         SF["salesforce/"]
         MF["metrifox/"]
         ST["stripe/"]
+        CB["chargebee/"]
         MK["mock/"]
         HTTP["<b>providers/http.ts</b><br/>shared failure policy<br/>401 / 429 / 5xx"]
     end
 
     REPOS["<b>repositories/</b> — the modules that speak Prisma"]
-    DB[("Postgres via Prisma<br/>15 tables")]
+    DB[("Postgres via Prisma<br/>28 tables")]
 
     entry --> BOOT
     BOOT --> registries
@@ -131,7 +132,7 @@ Three consequences worth internalising before reading any file:
 | Consequence | Where you see it |
 |---|---|
 | An integration serves a **set** of functions, not one | `IntegrationFunction` is one-to-many; `resolveScopes` takes an array |
-| A function can be **declared without being built** | `usage`/`communication` are registered with no handler, so "no provider supports this yet" is a real, reachable state. `agreement` and `billing` spent a while there too — declared ahead of their handlers — which is the state the declaration is *for* |
+| A function can be **declared without being built** | `usage`/`communication` are registered with no handler, so "no provider supports this yet" is a real, reachable state. `support` has scopes on both CRMs and no handler anywhere; `agreement` is declared on all five providers but only Stripe and Chargebee can serve it |
 | A provider is **added, not wired in** | New directory under `core/providers/` + one call in [`bootstrap.ts`](../src/core/bootstrap.ts). No orchestration code changes. |
 
 ---
@@ -169,7 +170,7 @@ sequenceDiagram
         OA->>OA: consumeState() - single-use, constant-time compare
         OA->>P: exchange code for tokens
         P-->>OA: access + refresh + granted scopes
-    else auth.kind === "apiKey" (Metrifox, Stripe)
+    else auth.kind === "apiKey" (Metrifox, Stripe, Chargebee)
         U->>AK: POST /api/integrations/connect {draftId, apiKey}
         AK->>AK: validateKeyShape() - local, no network
         AK->>P: probeCredential() - prove it works
@@ -209,10 +210,11 @@ policy have no idea which kind of credential they are running on.
 
 ## 4. Mapping — how a provider field becomes one of ours
 
-[`identity-schema.ts`](../src/core/identity-schema.ts) is a single object read by
-three consumers that would otherwise drift apart. Target paths are
-**object-qualified** (`customer.name`, `contact.email`) so a contact field can
-never be mapped onto a customer record and still validate.
+[`object-schema.ts`](../src/core/object-schema.ts) is a single composed registry
+read by four consumers that would otherwise drift apart: mapping validation, the
+target dropdown, sync-engine record validation, and identity survivorship.
+Target paths are **object-qualified** (`customer.name`, `contact.email`) so a
+contact field can never be mapped onto a customer record and still validate.
 
 ```mermaid
 flowchart LR
@@ -226,7 +228,7 @@ flowchart LR
     end
 
     subgraph tgt["Target side - the contract"]
-        IS["<b>identity-schema.ts</b>"]
+        IS["<b>object-schema.ts</b><br/><i>composes identity, catalog,<br/>agreement, billing</i>"]
         C1["validateMappings()"]
         C2["mapping editor dropdown"]
         C3["sync-engine record validation"]
@@ -293,8 +295,8 @@ flowchart TB
     LOOP --> FETCH["<b>handler.fetchPages()</b><br/><i>async iterable - pages are mapped<br/>as they arrive, never buffered whole</i>"]
     FETCH --> MAP["applyMappings() per record"]
 
-    MAP --> WC["<b>1. parent writer</b><br/>writeCustomers / writeProducts / writeAgreements / writeInvoices<br/>upsert on integrationId + externalSourceId,<br/>building the external-to-internal index"]
-    WC --> WK["<b>2. child writers</b><br/>writeContacts / writeOfferings / writeProductFeatures / writeSubscriptions<br/>writeInvoiceLines / writePayments<br/>resolve through the index,<br/>then fall back to a DB lookup"]
+    MAP --> WC["<b>1. parent writer</b><br/>writeCustomers / writeProducts / writePrices / writeFeatureDefinitions<br/>writeAgreements / writeInvoices<br/>upsert on integrationId + externalSourceId,<br/>building the external-to-internal index"]
+    WC --> WK["<b>2. child writers</b><br/>writeContacts / writeOfferings / writeEntitlements<br/>writeSubscriptions / writeAgreementItems<br/>writeAgreementEntitlements / writeAgreementDiscounts<br/>writeInvoiceLines / writePayments<br/>resolve through the index,<br/>then fall back to a DB lookup"]
     WK --> RELINK["<b>3. relinkOrphansForFunction()</b><br/><i>children stranded by earlier runs<br/>get linked once their parent arrives</i>"]
 
     RELINK --> STATUS{"any rejected records?"}
@@ -322,25 +324,36 @@ rather than living inline in the engine.
 The order itself is declared in
 [`object-schema.ts`](../src/core/object-schema.ts) rather than hardcoded per
 function — `identity: [customer, contact]`,
-`catalog: [product, offering, productFeature]`,
+`catalog: [product, offering, price, feature, entitlement]`,
 `agreement: [agreement, subscription, agreementItem, agreementEntitlement, agreementDiscount]`,
 `billing: [invoice, invoiceLine, payment]`. Adding a function is a change there
 and in the writer's switch, not another branch in this loop. `catalog` is the one
-with two children of the same parent, and both resolve against the same index;
-`billing` is the one where the *first* entry is the parent both others attach to.
+with three children of the same parent — an offering from a product, a price
+from an offering, and an entitlement from *both* — and the entitlement resolves
+against the same index the other two built. `billing` is the one where the
+*first* entry is the parent both others attach to.
+
+**`Feature` is the one root record on the catalog side.** It hangs off nothing,
+so `externalRefsOf` returns `{}` for it and it is written wherever it appears in
+the handler's yield order. `Entitlement` is the opposite — it names two parents
+and neither is primary, so both resolve independently and a half-linked row says
+which half.
 
 **Why the *functions* are ordered too, which is newer.** Identity and catalog
 share nothing, so their order never mattered. An agreement does: it references a
 customer written by `identity` and an offering written by `catalog`, so running
 it first leaves both links dangling until the next sync. `functionsInWriteOrder`
-sorts them, which is why "connect three functions, sync once" produces fully
-linked agreements rather than rows that heal on the second run.
+sorts them, which is why "connect four functions, sync once" produces fully
+linked agreements rather than rows that heal on the second run. Billing sorts
+last for the same reason one level up: an invoice resolves a customer from
+`identity`, an offering from `catalog` and an agreement from `agreement`.
 
-**An agreement is the one record with two parents.** `SyncHandler.externalRefsOf`
-returns a *map* keyed by object — `{ customer }` for a contact, `{ product }` for
-an offering, `{ customer, offering }` for an agreement — because neither half of
-an agreement is the primary one. Each resolves and warns independently, so a
-half-linked row says which half.
+**An agreement and an entitlement are the records with two parents.**
+`SyncHandler.externalRefsOf` returns a *map* keyed by object — `{ customer }` for
+a contact, `{ product }` for an offering, `{ offering }` for a price,
+`{ offering, feature }` for an entitlement, `{ customer, offering }` for an
+agreement — because in none of those cases is either half the primary one. Each
+resolves and warns independently, so a half-linked row says which half.
 
 **One child whose parent id never appears in its payload.** A Stripe
 `ProductFeature` is read from `/v1/products/{id}/features` and the response
@@ -348,24 +361,27 @@ names no product, so the handler injects the id from the URL it requested. Every
 other association here is read off the record, which means a wrong one shows up
 as a null or an unresolved warning; this one would link every row to the wrong
 product and report success. It is also why the catalog has no relink pass for
-features: a feature cannot arrive before a product it was fetched *from*, so an
-unresolved parent means that product was rejected rather than late.
+entitlements: an attachment cannot arrive before a product it was fetched *from*,
+so an unresolved parent means that product was rejected rather than late.
 
-**And one exception to "keep the child".** A `Subscription` whose agreement was
+**And four exceptions to "keep the child".** An `AgreementItem`,
+`AgreementEntitlement`, `AgreementDiscount` or `InvoiceLine` whose parent was
 rejected is rejected too, because its foreign key is required: the row would be
-a set of billing dates about nothing. Both come off the same provider record in
-the same run, so a missing parent can only mean the parent was itself refused.
+an amount, a period or a discount about nothing. All of them come off the same
+provider record in the same run, so a missing parent can only mean the parent was
+itself refused.
 
-**`invoiceLine` is the second record with that required FK, and one of only two
-writers that delete.** Like a subscription it is an extension of one parent and
-both rows come off one payload, so a rejected invoice drops its lines. Unlike a
-subscription it is a *collection* rather than the sole detail row, so
-`writeInvoiceLines` reconciles — deleting the lines an invoice no longer has.
-That deletion is closed behind two gates, the object being mapped and the page
-declaring itself complete, because a line list truncated by a page bound looks
-exactly like a shorter invoice; see
+**`agreementItem`, `agreementEntitlement`, `agreementDiscount` and
+`invoiceLine` are the four reconciling writers, and that is a real obligation
+rather than a tidy-up.** Each reconciles its rows against what the handler just
+yielded, so a removed add-on or a discounted line that came off does not linger.
+The deletion is closed behind two gates — the object being mapped, and the page
+declaring itself complete — because a collection truncated by a page bound looks
+exactly like a shorter one; see
 [`object-schema.ts`](../src/core/object-schema.ts) and the writer's
-`InvoiceLineReconcileContext`.
+`InvoiceLineReconcileContext`. `Entitlement` does **not** reconcile, which is why
+a feature detached in Stripe persists on re-sync; there is no equivalent of the
+`status=all` parameter that makes subscriptions work.
 
 **Per-record failures never abort a run.** A `RecordIssue` carries
 `severity: "warning" | "rejected"` — a malformed email rejects the contact
@@ -473,7 +489,12 @@ That is not hypothetical: HubSpot's token response carries no `hub_id` (it is
 only readable from an endpoint `parseTokenResponse` cannot call), so HubSpot
 contributes no self-key today. Salesforce is scoped by `organizationId` rather
 than `instance_url`, because legacy pod hostnames like `na1.salesforce.com` were
-shared by thousands of unrelated orgs.
+shared by thousands of unrelated orgs. Chargebee is scoped by its **site**, and
+that one *is* available: the site's API keys are created per site, so the probe
+that validates the credential returns the site it authenticated against and
+stores it as `providerMetadata.site`. Two Chargebee integrations against two
+sites therefore cannot merge on `chargebee:12345` alone — the exact failure the
+scope segment exists to prevent, and the first provider to be able to avoid it.
 
 ### What the resolver will not do
 
@@ -558,17 +579,25 @@ instantly instead of sitting through them.
 
 ### The provider directory, as a template
 
-Every provider is the same five-to-six files. That uniformity is the point —
-adding one is filling in a known shape, not designing anything.
+Every provider is the same five-to-nine files, one handler per function it
+serves. That uniformity is the point — adding one is filling in a known shape,
+not designing anything.
 
 | File | Role | Required? |
 |---|---|---|
-| `provider.ts` | `ProviderDefinition` — name, label, `auth` union member, scope constants | yes |
-| `identity-handler.ts` | `fetchPages()`, `externalIdOf()`, `externalCustomerIdOf()` | yes, to sync |
+| `provider.ts` | `ProviderDefinition` — name, label, `auth` union member, scope constants, `externalIdScope` | yes |
+| `<function>-handler.ts` | `fetchPages()`, `externalIdOf()`, `externalRefsOf()` | one per function served |
 | `api.ts` | Base URL, page size, endpoint paths — env-overridable so tests can retarget them | in practice |
-| `discovery.ts` | Reads the provider's schema API for the source dropdown | optional — absent means free-text only |
+| `discovery.ts` | Reads the provider's schema API for the source dropdown. One instance serves every function it switches on internally; the registrations are per `(function, provider)` | optional — absent means free-text only |
 | `defaults.ts` | Suggested starting mappings | optional — absent means an empty editor |
-| `fixtures.ts` / `fake.ts` | Canned data, and/or the static field list discovery unions with | mock and Metrifox have both; Stripe has `fixtures.ts` and no fake, because its CLI seeds a real sandbox instead |
+| `fixtures.ts` / `fake.ts` | Canned data, and/or the static field list discovery unions with | mock and Metrifox have both; Stripe has `fixtures.ts` and no fake, because its CLI seeds a real sandbox instead; Chargebee has `fixtures.ts` for the msw suites |
+
+The largest directories here are **Chargebee's and Stripe's, at nine files
+each**, and they are still exactly this template: four handlers (identity,
+catalog, agreement, billing), a `provider.ts`, an `api.ts`, a `discovery.ts`, a
+`defaults.ts`, a `fixtures.ts`.
+Which is the point the README makes about Stripe, repeated — a new function on
+an existing provider is a new file and a registration, not a redesign.
 
 ---
 
@@ -647,7 +676,7 @@ worst case is one integration synced twice at once, not a broken connect.
 ```mermaid
 flowchart LR
     subgraph browser["Browser"]
-        CC["7 client components<br/><i>new/form - mapping/editor -<br/>sync-panel - key-form - delete-button -<br/>accounts-panel - identity-panel</i>"]
+        CC["8 client components<br/><i>new/form - mapping/editor -<br/>sync-panel - key-form - delete-button -<br/>accounts-panel - identity-panel -<br/>data-table</i>"]
     end
 
     subgraph server["Next.js server"]
@@ -658,7 +687,7 @@ flowchart LR
 
     subgraph outside["Outside the app"]
         W["scripts/worker.ts<br/><i>polls every 60s</i>"]
-        EXT["HubSpot - Salesforce -<br/>Metrifox - Stripe"]
+        EXT["HubSpot - Salesforce -<br/>Metrifox - Stripe - Chargebee"]
     end
 
     CC -->|fetch| RH
@@ -694,17 +723,20 @@ credentials at all.
 No orchestration code changes. Introducing the *first* provider of a new
 credential kind is a different matter — Metrifox required splitting
 `ProviderDefinition.auth` into a union and teaching the connect flow, the session
-client and the refresh path about a credential that never expires. The second
-API-key provider is a directory and a registration call again — Stripe was that
-test, and it needed no orchestration, route or UI change, despite a differently
-shaped credential (`Authorization: Bearer` plus a pinned API version, absorbed
-by `authHeaders` on the session options) and cursor rather than page-number
-pagination.
+client and the refresh path about a credential that never expires. Every
+API-key provider after that has been a directory and registration calls again.
+Stripe was the first test, despite a differently shaped credential
+(`Authorization: Bearer` plus a pinned API version, absorbed by `authHeaders` on
+the session options) and cursor rather than page-number pagination. Chargebee was
+the second, and a harder one: HTTP Basic with the site name as the username,
+from a pasted `site:api_key` pair, a `tenant`-scoped external id keyed on that
+site, **four** handlers at once — and still no orchestration, route or UI
+change.
 
 **A new function:** `registerFunction` with its `scopesByProvider`, and it
 appears in the picker immediately — with no handler it correctly reports that no
 provider supports it yet. Add a handler per provider to make it real, plus a
-target schema alongside `identity-schema.ts` if it writes new record types.
+target schema alongside the existing four if it writes new record types.
 
 Concretely, for a function that writes new objects, in the order the compiler
 will ask for them:
@@ -730,6 +762,10 @@ will ask for them:
    `OBJECT_LABELS` in `sync-panel.tsx`, and the unresolved-association report in
    `scripts/db-maintenance.mts`.
 
+`billing` is the worked example of what that list looks like end to end: three
+objects, one new page (`/billing`), four writers, one of which reconciles, and
+five providers that changed nothing.
+
 ---
 
 ## 12. How the tests are layered
@@ -739,9 +775,9 @@ where a new test belongs.
 
 | Suite | Exercises | Needs |
 |---|---|---|
-| `tests/unit/` | Pure logic — mapper, crypto, SOQL, clock, scheduler policy, identity normalization, survivorship, assertions, crosswalk parsing, the mapping migration | nothing |
+| `tests/unit/` | Pure logic — mapper, crypto, SOQL, clock, scheduler policy, the four object schemas, each provider's status/amount maps, identity normalization, survivorship, assertions, crosswalk parsing, the mapping migration | nothing |
 | `tests/property/` | The invariants that carry weight: scope isolation, provider filtering, mapping round-trip, target validation, absent-source-yields-null, upsert identity, pagination completeness, and identity's own set below | fast-check |
-| `tests/integration/` | Handlers against mocked provider APIs — pagination, 429 with and without `Retry-After`, 401 then refresh then retry, field discovery — plus the resolution pass against a real database | msw, plus a throwaway Postgres schema built by `tests/global-setup.ts` |
+| `tests/integration/` | Handlers against mocked provider APIs — pagination, 429 with and without `Retry-After`, 401 then refresh then retry, field discovery, one file per function per provider for catalog/agreement/billing — plus the resolution pass and the writers against a real database | msw, plus a throwaway Postgres schema built by `tests/global-setup.ts` |
 
 `identity-resolution.property.test.ts` carries the properties that would be
 tedious to argue by example: **totality** (every customer ends with an account),

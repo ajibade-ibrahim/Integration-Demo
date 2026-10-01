@@ -2,16 +2,19 @@
 
 Generated from [`prisma/schema.prisma`](../prisma/schema.prisma) and the
 const-union types in [`src/core/types/common.ts`](../src/core/types/common.ts).
-Fifteen tables in three groups:
+Twenty-eight tables in three groups:
 
-- **The sync spine** — seven tables hanging off `Integration`, which is the
-  tenancy boundary for everything a connector fetches.
+- **The sync spine** — twenty tables hanging off `Integration`, which is the
+  tenancy boundary for everything a connector fetches. It now spans four
+  functions: identity, catalog, agreement and billing.
 - **The identity layer** — four tables scoped to `User` instead, because
   resolving one company across three connections is by definition not something
   any one `Integration` owns. Described under
   [The identity layer](#the-identity-layer-and-why-it-hangs-off-user).
 - **Two scratch tables** holding a connect that has not finished yet, described
   under [Scratch tables](#scratch-tables-for-a-connect-in-progress).
+
+Plus `User` itself, which sits above the spine for ownership only.
 
 > **Also available as an interactive page** —
 > [`docs/diagrams/data-model.html`](./diagrams/data-model.html): the entity diagram
@@ -37,27 +40,43 @@ erDiagram
     Integration ||--o{ Contact : "syncs"
     Integration ||--o{ Product : "syncs"
     Integration ||--o{ Offering : "syncs"
-    Integration ||--o{ ProductFeature : "syncs"
+    Integration ||--o{ Price : "syncs"
+    Integration ||--o{ Feature : "syncs"
+    Integration ||--o{ Entitlement : "syncs"
     Integration ||--o{ Agreement : "syncs"
     Integration ||--o{ Subscription : "syncs"
+    Integration ||--o{ AgreementItem : "syncs"
+    Integration ||--o{ AgreementEntitlement : "syncs"
+    Integration ||--o{ AgreementDiscount : "syncs"
     Integration ||--o{ Invoice : "syncs"
     Integration ||--o{ InvoiceLine : "syncs"
     Integration ||--o{ Payment : "syncs"
     Integration ||--o{ SyncRun : "audited by"
 
     Customer |o--o{ Contact : "employs, link nullable"
+
     Product |o--o{ Offering : "priced by, link nullable"
-    Product |o--o{ ProductFeature : "includes, link nullable"
+    Offering |o--o{ Price : "priced by, link nullable"
+    Offering |o--o{ Entitlement : "includes, link nullable"
+    Feature |o--o{ Entitlement : "granted by, link nullable"
 
     Customer |o--o{ Agreement : "agreed to, link nullable"
     Offering |o--o{ Agreement : "sold under, link nullable"
     Agreement ||--o| Subscription : "detailed by, required and unique"
+    Agreement ||--o{ AgreementItem : "itemized by, required and cascade"
+    Agreement ||--o{ AgreementEntitlement : "confers, required and cascade"
+    Agreement ||--o{ AgreementDiscount : "discounted by, required and cascade"
+    Feature |o--o{ AgreementEntitlement : "granted by, link nullable"
+    Price |o--o{ AgreementItem : "billed at, link nullable"
+    Offering |o--o{ AgreementItem : "billed for, link nullable"
 
     Customer |o--o{ Invoice : "billed, link nullable"
     Agreement |o--o{ Invoice : "bills, link nullable"
     Invoice ||--o{ InvoiceLine : "itemized by, required and cascade"
     Invoice |o--o{ Payment : "settled by, link nullable"
     Customer |o--o{ Payment : "pays, link nullable"
+    Price |o--o{ InvoiceLine : "billed at, link nullable"
+    Offering |o--o{ InvoiceLine : "billed for, link nullable"
 
     CustomerAccount |o--o{ Customer : "resolves, link nullable"
     CustomerAccount ||--o{ CustomerAccountKey : "matched by"
@@ -91,7 +110,7 @@ erDiagram
     Integration {
         string id PK
         string userId FK
-        string providerName "hubspot, salesforce, metrifox, stripe, mock"
+        string providerName "hubspot, salesforce, metrifox, stripe, chargebee, mock"
         string status "IntegrationStatus, see state diagram"
         string instanceLabel "user-facing label"
         int syncIntervalHours "default 24, clamped 1..168"
@@ -106,7 +125,7 @@ erDiagram
     IntegrationFunction {
         string id PK
         string integrationId FK
-        string functionName "identity, catalog, agreement, support, billing, usage, communication"
+        string functionName "identity, catalog, agreement, billing, support, usage, communication"
         datetime addedAt
     }
 
@@ -124,7 +143,7 @@ erDiagram
         string id PK
         string integrationId FK
         string functionName "part of the mapping identity"
-        string targetObject "customer, contact"
+        string targetObject "customer … payment — see TARGET_OBJECTS"
         string sourceFieldPath "dot path into the provider payload"
         string targetFieldPath "unqualified, e.g. domain"
         string transform "none, trim, lowercase, domainFromUrl, dateOnly"
@@ -189,8 +208,21 @@ erDiagram
         string integrationId FK
         string externalSourceId "provider-assigned, upsert key"
         string name "required; synthesized when the provider has none"
+        string description
         string productId FK "resolved internal parent, nullable"
         string externalProductId "provider product id, pre-resolution"
+        boolean active "nullable — null is 'not told', not 'inactive'"
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    Price {
+        string id PK
+        string integrationId FK
+        string externalSourceId "provider-assigned, upsert key"
+        string name "required; synthesized when the provider has none"
+        string offeringId FK "resolved internal parent, nullable"
+        string externalOfferingId "provider offering id, pre-resolution"
         int amountMinor "minor units — never a float"
         string currency "ISO 4217"
         string interval "BillingInterval: day|week|month|year|one_time"
@@ -200,15 +232,29 @@ erDiagram
         datetime updatedAt
     }
 
-    ProductFeature {
+    Feature {
+        string id PK
+        string integrationId FK
+        string externalSourceId "the *definition* id (feat_…), upsert key"
+        string name "required"
+        string lookupKey "the stable key code gates on — indexed"
+        boolean isMetered "Chargebee's metered; null on Stripe, which has no such concept"
+        string unit "what a metered grant counts — Chargebee's unit"
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    Entitlement {
         string id PK
         string integrationId FK
         string externalSourceId "the *attachment* id (prodft_…), not the feature id"
-        string name "required; denormalized from the feature definition"
-        string lookupKey "the stable key code gates on — indexed"
-        string externalFeatureId "provider feature id (feat_…), shared across rows"
-        string productId FK "resolved internal parent, nullable"
-        string externalProductId "from the request URL, not the payload"
+        string featureId FK "resolved internal parent, nullable"
+        string externalFeatureId "shared across rows when one feature is attached twice"
+        string offeringId FK "resolved internal parent, nullable"
+        string externalOfferingId "from the request URL, not the payload"
+        string value "the provider's answer verbatim"
+        string valueName "Chargebee's entitlement level label"
+        int limitValue "the numeric form of value; null means no stated limit"
         string customFields "JSON object"
         datetime updatedAt
     }
@@ -228,6 +274,7 @@ erDiagram
         datetime endDate
         string currency
         string customFields "JSON object"
+        string providerMetadata "the raw provider bag — meta_data, metadata"
         datetime updatedAt
     }
 
@@ -238,13 +285,75 @@ erDiagram
         string agreementId FK "required and unique — Cascade, not SetNull"
         datetime currentPeriodStart
         datetime currentPeriodEnd
+        datetime trialStartsAt
         datetime trialEndsAt
         datetime canceledAt "when cancellation was requested"
+        datetime cancelAt "when the provider says it stops — Chargebee's cancel_at"
         boolean cancelAtPeriodEnd
-        string collectionMethod
+        datetime nextBillingAt "what renews next; the read model sorts on it"
+        string billingPeriod "SubscriptionBillingPeriod — the *primary* line's cadence"
+        int billingPeriodCount "how many billingPeriods make one cycle"
+        string collectionMethod "CollectionMethod: automatic|manual|none"
         int quantity
         int itemCount "priced lines; only the first is linked"
         string customFields "JSON object"
+        string providerMetadata "the raw provider bag"
+        datetime updatedAt
+    }
+
+    AgreementItem {
+        string id PK
+        string integrationId FK
+        string externalSourceId "provider-assigned, upsert key — what reconciliation compares"
+        string agreementId FK "required and cascade — both rows off one payload"
+        string priceId FK "resolved internal parent, nullable"
+        string externalPriceId
+        string offeringId FK "resolved internal parent, nullable"
+        string externalOfferingId
+        int quantity
+        int position "the provider's own ordering — not a rank"
+        string itemType "AgreementItemType, nullable — not InvoiceLineType"
+        string billingModel "BillingModel, nullable — flat_fee|per_unit|tiered|usage_based|one_time"
+        int unitPriceMinor "per-unit price *for this subscription*; Chargebee only"
+        int freeQuantity "units included at no charge — Chargebee's free_quantity"
+        int billingCycles "how many cycles this line runs for"
+        string customFields "JSON object"
+        string providerMetadata "the raw provider bag"
+        datetime updatedAt
+    }
+
+    AgreementEntitlement {
+        string id PK
+        string integrationId FK
+        string externalSourceId "synthesized as subscriptionId:featureId on Chargebee"
+        string agreementId FK "required and cascade — both rows off one payload"
+        string featureId FK "resolved internal parent, nullable"
+        string externalFeatureId
+        string value "the provider's answer verbatim"
+        string valueName "the entitlement's level label"
+        int limitValue "the numeric form of value; null means no stated limit"
+        boolean isOverride "overrides the catalog baseline rather than inheriting it"
+        boolean isEnabled "the feature is granted at all — so an absent one is not read as zero"
+        string customFields "JSON object"
+        string providerMetadata "the raw provider bag"
+        datetime updatedAt
+    }
+
+    AgreementDiscount {
+        string id PK
+        string integrationId FK
+        string externalSourceId "the discount/attachment id — what reconciliation compares"
+        string agreementId FK "required and cascade — both rows off one payload"
+        string externalCouponId "the coupon it came from; no relation, no coupon table"
+        string label
+        string kind "DiscountKind: percentage|fixed_amount|free_items"
+        int percentOff "whole percent, as stated"
+        int amountOffMinor "the currency's minor unit, as stated"
+        string status "DiscountStatus: active|expired|removed|scheduled"
+        datetime startsAt
+        datetime endsAt
+        string customFields "JSON object"
+        string providerMetadata "the raw provider bag"
         datetime updatedAt
     }
 
@@ -259,8 +368,8 @@ erDiagram
         string agreementId FK "resolved internal parent, nullable"
         string externalAgreementId "provider subscription id, pre-resolution"
         string currency
-        int subtotalMinor
-        int discountMinor "null on both providers — neither states a scalar"
+        int subtotalMinor "the sum the provider states of its lines"
+        int discountMinor "null on Stripe — it states an array; Chargebee states none"
         int taxMinor "null on Stripe — it states an array; Chargebee states one"
         int totalMinor "stated by the provider, never computed from the lines"
         int amountDueMinor "stated, never computed"
@@ -272,6 +381,7 @@ erDiagram
         datetime paidAt
         string hostedUrl "Stripe only"
         string customFields "JSON object"
+        string providerMetadata "Chargebee writes subscription_id: consolidated here"
         datetime updatedAt
     }
 
@@ -293,6 +403,7 @@ erDiagram
         string offeringId FK "resolved internal parent, nullable"
         string externalOfferingId
         string customFields "JSON object"
+        string providerMetadata "the raw provider bag"
         datetime updatedAt
     }
 
@@ -314,6 +425,7 @@ erDiagram
         boolean isDisputed
         string providerReference "the provider's own id, kept beside ours"
         string customFields "JSON object"
+        string providerMetadata "the raw provider bag"
         datetime updatedAt
     }
 
@@ -324,8 +436,7 @@ erDiagram
         string trigger "manual, scheduled"
         datetime startedAt
         datetime completedAt "null while running"
-        int customerCount
-        int contactCount
+        string recordCountsJson "rows written per target object — a map, not two count columns"
         int attempt "default 1"
         string errorsJson "JSON array of RecordIssue"
     }
@@ -404,73 +515,133 @@ authenticated by Auth.js against `passwordHash`.
 Two relationships carry the design load:
 
 - **`Integration` → `IntegrationFunction` is one-to-many, not one-to-one.** A
-  single HubSpot connection can serve `identity` *and* `support`. The OAuth
-  scopes requested are the union across these rows, which is why the function
-  set has to be known before authorization.
+  single HubSpot connection can serve `identity` *and* `support`; a single Stripe
+  connection can serve all three commercial functions. The scopes requested are
+  the union across these rows, which is why the function set has to be known
+  before authorization.
 - **`Customer` → `Contact` is optional on the contact side.** Providers hand
   back their *own* company id, never our UUID. Customers are written first to
   build an `external → internal` index; a contact whose company will not resolve
   is kept with `customerId = null` and its `externalCustomerId` retained, so a
   later sync links it once that company arrives.
 
+That second rule generalizes across the spine, and the exceptions to it are
+enumerated under [Referential actions](#referential-actions): every parent-child
+edge either keeps the provider's id for a later relink or is an extension whose
+rows always arrive together.
+
 ---
 
-## `ProductFeature`: an attachment, not a feature
+## `Feature` and `Entitlement`: a definition, and the links to it
 
-One row is Stripe's **`ProductFeature`** (`prodft_…`) — the statement *this
-product includes this feature* — and not the feature itself. Stripe's
-Entitlements API has three objects and only this one is synced:
+Two tables where there used to be one, and the split is the whole design. The
+previous shape denormalized the feature's `name` and `lookup_key` onto every
+attachment, so one feature on three offerings was three rows that had to be
+grouped by a query. Now:
 
-| Object | Endpoint | Synced? |
-|---|---|---|
-| `Feature` (`feat_…`) | `GET /v1/entitlements/features` | No — read once per sync, to ask whether the list is empty |
-| `ProductFeature` (`prodft_…`) | `GET /v1/products/{id}/features` | **Yes** |
-| `ActiveEntitlement` (`ent_…`) | `GET /v1/entitlements/active_entitlements?customer=…` | No |
+| | Table | Holds | Stripe | Chargebee |
+|---|---|---|---|---|
+| The definition | `Feature` | a reusable capability — name, `lookupKey`, `isMetered`, `unit` | `EntitlementFeature` (`feat_…`) | `Feature` |
+| The link | `Entitlement` | *this* offering includes *that* feature, at this limit | `ProductFeature` (`prodft_…`) | `item_entitlement` |
 
-The feature's own `id`, `name` and `lookup_key` are **denormalized onto every
-attachment**. So the same feature on three products is three rows, each
-carrying `feat_…` in `externalFeatureId` — and grouping them is a query rather
-than a join.
+Stripe names the pair the other way round, which is why each handler states
+which of its objects is which. Chargebee was what made the split necessary rather
+than tidy: its features carry `metered` and `unit`, and its attachments carry
+`value`/`limit`, so a single flattened row would have had to hold a fact that
+belongs to the definition and two that belong to the link, with no way to tell
+which was which.
 
-That is the decision worth understanding, because the alternative was
-structural. A `Feature` table would have made `ProductFeature` this schema's
-first many-to-many join row: two *required* parents and a resolution policy
-unlike any other association here. Denormalizing collapses it into a plain
-single-parent child, identical in shape to `Offering`, and there is no new
-association machinery anywhere in the system as a result.
+The upsert keys make the difference concrete. `Feature` is keyed on `feat_…` —
+so a feature attached to two products is **one row**, and the handler enforces
+that with a `seenFeatureIds` set across the whole run. `Entitlement` is keyed on
+`prodft_…` — so the same feature attached to two products is **two rows**,
+because two attachments really are two facts about two offerings.
 
-What the omission costs is exactly one thing: a feature attached to no product
-is invisible. The sandbox seeds one (`beta-sandbox`) so that this stays a
-checked claim rather than a remembered one — `fixtures:verify` asserts it
-appears nowhere. And adding the standalone object later is additive: a new
-table, a new target object and a relink pass, touching no column here and
-requiring no backfill, because the feature's id is already on every row.
+### What each level can and cannot be read for
 
-**Entitlements are product-scoped, not price-scoped.** There is no
-`/v1/prices/{id}/features` — the endpoint does not exist — so all five prices on
-Platform grant identical features, and the route from a price to its features is
-`Offering → Product → ProductFeature`. That is why nothing links an offering to
-a feature directly.
+The two overlap by construction and **must never be summed**. `Entitlement` is
+the catalog baseline — "the Pro offering includes 50 seats".
+`AgreementEntitlement` is the per-agreement answer — what this subscriber
+actually gets, with Chargebee's inherited values and per-subscription overrides
+already folded in. `isOverride` is the only place the difference is visible, and
+`isEnabled` is what stops a feature the customer does *not* have from reading as
+a limit of zero.
+
+`Feature` is the one root record on the commercial side: it hangs off nothing, so
+`externalRefsOf` returns `{}` for it. `Entitlement` is the opposite — it names
+two parents and neither is primary, so both resolve independently and a
+half-linked row says which half.
 
 ### Two things about the parent link
 
-**The product id does not come from the payload.** A `ProductFeature` response
+**The offering id does not come from the payload.** A `ProductFeature` response
 carries no `product` field at all; the id comes from the URL the handler just
 requested. This is the only association in the system built that way, and it is
 the only one whose failure is silent — every other parent id is read from the
 record, so a wrong one produces a null or an unresolved warning. A handler that
-lost track here would link every row to the wrong product and report success.
+lost track here would link every row to the wrong offering and report success.
 `tests/unit/stripe-product-feature.test.ts` pins that the injected id wins even
 over a `product` key on the record.
 
+It is safe to inject precisely because **each Stripe product has one synthesized
+offering carrying the same id**, which is why the handler can use one value for
+both roles. A provider that had real item objects would not have that.
+
 **There is no relink pass, deliberately.** `Offering` keeps
 `externalProductId` *and* a `relinkOrphanedOfferings` pass, because a price can
-arrive before its product. A product feature cannot: the handler builds its URL
-from a product it listed moments earlier in the same run. So an unresolved
-product here does not mean "not yet synced" — it means the product was
-*rejected*, which no later run repairs on its own. The column is still stored,
-for the warning and the data browser, and `db:check` reports the count as
-expected-zero rather than expected-small.
+arrive before its product. An entitlement cannot: the handler builds its URL from
+a product it listed moments earlier in the same run. So an unresolved parent here
+does not mean "not yet synced" — it means that parent was *rejected*, which no
+later run repairs on its own. The column is still stored, for the warning and the
+data browser, and `db:check` reports the count as expected-zero rather than
+expected-small.
+
+**Entitlements do not reconcile, so a detached feature persists.** There is no
+absence detection on this pass, and no equivalent of the `status=all` parameter
+that makes canceled subscriptions visible to a handler. A feature detached in
+Stripe stays in our tables until the integration is deleted. That is a known gap
+rather than a bug, and the same one every other upsert-only object in the schema
+carries.
+
+**What the split still cannot see: a feature attached to nothing.** Definitions
+are read *off* attachments, so `feat_unattached` in the sandbox appears nowhere —
+which is what makes it a checked claim rather than a remembered one.
+`fixtures:verify` asserts it. Listing `/v1/entitlements/features` directly would
+change that, and the handler deliberately probes it with `limit=1` only to decide
+whether the per-product fan-out is worth running at all.
+
+**Entitlements are offering-scoped, not price-scoped.** There is no
+`/v1/prices/{id}/features` — the endpoint does not exist — so all prices on
+Platform grant identical features, and the route from a price to its features is
+`Price → Offering → Entitlement`. That is why nothing links a price to a feature
+directly.
+
+## The agreement's own children
+
+`Agreement` is a shared commercial node, and four tables hang off it. Each one
+earns its place rather than being a column on the parent:
+
+| Table | Grain | The argument for it |
+|---|---|---|
+| `Subscription` | one per agreement, `@unique` | period, trial, cancellation. The sole detail row of a `subscription`-type agreement. |
+| `AgreementItem` | many | *line items are not a subscription quirk.* Salesforce has `ContractLineItem`, `OrderItem` and `QuoteLineItem`; HubSpot models what a deal sold as line items; an order form is a header plus its lines. A subscription is the odd case where one offering link almost suffices — which is why this table was missing for so long. |
+| `AgreementEntitlement` | many | what this subscriber *actually* gets, as distinct from the catalog baseline |
+| `AgreementDiscount` | many | stated values only. No computed net, no post-discount total, no amount on the agreement to reconcile against |
+
+`AgreementItem` is the only one of the four that deliberately carries **no amount
+column**: a line is a *selection*, and what it bills for is the Offering or Price
+it points at, which already holds the money. A subscription's true total is the
+provider's to state, not ours to sum. `InvoiceLine` is the opposite case and does
+carry two, because an invoice line *is* the money.
+
+`AgreementDiscount` is allowed to carry `amountOffMinor` despite that, because a
+discount's value *is* its amount — there is nothing to defer to.
+
+`Agreement.providerMetadata` and the same column on its three children hold the
+raw provider bag (`meta_data`, `metadata`). The name matches
+`OAuthToken.providerMetadata` deliberately and means something different: there
+it is token-response extras every later API call needs, here it is the
+provider's own key/values we did not model.
 
 ## The identity layer, and why it hangs off `User`
 
@@ -574,17 +745,18 @@ a draft id.
 | Parent | Child | On parent delete |
 |---|---|---|
 | `User` | `Integration`, `IntegrationDraft`, `CustomerAccount`, `IdentityResolutionRun` | `Cascade` |
-| `Integration` | `IntegrationFunction`, `OAuthToken`, `FieldMapping`, `DiscoveredField`, `Customer`, `Contact`, `Product`, `Offering`, `ProductFeature`, `Agreement`, `Subscription`, `Invoice`, `InvoiceLine`, `Payment`, `SyncRun` | `Cascade` |
+| `Integration` | `IntegrationFunction`, `OAuthToken`, `FieldMapping`, `DiscoveredField`, `Customer`, `Contact`, `Product`, `Offering`, `Price`, `Feature`, `Entitlement`, `Agreement`, `Subscription`, `AgreementItem`, `AgreementEntitlement`, `AgreementDiscount`, `Invoice`, `InvoiceLine`, `Payment`, `SyncRun` | `Cascade` |
 | `Customer` | `Contact` | `SetNull` — the contact survives, unlinked |
 | `Customer` | `Agreement` | `SetNull` — the agreement survives, unlinked |
 | `Customer` | `Invoice`, `Payment` | `SetNull` — the billing row survives, unlinked |
 | `Product` | `Offering` | `SetNull` — the price survives, unlinked |
-| `Product` | `ProductFeature` | `SetNull` — the row survives, unlinked |
-| `Offering` | `Agreement`, `InvoiceLine` | `SetNull` — the row survives, unlinked |
-| `Price` | `InvoiceLine` | `SetNull` — the row survives, unlinked |
-| `Agreement` | `Subscription` | `Cascade` — see below; the one exception |
+| `Offering` | `Price`, `Entitlement`, `Agreement`, `AgreementItem`, `InvoiceLine` | `SetNull` — the row survives, unlinked |
+| `Feature` | `Entitlement`, `AgreementEntitlement` | `SetNull` — the row survives, unlinked |
+| `Price` | `AgreementItem`, `InvoiceLine` | `SetNull` — the row survives, unlinked |
+| `Agreement` | `Subscription` | `Cascade` — the sole detail row; see below |
+| `Agreement` | `AgreementItem`, `AgreementEntitlement`, `AgreementDiscount` | `Cascade` — extensions of one row; see below |
 | `Agreement` | `Invoice` | `SetNull` — the invoice survives, unlinked |
-| `Invoice` | `InvoiceLine` | `Cascade` — the second extension, same reasoning |
+| `Invoice` | `InvoiceLine` | `Cascade` — an extension of one row; see below |
 | `Invoice` | `Payment` | `SetNull` — a refund has no invoice to begin with |
 | `Customer` | `IdentityAssertion` (both sides) | `Cascade` — a verdict about a row that no longer exists is not a verdict |
 | `CustomerAccount` | `CustomerAccountKey` | `Cascade` |
@@ -601,34 +773,37 @@ correct rather than merely tidy. An empty account still holding a key claim
 would permanently block the right account from ever forming, because the unique
 means that key can only belong to one.
 
-**`Agreement` → `Subscription` is one of the two associations here that
-cascade**, and it is worth understanding why rather than reading it as an
-inconsistency. Every
-other nullable FK above points at a record that means something on its own: an
-offering without its product is still a readable price, a contact without its
-company is still a person. A `Subscription` row is a billing period, a trial
-date and a cancellation flag — about nothing, if the agreement they describe is
-gone. So the FK is `NOT NULL`, `@unique` and `Cascade`, which together say "this
-is an extension of exactly one row" rather than "this is a collection hanging
-off one".
+**There are five cascades from `Agreement` down, and one
+pattern behind all of them.** Every nullable FK above points at a record that
+means something on its own: an offering without its product is still a readable
+price, a contact without its company is still a person, an invoice without its
+agreement is still a bill someone was sent. A cascade edge points at a record
+that means nothing without its parent — so the parent is not a container, it is
+the thing the row is *about*.
 
-**`Invoice` → `InvoiceLine` is the second, and is the same shape without the
-unique.** A line is an amount, a period and a description — about nothing if its
-invoice is gone — so the FK is `NOT NULL` and `Cascade`. It is not `@unique`
-because an invoice has many lines, which is the whole difference between the two:
-a subscription is its agreement's sole detail row, an invoice's lines are a
-collection. Both rows come off one provider payload in one run, which is why
-neither edge keeps an `external…Id` column and neither has a relink pass.
-`Payment` is deliberately the other way — `SetNull`, with its provider invoice id
-retained — because a Chargebee refund and a Stripe charge raised outside an
-invoice have no invoice at all, and null is the honest state for those.
+| Child | Means without its parent | FK shape |
+|---|---|---|
+| `Subscription` | a period, trial dates and a cancellation flag | `NOT NULL`, `@unique`, `Cascade` |
+| `AgreementItem` | a selected offering at a quantity | `NOT NULL`, `Cascade` |
+| `AgreementEntitlement` | a limit on a feature this agreement grants | `NOT NULL`, `Cascade` |
+| `AgreementDiscount` | a discount on nothing | `NOT NULL`, `Cascade` |
+| `InvoiceLine` | an amount, a period and a description | `NOT NULL`, `Cascade` |
+| `Payment` | **a money movement, which does stand alone** | nullable, `SetNull`, keeps `externalInvoiceId` |
 
-That also means `Subscription` is the only synced table with **no**
-`external…Id` column for late linking, and no relink pass. Both rows come off
-one provider record in one run, so "arrived before its parent" — the case the
-other children retain a provider id for — cannot happen. It is reachable by two
-cascade paths, from its integration and from its agreement; both end in the same
-place.
+`Subscription` is `@unique` and the other three agreement children are not,
+because it is its agreement's *sole* detail row while an agreement has many
+lines, entitlements and discounts — a collection rather than an extension. That
+is the only difference between them.
+
+`Payment` is deliberately the other way round. A Chargebee refund has no invoice,
+and a Stripe charge raised outside one has none either, so null is the honest
+state and the provider's invoice id is kept beside it for a later relink.
+
+The other shared consequence is that **none of these five cascades keeps an
+`external…Id` column for late linking, and none has a relink pass** — `Payment`,
+the `SetNull` row above, is the one child that does retain its provider id. Both
+rows come off one provider payload in one run, so "arrived before its parent" —
+the case the other children retain a provider id for — cannot happen.
 
 ---
 
@@ -639,7 +814,9 @@ place.
 | `User` | `email` | The stable handle the demo looks the user up by. |
 | `Customer` | `(integrationId, externalSourceId)` | The upsert key. Re-running a sync updates rather than duplicates. |
 | `Contact` | `(integrationId, externalSourceId)` | Same. |
-| `Product`, `Offering`, `ProductFeature`, `Agreement`, `Subscription`, `Invoice`, `InvoiceLine`, `Payment` | `(integrationId, externalSourceId)` | Same — every synced table is keyed this way, which is what `findByExternalId` relies on. |
+| `Product`, `Offering`, `Price`, `Feature`, `Entitlement`, `Agreement`, `Subscription`, `AgreementItem`, `AgreementEntitlement`, `AgreementDiscount`, `Invoice`, `InvoiceLine`, `Payment` | `(integrationId, externalSourceId)` | Same — every synced table is keyed this way, which is what `findByExternalId` relies on. |
+| `Feature` | `(integrationId, lookupKey)` (an index, not a unique) | "Which offerings include `premium-support`?" is the query the table exists to answer. Not unique: a provider may define two features under one key, and refusing the second would reject a record over something ours decided. |
+| `Entitlement` | `(integrationId, externalSourceId)` on the **attachment** id | The upsert key is `prodft_…`, not `feat_…`. Keying on the feature id would make the second attachment to the same feature an overwrite — the exact case the split exists to handle. |
 | `Subscription` | `agreementId` | **Also unique on its own.** One detail row per agreement, not many: the unique is what makes it an extension rather than a collection, and what stops a re-sync inserting a second. |
 | `IntegrationFunction` | `(integrationId, functionName)` | A function is declared once per integration. |
 | `FieldMapping` | `(integrationId, functionName, targetObject, targetFieldPath)` | One rule per target field. Function and target object are part of the identity, because two functions on one integration can write to the same object. |
@@ -653,7 +830,19 @@ scheduler sweep, `FieldMapping(integrationId)` and
 `(integrationId, functionName)`, `Customer(integrationId)`,
 `Contact(integrationId)` and `Contact(customerId)`,
 `SyncRun(integrationId, startedAt)` for run-history ordering, and
-`IntegrationFunction(functionName)`. The identity layer adds
+`IntegrationFunction(functionName)`. The catalog adds an index per synced table
+on `(integrationId)` plus the parent each child resolves through —
+`Offering(productId)`, `Price(offeringId)`, `Entitlement(offeringId)`,
+`Entitlement(featureId)`, `Feature(integrationId, lookupKey)`. The agreement
+tables add `Agreement(customerId)`, `Agreement(offeringId)` and
+`Agreement(integrationId, agreementType)`; `AgreementItem` indexes both the join
+and the reconciliation predicate plus `priceId`/`offeringId`; the remaining three
+index `agreementId` and, for entitlements, `featureId`. Billing adds
+`Invoice(customerId)`, `Invoice(agreementId)`, `Invoice(integrationId, status)`
+for "open invoices on this integration", `InvoiceLine(invoiceId)`,
+`InvoiceLine(offeringId)`, `InvoiceLine(priceId)`, `Payment(invoiceId)`,
+`Payment(customerId)` and `Payment(integrationId, processedAt)` — the last being
+the first query the table exists to answer. The identity layer adds
 `Customer(customerAccountId)` for member lookups, `CustomerAccount(userId)` and
 `(userId, name)` for the Accounts tab's `name asc, id asc` ordering,
 `CustomerAccountKey(customerAccountId)`, `IdentityAssertion(userId)`, and
@@ -683,10 +872,16 @@ the source of truth.
 |---|---|---|
 | `Integration.status` | `pending_authorization`, `active`, `expired`, `requires_reauthorization`, `error` | `isIntegrationStatus` |
 | `Customer.type`, `CustomerAccount.type` | `prospect`, `customer`, `partner`, `vendor`, or null | `isCustomerType` |
-| `FieldMapping.targetObject` | `customer`, `contact`, `product`, `offering`, `productFeature`, `agreement`, `subscription`, `invoice`, `invoiceLine`, `payment` | `isTargetObject` |
-| `Offering.interval` | `day`, `week`, `month`, `year`, `one_time`, or null | `isBillingInterval` |
+| `FieldMapping.targetObject` | `customer`, `contact`, `product`, `offering`, `price`, `feature`, `entitlement`, `agreement`, `subscription`, `agreementItem`, `agreementEntitlement`, `agreementDiscount`, `invoice`, `invoiceLine`, `payment` | `isTargetObject` |
+| `Price.interval` | `day`, `week`, `month`, `year`, `one_time`, or null | `isBillingInterval` |
 | `Agreement.agreementType` | `subscription`, `order_form`, `contract`, `deal` — **never null** | `isAgreementType` |
-| `Agreement.status` | `draft`, `trialing`, `active`, `past_due`, `paused`, `canceled`, `expired`, or null | `isAgreementStatus` |
+| `Agreement.status` | `draft`, `trialing`, `active`, `past_due`, `paused`, `canceled`, `expired`, `scheduled`, or null | `isAgreementStatus` |
+| `Subscription.billingPeriod` | `day`, `week`, `month`, `year`, or null | `isSubscriptionBillingPeriod` |
+| `Subscription.collectionMethod` | `automatic`, `manual`, `none`, or null | `isCollectionMethod` |
+| `AgreementItem.itemType` | `plan`, `add_on`, `usage`, `charge`, or null | `isAgreementItemType` |
+| `AgreementItem.billingModel` | `flat_fee`, `per_unit`, `tiered`, `usage_based`, `one_time`, or null | `isBillingModel` |
+| `AgreementDiscount.kind` | `percentage`, `fixed_amount`, `free_items`, or null | `isDiscountKind` |
+| `AgreementDiscount.status` | `active`, `expired`, `removed`, `scheduled`, or null | `isDiscountStatus` |
 | `Invoice.status` | `draft`, `open`, `paid`, `past_due`, `void`, `uncollectible`, or null | `isInvoiceStatus` |
 | `InvoiceLine.itemType` | `plan`, `add_on`, `usage`, `charge`, `proration`, `discount`, `credit`, `adjustment`, or null | `isInvoiceLineType` |
 | `Payment.kind` | `payment`, `refund` — **never null** | `isPaymentKind` |
@@ -706,7 +901,7 @@ and the order is the strength ranking** — `external_ref` beats `email` beats
 its own: the five states mean the same things, down to `discarded` being what
 the concurrency guard produces.
 
-Three more are worth a note. `Offering.interval` holds **`one_time` as a value
+Four more are worth a note. `Price.interval` holds **`one_time` as a value
 rather than a null**, because "this price does not recur" is a fact and "we were
 not told" is an absence, and the UI must not render them alike.
 `Agreement.agreementType` is the only enum-shaped column in the schema that is
@@ -715,18 +910,38 @@ it is cannot be read at all — a writer that cannot parse it defaults to
 `subscription` and records a warning rather than storing a null. And
 `Agreement.status` is deliberately **not** any provider's vocabulary: Stripe has
 eight subscription statuses, Salesforce Contract has its own, and folding them
-into these seven is the provider handler's job, so the collapse is visible in
-one place instead of assumed everywhere. `Invoice.status` and `Payment.status`
-follow that rule, and each folds more than it names: Chargebee's `pending` is a
-`draft` invoice, its `payment_due` and `not_paid` are both `past_due`, and a
-Chargebee `needs_attention` transaction is `pending` rather than `failed`.
+into these eight is the provider handler's job, so the collapse is visible in
+one place instead of assumed everywhere. `scheduled` is the member that made
+that non-trivial: Chargebee `future` and Stigg `NOT_STARTED` are agreed but not
+yet begun, which `draft` cannot hold — `draft` means *never agreed*, which is
+what Stripe's `incomplete` maps to.
+`Invoice.status` and `Payment.status` follow that rule, and each folds more than
+it names: Chargebee's `pending` is a `draft` invoice, its `payment_due` and
+`not_paid` are both `past_due`, and a Chargebee `needs_attention` transaction is
+`pending` rather than `failed`.
+
+`Subscription.billingPeriod` is deliberately **not** `BILLING_INTERVALS`. A
+subscription's cadence is never `one_time`, so a union that can say so is wider
+than the fact it describes; a provider reporting a one-time *primary* line is
+reporting something that is not a subscription, and the handler declines rather
+than fitting it to the list. The column also states only the primary line's
+cadence — a subscription whose lines differ does not have one cadence, so it is
+left null there rather than picking.
+
+`AgreementItem.billingModel` and `DiscountKind`/`DiscountStatus` are our
+vocabulary, not either provider's. Chargebee's `pricing_model` and its own
+discount `type` are translated by the handler, which is the only place either
+spelling should appear. `DiscountStatus`'s `removed` is a lifecycle state rather
+than an absence: the provider applied a discount and later took it off, which is
+worth keeping for the same reason `canceled` is.
 
 `InvoiceLine.itemType` is a union of its own rather than reusing
-`AGREEMENT_ITEM_TYPES`, even though the two share three member names. The two
-answer different questions — an agreement item is a line on the subscription, an
-invoice line is a line on the bill — and the bill vocabulary additionally
-includes `discount`, `credit` and `adjustment`, none of which are subscription
-lines. A shared guard would store an invoice's discount as a `charge`.
+`AGREEMENT_ITEM_TYPES`, even though the two share four member names — `charge`
+belongs to both, for different reasons. The two answer different questions: an
+agreement item is a line on the subscription, an invoice line is a line on the
+bill, and the bill vocabulary additionally includes `discount`, `credit` and
+`adjustment`, none of which are subscription lines. A shared guard would store
+an invoice's discount as a `charge`.
 
 `emailClass` is stored to **explain** a key, never to filter one. Role addresses
 like `billing@` and `accounts@` are still keys — the spec's own seeds are
@@ -748,14 +963,22 @@ Read and written only through
 | `Customer.crossRefs` | `{}` | `Record<provider, foreignId>` from `crossRef.<provider>` mapping rules. **Overwritten wholesale on every upsert** |
 | `Customer.importedCrossRefs` | `{}` | Same shape, human-supplied. Separate precisely because the line above is true |
 | `Contact.customFields` | `{}` | `Record<string, unknown>` |
+| `Product`, `Offering`, `Price`, `Feature`, `Entitlement` `.customFields` | `{}` | `Record<string, unknown>`, max 50 keys |
 | `CustomerAccount.customFields` | `{}` | Unioned across members, higher priority winning a shared key |
 | `CustomerAccount.fieldProvenance` | `{}` | `Record<fieldName, integrationId>` — which source won each field |
-| `OAuthToken.providerMetadata` | `{}` | Provider extras from the token response, e.g. Salesforce `instance_url` and `organizationId` |
+| `OAuthToken.providerMetadata` | `{}` | Provider extras from the token response — Salesforce `instance_url` and `organizationId`, Chargebee `site` |
 | `SyncRun.errorsJson` | `[]` | `RecordIssue[]` — `{ sourceRecordId, targetObject, reason, fieldName?, severity }` |
+| `SyncRun.recordCountsJson` | `{}` | `Record<targetObject, count>` — a map rather than the `customerCount`/`contactCount` pair it replaced, so a catalog sync need not claim a customer count of zero |
 | `IdentityResolutionRun.issuesJson` | `[]` | `IdentityIssue[]` — a **discriminated union** on `kind`, not one shape with eight optional fields, so a renderer cannot read `fieldName` off a key conflict |
-| `Invoice.customFields`, `InvoiceLine.customFields`, `Payment.customFields` | `{}` | `Record<string, unknown>`, max 50 keys |
-| `Invoice.providerMetadata`, `InvoiceLine.providerMetadata`, `Payment.providerMetadata` | `{}` | Provider extras with no column of their own. Chargebee writes `subscription_id: "consolidated"` on an invoice whose lines span subscriptions |
+| `Agreement`, `Subscription`, `AgreementItem`, `AgreementEntitlement`, `AgreementDiscount` `.customFields` | `{}` | `Record<string, unknown>`, max 50 keys. Present even on the reconciling writers, because a `customFields.*` rule validates for *every* object and a table that dropped the bag would let a user map one, save it, and watch it do nothing |
+| `Agreement`, `Subscription`, `AgreementItem`, `AgreementEntitlement`, `AgreementDiscount` `.providerMetadata` | `{}` | The raw provider bag — Chargebee `meta_data`, Stripe `metadata`. Bounded by `MAX_CUSTOM_FIELDS`, so an over-long value is dropped silently: a place to look when a provider fact is missing, not a guarantee it is kept |
+| `Invoice`, `InvoiceLine`, `Payment` `.customFields` and `.providerMetadata` | `{}` | As above. Chargebee writes `subscription_id: "consolidated"` on an invoice whose lines span subscriptions |
 | `IntegrationDraft.functionNames` | none | `string[]` — the function names chosen, deduped and sorted before storage |
+
+The `providerMetadata` name appears on `OAuthToken` and on eight commercial
+rows, and means two different things both times: token-response extras every
+later API call needs, versus the provider's own key/values we did not model.
+Nothing reads across the two.
 
 The four `IdentityIssue` kinds are `key_claimed_elsewhere` (two accounts claim
 one key; never auto-merged, a human decides), `blocked_by_assertion` (a

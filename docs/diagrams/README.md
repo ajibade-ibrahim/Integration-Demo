@@ -15,6 +15,14 @@ styles.css        tokens, components, light + dark themes
 diagrams.js       connector engine, viewport controls, both interactive widgets
 ```
 
+> **The Markdown is the source of truth; these pages lag it.** They were last
+> rebuilt when the schema was fifteen tables, so the entity diagram and cascade
+> explorer cover the identity-era spine only — no catalog, agreement or billing
+> tables, and no Chargebee. Everything they *do* draw is still accurate. The
+> exception is the §2 scope matrix, which reads `SCOPES` from `diagrams.js` and
+> **is** current. When you update the Markdown diagrams, these pages want
+> rebuilding to match.
+
 ## What it adds over the Markdown
 
 | | |
@@ -46,9 +54,9 @@ in step with the schema.
 The cascade explorer covers **§1 only**. The four identity tables are drawn in
 §2, so they have no node there to mark, and their `onDelete` behaviour is stated
 in the explorer's prose instead of shown. That is a deliberate limit rather than
-an omission — putting fifteen tables in one canvas made the spine unreadable,
-and a cascade control that silently ignored a third of the schema would be
-worse than one that says which third.
+an omission — putting twenty-eight tables in one canvas made the spine
+unreadable, and a cascade control that silently ignored a third of the schema
+would be worse than one that says which third.
 
 ## How a diagram is built
 
