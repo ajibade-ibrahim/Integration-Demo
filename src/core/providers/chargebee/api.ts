@@ -773,3 +773,336 @@ export function subscriptionDiscounts(
     (row): row is RawRecord => asRecord(row) !== undefined
   );
 }
+
+// ---------------------------------------------------------------------------
+// Billing (invoices and transactions)
+//
+// The opposite of Stripe in the useful way: `line_items` is inlined on the
+// invoice list payload, so a line needs no per-invoice request. That inlining
+// is also the hazard — an absent `line_items` key reads as "this invoice has no
+// lines", which would license `writeInvoiceLines` to delete every line of every
+// invoice written this run. `hasLineItemsKey` is the key-presence gate that
+// withholds completeness, exactly as `hasSubscriptionItemsKey` does for
+// subscriptions.
+//
+// Transactions are `/api/v2/transactions`, offset-paginated like everything
+// else here. A `transaction.type` of `authorization` moves no money and is not
+// written at all — a `payment` row for one would overstate what the customer
+// paid.
+// ---------------------------------------------------------------------------
+
+export function invoicesUrl(
+  site: string,
+  limit: number,
+  offset?: string
+): string {
+  const base = chargebeeApiBase(site).replace(/\/$/, "");
+  const url = new URL(`${base}/api/v2/invoices`);
+  url.searchParams.set("limit", String(limit));
+  if (offset !== undefined && offset !== "") {
+    url.searchParams.set("next_offset", offset);
+  }
+  return url.toString();
+}
+
+export function transactionsUrl(
+  site: string,
+  limit: number,
+  offset?: string
+): string {
+  const base = chargebeeApiBase(site).replace(/\/$/, "");
+  const url = new URL(`${base}/api/v2/transactions`);
+  url.searchParams.set("limit", String(limit));
+  if (offset !== undefined && offset !== "") {
+    url.searchParams.set("next_offset", offset);
+  }
+  return url.toString();
+}
+
+export function parseInvoicesPage(json: unknown): ChargebeeListPage {
+  return parseEnvelopePage(json, "invoice");
+}
+
+export function parseTransactionsPage(json: unknown): ChargebeeListPage {
+  return parseEnvelopePage(json, "transaction");
+}
+
+/**
+ * An invoice's inline lines.
+ *
+ * Tolerant of a `line_item` wrapper as well as the flat element shape: the
+ * list payload carries flat objects, but a per-invoice fetch wraps each under
+ * `line_item`, and reading both costs nothing.
+ */
+export function invoiceLineItems(invoice: RawRecord): readonly RawRecord[] {
+  const rows = asArray(invoice["line_items"]);
+  const items: RawRecord[] = [];
+  for (const row of rows) {
+    const flat = asRecord(row);
+    if (flat === undefined) continue;
+    const wrapped = asRecord(flat["line_item"]);
+    items.push(wrapped ?? flat);
+  }
+  return items;
+}
+
+/**
+ * Whether an invoice payload carried the `line_items` key.
+ *
+ * Distinct from `invoiceLineItems(...).length > 0`, deliberately: an absent key
+ * and an empty array are different facts, and only the first withholds the line
+ * list's completeness. See `chargebeeBillingHandler`.
+ */
+export function hasLineItemsKey(invoice: RawRecord): boolean {
+  return invoice["line_items"] !== undefined;
+}
+
+/** Chargebee's invoice status words, mapped to ours. */
+const CHARGEBEE_INVOICE_STATUS: Readonly<Record<string, string>> = {
+  // A metered-or-deferred invoice, not a Stripe draft — but neither is issued.
+  pending: "draft",
+  // Not yet collected, within the due date.
+  posted: "open",
+  // Being retried per retry settings, then all attempts failed. Stripe has no
+  // invoice `past_due`; Chargebee's two words are what the member is for.
+  payment_due: "past_due",
+  not_paid: "past_due",
+  paid: "paid",
+  voided: "void",
+};
+
+export function chargebeeInvoiceStatusOf(
+  invoice: RawRecord
+): string | undefined {
+  const raw = asString(invoice["status"]);
+  return raw === undefined ? undefined : CHARGEBEE_INVOICE_STATUS[raw];
+}
+
+/** Chargebee's transaction status words, mapped to ours. */
+const CHARGEBEE_TRANSACTION_STATUS: Readonly<Record<string, string>> = {
+  success: "succeeded",
+  // "The gateway connection dropped and nobody has reconciled it" is not a
+  // failure; treating it as one would report a payment as lost that may well
+  // have succeeded.
+  in_progress: "pending",
+  needs_attention: "pending",
+  failure: "failed",
+  timeout: "failed",
+  late_failure: "failed",
+  voided: "reversed",
+};
+
+export function chargebeeTransactionStatusOf(
+  transaction: RawRecord
+): string | undefined {
+  const raw = asString(transaction["status"]);
+  return raw === undefined ? undefined : CHARGEBEE_TRANSACTION_STATUS[raw];
+}
+
+/**
+ * Which direction a transaction moved money, or `undefined` for a type that is
+ * not a movement at all.
+ *
+ * `authorization` returns `undefined` on purpose: it moves no money, so the
+ * handler drops it rather than writing a `payment` row that overstates what the
+ * customer paid. That is why this table's counts will not match a Chargebee
+ * dashboard's authorization-inclusive count.
+ */
+export function chargebeePaymentKindOf(
+  transaction: RawRecord
+): string | undefined {
+  switch (asString(transaction["type"])) {
+    case "payment":
+      return "payment";
+    case "refund":
+    case "payment_reversal":
+      return "refund";
+    default:
+      return undefined;
+  }
+}
+
+/** Combine a transaction's `error_code` and `error_text` for one column. */
+function errorReasonOf(transaction: RawRecord): string | undefined {
+  const code = asString(transaction["error_code"]);
+  const text = asString(transaction["error_text"]);
+  if (code !== undefined && text !== undefined) return `${code}: ${text}`;
+  return code ?? text;
+}
+
+/**
+ * The subscription an invoice belongs to, when Chargebee names exactly one.
+ *
+ * **Consolidated invoicing is the trap.** `subscription_id` is null when an
+ * invoice carries lines from multiple subscriptions, and the docs are explicit
+ * that it must not be used in that case. So this returns the invoice-level id
+ * and nothing else — it never reaches into the first line's `subscription_id`,
+ * which would link the whole invoice to one subscription and be a lie with no
+ * null to notice. `flattenChargebeeInvoice` records the consolidation in
+ * `providerMetadata` instead.
+ */
+function invoiceSubscriptionId(invoice: RawRecord): string | undefined {
+  return asString(invoice["subscription_id"]);
+}
+
+/**
+ * Whether the invoice looks consolidated: no invoice-level subscription, but
+ * line items that name one.
+ *
+ * Written into `providerMetadata` as `subscription_id: "consolidated"` so the
+ * state is distinguishable from a one-off invoice that simply has no
+ * subscription. Without it, a consolidated invoice and an unrelated one read
+ * the same on the row.
+ */
+function isConsolidatedInvoice(invoice: RawRecord): boolean {
+  if (asString(invoice["subscription_id"]) !== undefined) return false;
+  return invoiceLineItems(invoice).some(
+    (line) => asString(line["subscription_id"]) !== undefined
+  );
+}
+
+/**
+ * The fields synthesized onto one Chargebee invoice before mapping.
+ *
+ * The money is left raw — `sub_total`, `tax`, `total`, `amount_due` and
+ * `amount_paid` are already top-level and already in cents — and only the
+ * epoch dates, the status vocabulary and the two association ids are
+ * synthesized. `number` reads the invoice's own `id`, because Chargebee's id
+ * *is* the sequential invoice number and the API has no separate field.
+ */
+export function flattenChargebeeInvoice(invoice: RawRecord): RawRecord {
+  const status = chargebeeInvoiceStatusOf(invoice);
+  const rawStatus = asString(invoice["status"]);
+  const consolidated = isConsolidatedInvoice(invoice);
+
+  const metadata: Record<string, string> = {
+    ...((asRecord(invoice["meta_data"]) as Record<string, string>) ?? {}),
+    ...(consolidated ? { subscription_id: "consolidated" } : {}),
+  };
+
+  const dates: Record<string, string> = {};
+  for (const [ours, theirs] of [
+    // Absent for a `pending` invoice until it closes, which is exactly the null
+    // `Invoice.issuedAt` documents.
+    ["issued_at", "generated_at"],
+    ["due_at", "due_date"],
+    ["paid_at", "paid_at"],
+  ] as const) {
+    const iso = epochToIso(invoice[theirs]);
+    if (iso !== undefined) dates[ours] = iso;
+  }
+
+  return {
+    ...(asString(invoice["id"]) === undefined
+      ? {}
+      : { number: asString(invoice["id"]) }),
+    ...(status === undefined ? {} : { status }),
+    ...(rawStatus === undefined ? {} : { chargebee_status: rawStatus }),
+    customer_id: asString(invoice["customer_id"]),
+    agreement_id: invoiceSubscriptionId(invoice),
+    ...(Object.keys(metadata).length === 0
+      ? {}
+      : { provider_metadata: JSON.stringify(metadata) }),
+    ...dates,
+  };
+}
+
+/**
+ * The fields synthesized onto one inline invoice line before mapping.
+ *
+ * `invoice_id` is injected by the caller from the invoice it was read from —
+ * the payload carries its own `invoice_id` and it is deliberately ignored, for
+ * `flattenAgreementItem`'s reason: this is a writer that deletes. The line's
+ * `externalSourceId` is its own real `id`; unlike Chargebee's subscription
+ * items there is no positional fallback to make.
+ */
+export function flattenChargebeeInvoiceLine(
+  line: RawRecord,
+  invoiceId: string
+): RawRecord {
+  const entityType = asString(line["entity_type"]);
+  // Chargebee line items carry a real `id`. `entity_id` is the item price id
+  // for an item-shaped line, and an unrelated id for anything else — a coupon
+  // or a credit note — so it is read only for the item-shaped types.
+  const priceId =
+    entityType === "plan" ||
+    entityType === "addon" ||
+    entityType === "charge" ||
+    entityType === "item"
+      ? asString(line["entity_id"])
+      : undefined;
+
+  const dateFrom = epochToIso(line["date_from"]);
+  const dateTo = epochToIso(line["date_to"]);
+
+  return {
+    invoice_id: invoiceId,
+    ...(priceId === undefined ? {} : { price_id: priceId }),
+    ...(dateFrom === undefined ? {} : { period_start: dateFrom }),
+    ...(dateTo === undefined ? {} : { period_end: dateTo }),
+  };
+}
+
+/**
+ * The fields synthesized onto one transaction before mapping.
+ *
+ * `invoice_id` comes from `linked_invoices`, which is present only for a
+ * `payment` — a refund carries none, so `externalInvoiceId` is legitimately
+ * null there. `payment_reversal` is reported as `reversed` rather than
+ * `succeeded`, because a completed reversal is a reversal and not a payment
+ * that settled.
+ */
+export function flattenChargebeeTransaction(
+  transaction: RawRecord
+): RawRecord {
+  const kind = chargebeePaymentKindOf(transaction);
+  const type = asString(transaction["type"]);
+  const status =
+    type === "payment_reversal" ? "reversed" : chargebeeTransactionStatusOf(transaction);
+  const rawStatus = asString(transaction["status"]);
+
+  const linked = asArray(transaction["linked_invoices"])
+    .map((row) => asRecord(row))
+    .find((row) => asString(row?.["invoice_id"]) !== undefined);
+  const invoiceId = asString(linked?.["invoice_id"]);
+
+  const method = asString(transaction["payment_method"]);
+  const failureReason = errorReasonOf(transaction);
+  const providerReference = asString(transaction["id_at_gateway"]);
+
+  // Prefer the settlement moment; fall back to when the transaction happened,
+  // which is always present.
+  const processedAt =
+    epochToIso(transaction["settled_at"]) ?? epochToIso(transaction["date"]);
+
+  const metaData = asRecord(transaction["meta_data"]) as
+    | Record<string, string>
+    | undefined;
+  const extras: Record<string, string> = {};
+  const reference = asString(transaction["reference_transaction_id"]);
+  if (reference !== undefined) extras["reference_transaction_id"] = reference;
+  const refundedTxn = asString(transaction["refunded_txn_id"]);
+  if (refundedTxn !== undefined) extras["refunded_txn_id"] = refundedTxn;
+  const metadata = { ...(metaData ?? {}), ...extras };
+
+  return {
+    ...(kind === undefined ? {} : { kind }),
+    ...(status === undefined ? {} : { status }),
+    ...(rawStatus === undefined ? {} : { chargebee_status: rawStatus }),
+    ...(invoiceId === undefined ? {} : { invoice_id: invoiceId }),
+    customer_id: asString(transaction["customer_id"]),
+    ...(method === undefined ? {} : { method }),
+    ...(failureReason === undefined
+      ? {}
+      : { failure_reason: failureReason.slice(0, 255) }),
+    // Chargebee has no boolean dispute flag; a chargeback is the payment method.
+    is_disputed: method === "chargeback",
+    ...(providerReference === undefined
+      ? {}
+      : { provider_reference: providerReference }),
+    ...(processedAt === undefined ? {} : { processed_at: processedAt }),
+    ...(Object.keys(metadata).length === 0
+      ? {}
+      : { provider_metadata: JSON.stringify(metadata) }),
+  };
+}

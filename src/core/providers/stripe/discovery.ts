@@ -28,6 +28,7 @@ import type {
 import { asRecord, createProviderSession, type ProviderSession } from "../http";
 import {
   entitlementFeaturesUrl,
+  invoiceLines,
   listUrl,
   parseListPage,
   subscriptionItems,
@@ -41,7 +42,10 @@ import {
   STRIPE_CUSTOMER_FIELDS,
   STRIPE_ENTITLEMENT_FIELDS,
   STRIPE_FEATURE_FIELDS,
+  STRIPE_INVOICE_FIELDS,
+  STRIPE_INVOICE_LINE_FIELDS,
   STRIPE_OFFERING_FIELDS,
+  STRIPE_PAYMENT_FIELDS,
   STRIPE_PRICE_FIELDS,
   STRIPE_PRODUCT_FIELDS,
   STRIPE_SUBSCRIPTION_FIELDS,
@@ -169,6 +173,40 @@ async function withItemMetadataKeys(
   ];
 }
 
+/**
+ * The invoice-line fields, plus the metadata keys the account's lines carry.
+ *
+ * `withItemMetadataKeys`' reasoning, one function over: the lines are only
+ * reachable inside an invoice, so a page of invoices samples many lines for one
+ * request rather than fanning out per invoice.
+ */
+async function withInvoiceLineMetadataKeys(
+  session: ProviderSession,
+  base: readonly DiscoveredFieldDef[]
+): Promise<readonly DiscoveredFieldDef[]> {
+  const body = parseListPage(
+    await session.getJson(listUrl("invoices", STRIPE_DISCOVERY_SAMPLE))
+  );
+
+  const metadataKeys = new Set<string>();
+  for (const record of body.records) {
+    for (const line of invoiceLines(record)) {
+      for (const key of Object.keys(asRecord(line["metadata"]) ?? {})) {
+        metadataKeys.add(key);
+      }
+    }
+  }
+
+  return [
+    ...base,
+    ...[...metadataKeys].sort().map((key) => ({
+      path: `metadata.${key}`,
+      label: `Invoice line metadata — ${key}`,
+      type: "string",
+    })),
+  ];
+}
+
 export const stripeFieldDiscovery: FieldDiscovery = {
   async discover(
     ctx: Omit<HandlerContext, "requestedSourcePaths">,
@@ -232,6 +270,20 @@ export const stripeFieldDiscovery: FieldDiscovery = {
       case "agreementEntitlement":
       case "agreementDiscount":
         return [];
+      // An invoice's metadata is its own, so it is sampled from the invoices
+      // endpoint like every other top-level object's.
+      case "invoice":
+        return withMetadataKeys(session, "invoices", STRIPE_INVOICE_FIELDS);
+      // Nested inside an invoice rather than being one, so its metadata comes
+      // from `lines.data[].metadata` — the `agreementItem` shape one function
+      // over.
+      case "invoiceLine":
+        return withInvoiceLineMetadataKeys(session, STRIPE_INVOICE_LINE_FIELDS);
+      // Static, and no request: a payment row is a charge or a refund plus
+      // synthesized ids, and its own `metadata` is not worth a separate
+      // request when the mapping editor's suggestion list is the only reader.
+      case "payment":
+        return [...STRIPE_PAYMENT_FIELDS];
     }
   },
 };

@@ -43,6 +43,10 @@ import {
   isCustomerType,
   isDiscountKind,
   isDiscountStatus,
+  isInvoiceLineType,
+  isInvoiceStatus,
+  isPaymentKind,
+  isPaymentStatus,
   isSubscriptionBillingPeriod,
   type RecordIssue,
   type TargetObject,
@@ -353,7 +357,8 @@ type ParentModel =
   | "offering"
   | "price"
   | "feature"
-  | "agreement";
+  | "agreement"
+  | "invoice";
 
 /**
  * Look a parent up by the provider's own id.
@@ -389,6 +394,8 @@ async function findByExternalId(
       return prisma.feature.findUnique({ where, select });
     case "agreement":
       return prisma.agreement.findUnique({ where, select });
+    case "invoice":
+      return prisma.invoice.findUnique({ where, select });
   }
 }
 
@@ -2282,6 +2289,644 @@ export async function relinkOrphanedAgreementEntitlements(
 }
 
 // ---------------------------------------------------------------------------
+// Billing
+//
+// The invoice is written first because both children name it: `invoiceLine`'s
+// FK is required and rejecting, and `payment`'s is nullable but wants the link
+// on first sight. Invoices have two nullable parents of their own — customer
+// and agreement — each belonging to another function and each warned about
+// independently, exactly as an agreement's own parents are.
+//
+// `invoiceLine` is the second reconciled writer in the system. It is gated on
+// the object being mapped *and* on a `complete` list, because an invoice with
+// no lines is legitimate and "produced nothing" cannot be told from "the
+// handler never got here" by a record count. See `SyncHandler`'s completeness
+// obligation for the contract the two handlers must honour.
+//
+// There is deliberately no relink for `invoiceLine`'s invoice edge, for
+// `AgreementItem`'s reason: the FK is required, so an unlinked line row cannot
+// exist to be repaired.
+// ---------------------------------------------------------------------------
+
+export interface InvoiceWriteResult extends WriteOutcome {
+  /** Provider id → our internal id, for resolving line and payment associations. */
+  externalToInternal: Map<string, string>;
+}
+
+/**
+ * Write invoices: the document, whatever state it is in.
+ *
+ * Two nullable parents, each from a different function, each resolved through
+ * its own index and warned about **separately** — the `writeAgreements` policy.
+ * An invoice whose customer we cannot find is still a real, readable invoice,
+ * and the provider id stays on the edge so a later relink completes it.
+ *
+ * Money is stored exactly as the provider stated it and never recomputed. See
+ * the section comment in prisma/schema.prisma for why `total` is not checked
+ * against the lines.
+ */
+export async function writeInvoices(
+  integrationId: string,
+  records: readonly CollectedRecord[]
+): Promise<InvoiceWriteResult> {
+  const issues: RecordIssue[] = [];
+  const externalToInternal = new Map<string, string>();
+  // One index per model, never shared — see `resolveAssociation`.
+  const customerIndex = new Map<string, string>();
+  const agreementIndex = new Map<string, string>();
+  let written = 0;
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    const externalCustomerId = externalRefs?.customer;
+    const externalAgreementId = externalRefs?.agreement;
+
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "invoice",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    // Warned and left unset, the policy every enum in this file gets: an
+    // invoice whose status we cannot read is still an invoice, and null already
+    // means "the provider did not say".
+    const rawStatus = normalize(mapped.fields["status"] ?? null);
+    let status: string | null = null;
+    if (rawStatus !== null) {
+      const candidate = rawStatus.toLowerCase();
+      if (isInvoiceStatus(candidate)) {
+        status = candidate;
+      } else {
+        issues.push({
+          sourceRecordId: externalSourceId,
+          targetObject: "invoice",
+          reason: `Unrecognised invoice status '${rawStatus}'; left unset`,
+          fieldName: "status",
+          severity: "warning",
+        });
+      }
+    }
+
+    const customerId = await resolveAssociation(
+      integrationId,
+      "customer",
+      externalCustomerId,
+      customerIndex
+    );
+    if (externalCustomerId !== undefined && customerId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "invoice",
+        reason: `Customer '${externalCustomerId}' not found; invoice saved without a link`,
+        fieldName: "associatedCustomerId",
+        severity: "warning",
+      });
+    }
+
+    const agreementId = await resolveAssociation(
+      integrationId,
+      "agreement",
+      externalAgreementId,
+      agreementIndex
+    );
+    if (externalAgreementId !== undefined && agreementId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "invoice",
+        reason: `Agreement '${externalAgreementId}' not found; invoice saved without a link`,
+        fieldName: "associatedAgreementId",
+        severity: "warning",
+      });
+    }
+
+    const data = {
+      number: normalize(
+        mapped.fields["number"] ?? null,
+        maxLengthOf("invoice", "number")
+      ),
+      status,
+      customerId,
+      externalCustomerId: externalCustomerId ?? null,
+      agreementId,
+      externalAgreementId: externalAgreementId ?? null,
+      currency: normalize(
+        mapped.fields["currency"] ?? null,
+        maxLengthOf("invoice", "currency")
+      ),
+      // Stated, never computed. `parseInteger` refuses a decimal outright, so a
+      // provider amount that arrived in major units warns rather than becoming a
+      // plausible-looking minor-unit figure.
+      subtotalMinor: parseInteger(mapped.fields["subtotalMinor"] ?? null),
+      discountMinor: parseInteger(mapped.fields["discountMinor"] ?? null),
+      taxMinor: parseInteger(mapped.fields["taxMinor"] ?? null),
+      totalMinor: parseInteger(mapped.fields["totalMinor"] ?? null),
+      amountDueMinor: parseInteger(mapped.fields["amountDueMinor"] ?? null),
+      amountPaidMinor: parseInteger(mapped.fields["amountPaidMinor"] ?? null),
+      issuedAt: parseDate(mapped.fields["issuedAt"] ?? null),
+      dueAt: parseDate(mapped.fields["dueAt"] ?? null),
+      periodStart: parseDate(mapped.fields["periodStart"] ?? null),
+      periodEnd: parseDate(mapped.fields["periodEnd"] ?? null),
+      paidAt: parseDate(mapped.fields["paidAt"] ?? null),
+      hostedUrl: normalize(
+        mapped.fields["hostedUrl"] ?? null,
+        maxLengthOf("invoice", "hostedUrl")
+      ),
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+      providerMetadata: parseProviderMetadata(
+        mapped.fields["providerMetadata"] ?? null
+      ),
+    };
+
+    const row = await prisma.invoice.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+      select: { id: true },
+    });
+
+    externalToInternal.set(externalSourceId, row.id);
+    written += 1;
+  }
+
+  return { written, externalToInternal, issues };
+}
+
+/**
+ * What the line writer needs to decide whether it may delete.
+ *
+ * Both halves required, and they answer different questions — see
+ * `GatedReconcileContext`. `writtenInvoiceIds` bounds *which* invoices are
+ * considered: only the ones this run wrote. An invoice from an earlier run the
+ * handler did not revisit keeps every line it has.
+ */
+export interface InvoiceLineReconcileContext {
+  readonly writtenInvoiceIds: ReadonlySet<string>;
+  readonly mapped: boolean;
+  readonly complete: boolean;
+}
+
+/**
+ * Write an invoice's lines, and remove the ones that are gone.
+ *
+ * The parent invoice is required and rejecting, on `writeSubscriptions`'
+ * reasoning: the foreign key cascades and a line without its invoice describes
+ * nothing. Both rows come off one source record in one run, so an unresolvable
+ * invoice means that invoice was itself rejected.
+ *
+ * The offering and price edges are each resolved independently and warned about
+ * independently — a line whose offering resolved and whose price did not is a
+ * real line, and `catalog` may not be on this integration at all.
+ *
+ * Reconciliation is the destructive path, and it is closed twice: the engine's
+ * `complete` flag withholds it for a list that might be partial, and the
+ * `writtenInvoiceIds` bound means only invoices this run wrote are considered.
+ * Both absent means no deletion at all.
+ */
+export async function writeInvoiceLines(
+  integrationId: string,
+  records: readonly CollectedRecord[],
+  invoiceIndex: Map<string, string>,
+  reconcile: InvoiceLineReconcileContext
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  let written = 0;
+
+  const offeringIndex = new Map<string, string>();
+  const priceIndex = new Map<string, string>();
+  const writtenByInvoice = new Map<string, Set<string>>();
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "invoiceLine",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const externalInvoiceId = externalRefs?.invoice;
+    const invoiceId = await resolveAssociation(
+      integrationId,
+      "invoice",
+      externalInvoiceId,
+      invoiceIndex
+    );
+
+    if (invoiceId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "invoiceLine",
+        reason:
+          externalInvoiceId === undefined
+            ? "Line claims no invoice; nothing to attach it to"
+            : `Invoice '${externalInvoiceId}' was not written; line dropped`,
+        fieldName: "associatedInvoiceId",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const externalOfferingId = externalRefs?.offering;
+    const offeringId = await resolveAssociation(
+      integrationId,
+      "offering",
+      externalOfferingId,
+      offeringIndex
+    );
+    if (externalOfferingId !== undefined && offeringId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "invoiceLine",
+        reason: `Offering '${externalOfferingId}' not found; line saved without a link`,
+        fieldName: "associatedOfferingId",
+        severity: "warning",
+      });
+    }
+
+    const externalPriceId = externalRefs?.price;
+    const priceId = await resolveAssociation(
+      integrationId,
+      "price",
+      externalPriceId,
+      priceIndex
+    );
+    if (externalPriceId !== undefined && priceId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "invoiceLine",
+        reason: `Price '${externalPriceId}' not found; line saved without a price`,
+        fieldName: "associatedPriceId",
+        severity: "warning",
+      });
+    }
+
+    // Validated against the invoice-line union, deliberately not the agreement
+    // one: an invoice's `discount` line would be a wrong column there.
+    const rawItemType = normalize(mapped.fields["itemType"] ?? null);
+    let itemType: string | null = null;
+    if (rawItemType !== null) {
+      const candidate = rawItemType.toLowerCase();
+      if (isInvoiceLineType(candidate)) {
+        itemType = candidate;
+      } else {
+        issues.push({
+          sourceRecordId: externalSourceId,
+          targetObject: "invoiceLine",
+          reason: `Unrecognised invoice line type '${rawItemType}'; left unset`,
+          fieldName: "itemType",
+          severity: "warning",
+        });
+      }
+    }
+
+    const data = {
+      invoiceId,
+      description: normalize(
+        mapped.fields["description"] ?? null,
+        maxLengthOf("invoiceLine", "description")
+      ),
+      quantity: parseInteger(mapped.fields["quantity"] ?? null),
+      unitAmountMinor: parseInteger(
+        mapped.fields["unitAmountMinor"] ?? null
+      ),
+      amountMinor: parseInteger(mapped.fields["amountMinor"] ?? null),
+      periodStart: parseDate(mapped.fields["periodStart"] ?? null),
+      periodEnd: parseDate(mapped.fields["periodEnd"] ?? null),
+      isProration: parseBoolean(mapped.fields["isProration"] ?? null),
+      itemType,
+      priceId,
+      externalPriceId: externalPriceId ?? null,
+      offeringId,
+      externalOfferingId: externalOfferingId ?? null,
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+      providerMetadata: parseProviderMetadata(
+        mapped.fields["providerMetadata"] ?? null
+      ),
+    };
+
+    const row = await prisma.invoiceLine.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+      select: { id: true },
+    });
+
+    const seen = writtenByInvoice.get(invoiceId) ?? new Set<string>();
+    seen.add(row.id);
+    writtenByInvoice.set(invoiceId, seen);
+
+    written += 1;
+  }
+
+  issues.push(
+    ...(await reconcileInvoiceLines(
+      integrationId,
+      writtenByInvoice,
+      reconcile
+    ))
+  );
+
+  return { written, issues };
+}
+
+/**
+ * Delete the lines an invoice no longer has — only when both gates are open.
+ *
+ * `reconcileGatedChildren`'s shape one table over, and the same safety: either
+ * gate absent means no deletion at all. An invoice absent from the written set
+ * keeps everything it has, whatever the reason for its absence.
+ */
+async function reconcileInvoiceLines(
+  integrationId: string,
+  writtenByInvoice: ReadonlyMap<string, Set<string>>,
+  ctx: InvoiceLineReconcileContext
+): Promise<RecordIssue[]> {
+  if (!ctx.mapped || !ctx.complete) return [];
+
+  const issues: RecordIssue[] = [];
+
+  for (const invoiceId of ctx.writtenInvoiceIds) {
+    const keptIds = writtenByInvoice.get(invoiceId) ?? new Set<string>();
+
+    const { count } = await prisma.invoiceLine.deleteMany({
+      where: {
+        integrationId,
+        invoiceId,
+        id: { notIn: [...keptIds] },
+      },
+    });
+
+    if (count > 0) {
+      issues.push({
+        sourceRecordId: invoiceId,
+        targetObject: "invoiceLine",
+        reason: `${count} line item${count === 1 ? "" : "s"} no longer on this invoice; removed`,
+        severity: "warning",
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Write payment movements: a charge or a refund, upsert only.
+ *
+ * `kind` is required and the one required field in the whole function, so an
+ * unrecognised or missing value **rejects** the record rather than warning —
+ * unlike a status, the provider always states the direction and there is no
+ * third possibility for a null to mean.
+ *
+ * Both associations are optional and warned about independently: a Chargebee
+ * refund has no invoice, a Stripe charge raised outside an invoice has none,
+ * and a provider may report no customer at all.
+ */
+export async function writePayments(
+  integrationId: string,
+  records: readonly CollectedRecord[],
+  invoiceIndex: Map<string, string>
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  const customerIndex = new Map<string, string>();
+  let written = 0;
+
+  for (const { externalSourceId, externalRefs, mapped } of records) {
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "payment",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const rawKind = normalize(mapped.fields["kind"] ?? null);
+    if (rawKind === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "payment",
+        reason: "Payment kind is required",
+        fieldName: "kind",
+        severity: "rejected",
+      });
+      continue;
+    }
+    const kindCandidate = rawKind.toLowerCase();
+    if (!isPaymentKind(kindCandidate)) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "payment",
+        reason: `Unrecognised payment kind '${rawKind}'`,
+        fieldName: "kind",
+        severity: "rejected",
+      });
+      continue;
+    }
+    const kind = kindCandidate;
+
+    const rawStatus = normalize(mapped.fields["status"] ?? null);
+    const status = parseEnum(rawStatus, isPaymentStatus);
+    if (rawStatus !== null && status === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "payment",
+        reason: `Unrecognised payment status '${rawStatus}'; left unset`,
+        fieldName: "status",
+        severity: "warning",
+      });
+    }
+
+    const externalInvoiceId = externalRefs?.invoice;
+    const invoiceId = await resolveAssociation(
+      integrationId,
+      "invoice",
+      externalInvoiceId,
+      invoiceIndex
+    );
+    if (externalInvoiceId !== undefined && invoiceId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "payment",
+        reason: `Invoice '${externalInvoiceId}' not found; payment saved without a link`,
+        fieldName: "associatedInvoiceId",
+        severity: "warning",
+      });
+    }
+
+    const externalCustomerId = externalRefs?.customer;
+    const customerId = await resolveAssociation(
+      integrationId,
+      "customer",
+      externalCustomerId,
+      customerIndex
+    );
+    if (externalCustomerId !== undefined && customerId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "payment",
+        reason: `Customer '${externalCustomerId}' not found; payment saved without a link`,
+        fieldName: "associatedCustomerId",
+        severity: "warning",
+      });
+    }
+
+    const data = {
+      invoiceId,
+      externalInvoiceId: externalInvoiceId ?? null,
+      customerId,
+      externalCustomerId: externalCustomerId ?? null,
+      kind,
+      status,
+      amountMinor: parseInteger(mapped.fields["amountMinor"] ?? null),
+      currency: normalize(
+        mapped.fields["currency"] ?? null,
+        maxLengthOf("payment", "currency")
+      ),
+      processedAt: parseDate(mapped.fields["processedAt"] ?? null),
+      method: normalize(
+        mapped.fields["method"] ?? null,
+        maxLengthOf("payment", "method")
+      ),
+      failureReason: normalize(
+        mapped.fields["failureReason"] ?? null,
+        maxLengthOf("payment", "failureReason")
+      ),
+      isDisputed: parseBoolean(mapped.fields["isDisputed"] ?? null),
+      providerReference: normalize(
+        mapped.fields["providerReference"] ?? null,
+        maxLengthOf("payment", "providerReference")
+      ),
+      customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
+      providerMetadata: parseProviderMetadata(
+        mapped.fields["providerMetadata"] ?? null
+      ),
+    };
+
+    await prisma.payment.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+    });
+
+    written += 1;
+  }
+
+  return { written, issues };
+}
+
+/**
+ * Retry an invoice's customer and agreement links.
+ *
+ * `relinkOrphanedAgreements`' shape: two edges, an `OR` over both, counted
+ * **once** per row even when both halves move — the count answers "how many
+ * rows changed". Both parents belong to other functions that may not have been
+ * connected when the invoice was written.
+ */
+export async function relinkOrphanedInvoices(
+  integrationId: string
+): Promise<number> {
+  const orphans = await prisma.invoice.findMany({
+    where: {
+      integrationId,
+      OR: [
+        { customerId: null, externalCustomerId: { not: null } },
+        { agreementId: null, externalAgreementId: { not: null } },
+      ],
+    },
+    select: {
+      id: true,
+      customerId: true,
+      externalCustomerId: true,
+      agreementId: true,
+      externalAgreementId: true,
+    },
+  });
+
+  let relinked = 0;
+  for (const orphan of orphans) {
+    const data: { customerId?: string; agreementId?: string } = {};
+
+    if (orphan.customerId === null && orphan.externalCustomerId !== null) {
+      const customer = await findByExternalId(
+        integrationId,
+        "customer",
+        orphan.externalCustomerId
+      );
+      if (customer !== null) data.customerId = customer.id;
+    }
+
+    if (orphan.agreementId === null && orphan.externalAgreementId !== null) {
+      const agreement = await findByExternalId(
+        integrationId,
+        "agreement",
+        orphan.externalAgreementId
+      );
+      if (agreement !== null) data.agreementId = agreement.id;
+    }
+
+    if (Object.keys(data).length === 0) continue;
+
+    await prisma.invoice.update({ where: { id: orphan.id }, data });
+    relinked += 1;
+  }
+  return relinked;
+}
+
+/**
+ * Retry a payment's invoice link.
+ *
+ * One edge, because the customer edge is resolved the same way but a payment
+ * with no invoice is the ordinary case for a refund — only the invoice edge has
+ * a relink worth running. (The customer edge is left for the customer relink
+ * inside `billing`'s own branch if one is ever needed; today the handler always
+ * supplies what the payload states.)
+ */
+export async function relinkOrphanedPaymentInvoices(
+  integrationId: string
+): Promise<number> {
+  const orphans = await prisma.payment.findMany({
+    where: {
+      integrationId,
+      invoiceId: null,
+      externalInvoiceId: { not: null },
+    },
+    select: { id: true, externalInvoiceId: true },
+  });
+
+  let relinked = 0;
+  for (const orphan of orphans) {
+    if (orphan.externalInvoiceId === null) continue;
+
+    const invoice = await findByExternalId(
+      integrationId,
+      "invoice",
+      orphan.externalInvoiceId
+    );
+
+    if (invoice !== null) {
+      await prisma.payment.update({
+        where: { id: orphan.id },
+        data: { invoiceId: invoice.id },
+      });
+      relinked += 1;
+    }
+  }
+  return relinked;
+}
+
+// ---------------------------------------------------------------------------
 // Per-function dispatch
 // ---------------------------------------------------------------------------
 
@@ -2498,13 +3143,48 @@ export async function writeRecordsForFunction(
       };
     }
 
+    case "billing": {
+      const invoices = await writeInvoices(integrationId, at("invoice"));
+
+      // Captured before the child writers run, for the reason the agreement
+      // branch captures its own set: they share the index and cache database
+      // lookups into it, so by the end it holds invoices this run never wrote.
+      const writtenInvoiceIds = new Set(invoices.externalToInternal.values());
+
+      const lines = await writeInvoiceLines(
+        integrationId,
+        at("invoiceLine"),
+        invoices.externalToInternal,
+        {
+          writtenInvoiceIds,
+          mapped:
+            mappedObjects === undefined || mappedObjects.has("invoiceLine"),
+          complete: complete?.get("invoiceLine") === true,
+        }
+      );
+
+      const payments = await writePayments(
+        integrationId,
+        at("payment"),
+        invoices.externalToInternal
+      );
+
+      return {
+        counts: {
+          invoice: invoices.written,
+          invoiceLine: lines.written,
+          payment: payments.written,
+        },
+        issues: [...invoices.issues, ...lines.issues, ...payments.issues],
+      };
+    }
+
     default:
       throw new Error(
         `No record writers registered for function '${functionName}'`
       );
   }
 }
-
 /**
  * Retry the associations one function left unresolved on earlier runs.
  *
@@ -2533,6 +3213,13 @@ export async function relinkOrphansForFunction(
         (await relinkOrphanedAgreements(integrationId)) +
         (await relinkOrphanedAgreementItems(integrationId)) +
         (await relinkOrphanedAgreementEntitlements(integrationId))
+      );
+    case "billing":
+      // The two nullable-edge tables. `invoiceLine` contributes nothing: its
+      // invoice FK is required, so an unlinked line cannot exist to repair.
+      return (
+        (await relinkOrphanedInvoices(integrationId)) +
+        (await relinkOrphanedPaymentInvoices(integrationId))
       );
     default:
       return 0;

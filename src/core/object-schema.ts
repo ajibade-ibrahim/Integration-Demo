@@ -23,6 +23,7 @@
  */
 
 import { AGREEMENT_OBJECT_SCHEMA } from "./agreement-schema";
+import { BILLING_OBJECT_SCHEMA } from "./billing-schema";
 import { CATALOG_SCHEMA } from "./catalog-schema";
 import {
   CROSS_REF_OBJECTS,
@@ -102,6 +103,7 @@ export const OBJECT_SCHEMAS: Readonly<Record<TargetObject, ObjectSchema>> = {
   ...IDENTITY_SCHEMA,
   ...CATALOG_SCHEMA,
   ...AGREEMENT_OBJECT_SCHEMA,
+  ...BILLING_OBJECT_SCHEMA,
 };
 
 /**
@@ -136,6 +138,11 @@ const FUNCTION_OBJECTS: Readonly<Record<string, readonly TargetObject[]>> = {
     "agreementEntitlement",
     "agreementDiscount",
   ],
+  // The order is load-bearing exactly as agreement's is: `invoiceLine` and
+  // `payment` both name an invoice, so the invoice row must be in the index
+  // before either child is written. A line's invoice FK is required and
+  // rejecting, and a payment's is nullable but wants the link on first sight.
+  billing: ["invoice", "invoiceLine", "payment"],
 };
 
 /**
@@ -183,6 +190,11 @@ const FUNCTION_WRITE_ORDER: readonly string[] = [
   "identity",
   "catalog",
   "agreement",
+  // Last, after agreement: an invoice resolves a customer written by identity,
+  // an offering written by catalog, and an agreement written by agreement one
+  // level up. Running it first would leave every link dangling until the next
+  // sync — which converges, but reads as a broken first sync.
+  "billing",
 ];
 
 export function functionsInWriteOrder(

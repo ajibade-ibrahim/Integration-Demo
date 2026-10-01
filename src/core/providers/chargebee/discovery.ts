@@ -321,6 +321,177 @@ export const CHARGEBEE_AGREEMENT_DISCOUNT_FIELDS: readonly DiscoveredFieldDef[] 
     },
   ];
 
+/** Billing fields, all static — Chargebee's discovery makes no requests. */
+
+/**
+ * Invoice fields — one document off `/api/v2/invoices`.
+ *
+ * Chargebee's invoice `id` *is* its sequential invoice number, so `id` and
+ * `number` are the same value; both are offered because a user may reach for
+ * either. `status` is translated into our six-member vocabulary, and the three
+ * dates are lifted from epoch seconds. There is no path for `issued_at` that
+ * is always present: a `pending` invoice has no `generated_at`, which is why
+ * the target column is nullable.
+ */
+export const CHARGEBEE_INVOICE_FIELDS: readonly DiscoveredFieldDef[] = [
+  { path: "id", label: "Invoice ID", type: "string" },
+  {
+    path: "number",
+    label: "Invoice number (synthesized from id)",
+    type: "string",
+  },
+  {
+    path: "status",
+    label:
+      "Status (translated to draft/open/paid/past_due/void; Chargebee has no uncollectible)",
+    type: "string",
+  },
+  {
+    path: "chargebee_status",
+    label:
+      "Chargebee's own status — map `status` instead unless you need the original",
+    type: "string",
+  },
+  { path: "customer_id", label: "Customer ID", type: "string" },
+  {
+    path: "agreement_id",
+    label:
+      "Subscription ID (synthesized; absent on a consolidated invoice)",
+    type: "string",
+  },
+  { path: "currency_code", label: "Currency code", type: "string" },
+  { path: "sub_total", label: "Subtotal, minor units", type: "number" },
+  { path: "tax", label: "Tax, minor units", type: "number" },
+  { path: "total", label: "Total, minor units", type: "number" },
+  { path: "amount_due", label: "Amount due, minor units", type: "number" },
+  { path: "amount_paid", label: "Amount paid, minor units", type: "number" },
+  {
+    path: "issued_at",
+    label: "Issued at (ISO 8601, synthesized from generated_at)",
+    type: "datetime",
+  },
+  {
+    path: "due_at",
+    label: "Due at (ISO 8601, synthesized from due_date)",
+    type: "datetime",
+  },
+  {
+    path: "paid_at",
+    label: "Paid at (ISO 8601, synthesized)",
+    type: "datetime",
+  },
+  {
+    path: "provider_metadata",
+    label: "Chargebee meta_data (JSON, synthesized)",
+    type: "string",
+  },
+  { path: "date", label: "Invoice date (Unix epoch seconds, raw)", type: "number" },
+];
+
+/**
+ * Invoice-line fields — one inline `line_item`.
+ *
+ * `invoice_id` is the injected parent, never the line's own `invoice_id`.
+ * `price_id` is synthesized from `entity_id` only for item-shaped lines, since
+ * a coupon or credit-note line's `entity_id` names something else entirely.
+ */
+export const CHARGEBEE_INVOICE_LINE_FIELDS: readonly DiscoveredFieldDef[] = [
+  { path: "id", label: "Invoice line ID", type: "string" },
+  {
+    path: "invoice_id",
+    label: "Invoice ID (synthesized from the fetch, not the record)",
+    type: "string",
+  },
+  {
+    path: "price_id",
+    label: "Item price ID (synthesized from entity_id on item-shaped lines)",
+    type: "string",
+  },
+  { path: "description", label: "Description", type: "string" },
+  { path: "quantity", label: "Quantity", type: "number" },
+  { path: "unit_amount", label: "Unit amount, minor units", type: "number" },
+  { path: "amount", label: "Line amount, minor units", type: "number" },
+  {
+    path: "period_start",
+    label: "Period start (ISO 8601, synthesized from date_from)",
+    type: "datetime",
+  },
+  {
+    path: "period_end",
+    label: "Period end (ISO 8601, synthesized from date_to)",
+    type: "datetime",
+  },
+  { path: "entity_type", label: "Entity type (raw)", type: "string" },
+  { path: "entity_id", label: "Entity ID (raw)", type: "string" },
+];
+
+/**
+ * Payment fields — one transaction, of kind payment or refund.
+ *
+ * `kind` and `status` are synthesized, and a transaction `type` of
+ * `authorization` never reaches the dropdown because it is never written at all.
+ */
+export const CHARGEBEE_PAYMENT_FIELDS: readonly DiscoveredFieldDef[] = [
+  { path: "id", label: "Transaction ID", type: "string" },
+  {
+    path: "kind",
+    label: "Kind (synthesized; refund and payment_reversal both become refund)",
+    type: "string",
+  },
+  {
+    path: "status",
+    label:
+      "Status (translated to pending/succeeded/failed/refunded/reversed)",
+    type: "string",
+  },
+  {
+    path: "chargebee_status",
+    label:
+      "Chargebee's own status — map `status` instead unless you need the original",
+    type: "string",
+  },
+  { path: "amount", label: "Amount, minor units", type: "number" },
+  { path: "currency_code", label: "Currency code", type: "string" },
+  {
+    path: "processed_at",
+    label: "Processed at (ISO 8601, synthesized from settled_at then date)",
+    type: "datetime",
+  },
+  {
+    path: "method",
+    label: "Method (synthesized from payment_method)",
+    type: "string",
+  },
+  {
+    path: "failure_reason",
+    label: "Failure reason (synthesized from error_code/error_text)",
+    type: "string",
+  },
+  {
+    path: "is_disputed",
+    label: "Is disputed (synthesized; payment_method is chargeback)",
+    type: "boolean",
+  },
+  {
+    path: "provider_reference",
+    label: "Provider reference (synthesized from id_at_gateway)",
+    type: "string",
+  },
+  {
+    path: "invoice_id",
+    label: "Invoice ID (synthesized from linked_invoices; absent on a refund)",
+    type: "string",
+  },
+  { path: "customer_id", label: "Customer ID", type: "string" },
+  {
+    path: "provider_metadata",
+    label: "Chargebee meta_data (JSON, synthesized)",
+    type: "string",
+  },
+  { path: "date", label: "Transaction date (Unix epoch seconds, raw)", type: "number" },
+  { path: "payment_method", label: "Payment method (raw)", type: "string" },
+];
+
 export const chargebeeFieldDiscovery: FieldDiscovery = {
   async discover(
     _ctx: Omit<HandlerContext, "requestedSourcePaths">,
@@ -351,6 +522,12 @@ export const chargebeeFieldDiscovery: FieldDiscovery = {
         return [...CHARGEBEE_AGREEMENT_ENTITLEMENT_FIELDS];
       case "agreementDiscount":
         return [...CHARGEBEE_AGREEMENT_DISCOUNT_FIELDS];
+      case "invoice":
+        return [...CHARGEBEE_INVOICE_FIELDS];
+      case "invoiceLine":
+        return [...CHARGEBEE_INVOICE_LINE_FIELDS];
+      case "payment":
+        return [...CHARGEBEE_PAYMENT_FIELDS];
     }
   },
 };

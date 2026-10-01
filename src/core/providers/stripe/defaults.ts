@@ -203,3 +203,61 @@ export const stripeAgreementDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "billing_model", targetObject: "agreementItem", targetFieldPath: "billingModel", transform: "none" },
   { sourceFieldPath: "provider_metadata", targetObject: "agreementItem", targetFieldPath: "providerMetadata", transform: "none" },
 ];
+
+/**
+ * Billing defaults for Stripe.
+ *
+ * Covers all three objects, and `payment.kind` is the load-bearing entry: it
+ * is the only required field in the whole billing function, and both a charge
+ * and a refund come off the same object, so without the rule every payment
+ * record is rejected on every sync. `provider-defaults.test.ts` checks required
+ * fields from the schema, which is what keeps it here.
+ *
+ * Most source paths are synthesized by the flatteners: the invoice and payment
+ * dates are epoch seconds, the statuses are Stripe's vocabulary, the ids are
+ * nested, and `unit_amount_minor` carries a decimal string. Two absences are
+ * deliberate. `taxMinor` and `discountMinor` have no rule because Stripe states
+ * them as arrays of per-source amounts, and summing them is the arithmetic this
+ * function refuses; `Invoice.totalMinor` and `amountPaidMinor` are mapped from
+ * Stripe's own stated figures instead.
+ */
+export const stripeBillingDefaults: FieldMappingRule[] = [
+  // --- invoice ---
+  { sourceFieldPath: "number", targetObject: "invoice", targetFieldPath: "number", transform: "trim" },
+  { sourceFieldPath: "status", targetObject: "invoice", targetFieldPath: "status", transform: "none" },
+  { sourceFieldPath: "currency", targetObject: "invoice", targetFieldPath: "currency", transform: "lowercase" },
+  { sourceFieldPath: "subtotal", targetObject: "invoice", targetFieldPath: "subtotalMinor", transform: "none" },
+  { sourceFieldPath: "total", targetObject: "invoice", targetFieldPath: "totalMinor", transform: "none" },
+  { sourceFieldPath: "amount_due", targetObject: "invoice", targetFieldPath: "amountDueMinor", transform: "none" },
+  { sourceFieldPath: "amount_paid", targetObject: "invoice", targetFieldPath: "amountPaidMinor", transform: "none" },
+  { sourceFieldPath: "issued_at", targetObject: "invoice", targetFieldPath: "issuedAt", transform: "none" },
+  { sourceFieldPath: "due_at", targetObject: "invoice", targetFieldPath: "dueAt", transform: "none" },
+  { sourceFieldPath: "period_start", targetObject: "invoice", targetFieldPath: "periodStart", transform: "none" },
+  { sourceFieldPath: "period_end", targetObject: "invoice", targetFieldPath: "periodEnd", transform: "none" },
+  { sourceFieldPath: "paid_at", targetObject: "invoice", targetFieldPath: "paidAt", transform: "none" },
+  { sourceFieldPath: "hosted_invoice_url", targetObject: "invoice", targetFieldPath: "hostedUrl", transform: "none" },
+  { sourceFieldPath: "provider_metadata", targetObject: "invoice", targetFieldPath: "providerMetadata", transform: "none" },
+
+  // --- invoiceLine ---
+  { sourceFieldPath: "description", targetObject: "invoiceLine", targetFieldPath: "description", transform: "trim" },
+  { sourceFieldPath: "quantity", targetObject: "invoiceLine", targetFieldPath: "quantity", transform: "none" },
+  { sourceFieldPath: "unit_amount_minor", targetObject: "invoiceLine", targetFieldPath: "unitAmountMinor", transform: "none" },
+  { sourceFieldPath: "amount", targetObject: "invoiceLine", targetFieldPath: "amountMinor", transform: "none" },
+  { sourceFieldPath: "period_start", targetObject: "invoiceLine", targetFieldPath: "periodStart", transform: "none" },
+  { sourceFieldPath: "period_end", targetObject: "invoiceLine", targetFieldPath: "periodEnd", transform: "none" },
+  { sourceFieldPath: "is_proration", targetObject: "invoiceLine", targetFieldPath: "isProration", transform: "none" },
+  { sourceFieldPath: "item_type", targetObject: "invoiceLine", targetFieldPath: "itemType", transform: "none" },
+  { sourceFieldPath: "provider_metadata", targetObject: "invoiceLine", targetFieldPath: "providerMetadata", transform: "none" },
+
+  // --- payment ---
+  { sourceFieldPath: "kind", targetObject: "payment", targetFieldPath: "kind", transform: "none" },
+  { sourceFieldPath: "status", targetObject: "payment", targetFieldPath: "status", transform: "none" },
+  { sourceFieldPath: "amount", targetObject: "payment", targetFieldPath: "amountMinor", transform: "none" },
+  { sourceFieldPath: "currency", targetObject: "payment", targetFieldPath: "currency", transform: "lowercase" },
+  { sourceFieldPath: "processed_at", targetObject: "payment", targetFieldPath: "processedAt", transform: "none" },
+  { sourceFieldPath: "method", targetObject: "payment", targetFieldPath: "method", transform: "none" },
+  { sourceFieldPath: "failure_reason", targetObject: "payment", targetFieldPath: "failureReason", transform: "none" },
+  { sourceFieldPath: "is_disputed", targetObject: "payment", targetFieldPath: "isDisputed", transform: "none" },
+  { sourceFieldPath: "provider_reference", targetObject: "payment", targetFieldPath: "providerReference", transform: "none" },
+  { sourceFieldPath: "provider_metadata", targetObject: "payment", targetFieldPath: "providerMetadata", transform: "none" },
+];

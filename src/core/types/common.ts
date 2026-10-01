@@ -92,6 +92,13 @@ export const TARGET_OBJECTS = [
   "agreementEntitlement",
   // A discount stated on an agreement. Stated values only — no computed net.
   "agreementDiscount",
+  // Billing: the document, its lines, and the money that moved. Note there is
+  // deliberately no `charge` member — the word means three incompatible things
+  // (an invoice line here, Chargebee's one-off item type, Stripe's own Charge
+  // object), so as a placeholder it would mislead more than it documented.
+  "invoice",
+  "invoiceLine",
+  "payment",
 ] as const;
 
 export type TargetObject = (typeof TARGET_OBJECTS)[number];
@@ -217,9 +224,16 @@ export function isAgreementStatus(v: unknown): v is AgreementStatus {
  *
  * `charge` is the fourth member, and the first that is not subscription-shaped:
  * it is Chargebee's third line type, a one-off amount on the same subscription.
- * It sits here rather than in a separate union because it answers the same
- * question — what kind of line is this — and a reader that handles `add_on`
+ * It belongs to *this* union because it answers the agreement's question — what
+ * kind of line is this on the subscription — and a reader that handles `add_on`
  * already knows how to skip a `charge`.
+ *
+ * It does **not** mean an amount on an invoice. That is a different question —
+ * what kind of line is this on the bill — answered by `INVOICE_LINE_TYPES`,
+ * which has a `charge` member among `discount`, `credit` and others. The two
+ * unions overlap by name and must never be substituted: an invoice's discount
+ * line is a `discount` there and would be stored as the wrong column if it were
+ * validated against this union.
  *
  * The three subscription-shaped members are knowingly not the whole vocabulary:
  * a contract line is none of the four and will stay null until an order-form
@@ -240,6 +254,135 @@ export function isAgreementItemType(v: unknown): v is AgreementItemType {
   return (
     typeof v === "string" &&
     (AGREEMENT_ITEM_TYPES as readonly string[]).includes(v)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Invoice, payment and invoice line
+// ---------------------------------------------------------------------------
+
+/**
+ * Where an invoice stands, in our vocabulary rather than any provider's.
+ *
+ * Mapping is the provider's job and the handler is the only place a provider's
+ * word may appear:
+ *
+ *   Stripe `draft`        → `draft`
+ *   Stripe `open`         → `open`
+ *   Stripe `paid`         → `paid`
+ *   Stripe `void`         → `void`
+ *   Stripe `uncollectible`→ `uncollectible`
+ *   Chargebee `pending`   → `draft`      (metered-or-deferred, not issued)
+ *   Chargebee `posted`    → `open`
+ *   Chargebee `payment_due` → `past_due` (being retried)
+ *   Chargebee `not_paid`  → `past_due`   (all attempts failed)
+ *   Chargebee `paid`      → `paid`
+ *   Chargebee `voided`    → `void`
+ *
+ * Two asymmetries are worth stating. **Chargebee has no `uncollectible`** — it
+ * writes off via `write_off_amount` rather than a status — so nothing maps to
+ * that member from it. And **Stripe has no `past_due` *invoice* status**, even
+ * though it has a `past_due` *subscription* one; the member exists for
+ * Chargebee's two retry states.
+ */
+export const INVOICE_STATUSES = [
+  "draft",
+  "open",
+  "paid",
+  "past_due",
+  "void",
+  "uncollectible",
+] as const;
+
+export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
+
+export function isInvoiceStatus(v: unknown): v is InvoiceStatus {
+  return (
+    typeof v === "string" &&
+    (INVOICE_STATUSES as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * Where a money movement stands, in our vocabulary.
+ *
+ * `pending` is a member because a provider can genuinely be unresolved about a
+ * movement without it having failed: Stripe's charge `pending`, and Chargebee's
+ * `in_progress` and `needs_attention`. The last of those is the reason the
+ * member matters — "the gateway connection dropped and nobody has reconciled
+ * it" is not a failure, and reporting it as one would say a payment was lost
+ * that may well have succeeded.
+ *
+ * `reversed` is distinct from `refunded`: a refund is money deliberately sent
+ * back, a reversal is a movement voided (`voided`, `payment_reversal`).
+ */
+export const PAYMENT_STATUSES = [
+  "pending",
+  "succeeded",
+  "failed",
+  "refunded",
+  "reversed",
+] as const;
+
+export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+
+export function isPaymentStatus(v: unknown): v is PaymentStatus {
+  return (
+    typeof v === "string" &&
+    (PAYMENT_STATUSES as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * Which direction a payment row moves money.
+ *
+ * Not nullable, unlike every other enum on the billing tables: the provider
+ * never leaves it blank, there is no third possibility, and the direction is
+ * the first thing a reader needs. A row that cannot say which way the money
+ * went is not a payment.
+ */
+export const PAYMENT_KINDS = ["payment", "refund"] as const;
+
+export type PaymentKind = (typeof PAYMENT_KINDS)[number];
+
+export function isPaymentKind(v: unknown): v is PaymentKind {
+  return (
+    typeof v === "string" && (PAYMENT_KINDS as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * What kind of line an invoice line is, in our vocabulary.
+ *
+ * A union of its own rather than `AGREEMENT_ITEM_TYPES`, which is the tempting
+ * reuse and the wrong one. The two answer different questions: an agreement
+ * item is a line on the *subscription* (`plan`, `add_on`, `usage`, `charge`),
+ * while an invoice line is a line on the *bill*, which additionally includes
+ * `discount`, `credit` and `adjustment` — none of which are subscription lines.
+ * Reusing the other union would silently store an invoice's discount as a
+ * `charge`, which is the wrong-column failure `AGREEMENT_ITEM_TYPES`' own
+ * comment warns about.
+ *
+ * Only Stripe's `proration` populates it today, and only because Stripe states
+ * it explicitly. Null means "the provider did not say", never a guess.
+ */
+export const INVOICE_LINE_TYPES = [
+  "plan",
+  "add_on",
+  "usage",
+  "charge",
+  "proration",
+  "discount",
+  "credit",
+  "adjustment",
+] as const;
+
+export type InvoiceLineType = (typeof INVOICE_LINE_TYPES)[number];
+
+export function isInvoiceLineType(v: unknown): v is InvoiceLineType {
+  return (
+    typeof v === "string" &&
+    (INVOICE_LINE_TYPES as readonly string[]).includes(v)
   );
 }
 

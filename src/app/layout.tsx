@@ -40,6 +40,9 @@ export default async function RootLayout({
               <Link href="/agreements" className="hover:text-slate-900">
                 Agreements
               </Link>
+              <Link href="/billing" className="hover:text-slate-900">
+                Billing
+              </Link>
             </nav>
             {session !== null && (
               <div className="ml-auto flex items-center gap-4 text-sm text-slate-500">

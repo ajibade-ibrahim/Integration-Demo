@@ -40,6 +40,9 @@ erDiagram
     Integration ||--o{ ProductFeature : "syncs"
     Integration ||--o{ Agreement : "syncs"
     Integration ||--o{ Subscription : "syncs"
+    Integration ||--o{ Invoice : "syncs"
+    Integration ||--o{ InvoiceLine : "syncs"
+    Integration ||--o{ Payment : "syncs"
     Integration ||--o{ SyncRun : "audited by"
 
     Customer |o--o{ Contact : "employs, link nullable"
@@ -49,6 +52,12 @@ erDiagram
     Customer |o--o{ Agreement : "agreed to, link nullable"
     Offering |o--o{ Agreement : "sold under, link nullable"
     Agreement ||--o| Subscription : "detailed by, required and unique"
+
+    Customer |o--o{ Invoice : "billed, link nullable"
+    Agreement |o--o{ Invoice : "bills, link nullable"
+    Invoice ||--o{ InvoiceLine : "itemized by, required and cascade"
+    Invoice |o--o{ Payment : "settled by, link nullable"
+    Customer |o--o{ Payment : "pays, link nullable"
 
     CustomerAccount |o--o{ Customer : "resolves, link nullable"
     CustomerAccount ||--o{ CustomerAccountKey : "matched by"
@@ -235,6 +244,75 @@ erDiagram
         string collectionMethod
         int quantity
         int itemCount "priced lines; only the first is linked"
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    Invoice {
+        string id PK
+        string integrationId FK
+        string externalSourceId "provider-assigned, upsert key"
+        string number "human invoice number; Chargebee's id, Stripe's number"
+        string status "InvoiceStatus, nullable"
+        string customerId FK "resolved internal parent, nullable"
+        string externalCustomerId "provider customer id, pre-resolution"
+        string agreementId FK "resolved internal parent, nullable"
+        string externalAgreementId "provider subscription id, pre-resolution"
+        string currency
+        int subtotalMinor
+        int discountMinor "null on both providers — neither states a scalar"
+        int taxMinor "null on Stripe — it states an array; Chargebee states one"
+        int totalMinor "stated by the provider, never computed from the lines"
+        int amountDueMinor "stated, never computed"
+        int amountPaidMinor "stated, never summed from Payment"
+        datetime issuedAt "Stripe finalized_at, Chargebee generated_at"
+        datetime dueAt
+        datetime periodStart "Stripe only"
+        datetime periodEnd "Stripe only"
+        datetime paidAt
+        string hostedUrl "Stripe only"
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    InvoiceLine {
+        string id PK
+        string integrationId FK
+        string externalSourceId "provider-assigned, upsert key"
+        string invoiceId FK "required and cascade — both rows off one payload"
+        string description
+        int quantity
+        int unitAmountMinor "the billed unit price; nullable when fractional"
+        int amountMinor "the billed line total"
+        datetime periodStart
+        datetime periodEnd
+        boolean isProration "Stripe only"
+        string itemType "InvoiceLineType, nullable — not AgreementItemType"
+        string priceId FK "resolved internal parent, nullable"
+        string externalPriceId
+        string offeringId FK "resolved internal parent, nullable"
+        string externalOfferingId
+        string customFields "JSON object"
+        datetime updatedAt
+    }
+
+    Payment {
+        string id PK
+        string integrationId FK
+        string externalSourceId "provider-assigned, upsert key"
+        string invoiceId FK "resolved internal parent, nullable"
+        string externalInvoiceId "provider invoice id, pre-resolution"
+        string customerId FK "resolved internal parent, nullable"
+        string externalCustomerId "provider customer id, pre-resolution"
+        string kind "PaymentKind, NOT NULL — payment or refund"
+        string status "PaymentStatus, nullable"
+        int amountMinor
+        string currency
+        datetime processedAt "Stripe created, Chargebee settled_at"
+        string method "free text — Stripe ships ~90 values and adds more"
+        string failureReason
+        boolean isDisputed
+        string providerReference "the provider's own id, kept beside ours"
         string customFields "JSON object"
         datetime updatedAt
     }
@@ -496,13 +574,18 @@ a draft id.
 | Parent | Child | On parent delete |
 |---|---|---|
 | `User` | `Integration`, `IntegrationDraft`, `CustomerAccount`, `IdentityResolutionRun` | `Cascade` |
-| `Integration` | `IntegrationFunction`, `OAuthToken`, `FieldMapping`, `DiscoveredField`, `Customer`, `Contact`, `Product`, `Offering`, `ProductFeature`, `Agreement`, `Subscription`, `SyncRun` | `Cascade` |
+| `Integration` | `IntegrationFunction`, `OAuthToken`, `FieldMapping`, `DiscoveredField`, `Customer`, `Contact`, `Product`, `Offering`, `ProductFeature`, `Agreement`, `Subscription`, `Invoice`, `InvoiceLine`, `Payment`, `SyncRun` | `Cascade` |
 | `Customer` | `Contact` | `SetNull` — the contact survives, unlinked |
 | `Customer` | `Agreement` | `SetNull` — the agreement survives, unlinked |
+| `Customer` | `Invoice`, `Payment` | `SetNull` — the billing row survives, unlinked |
 | `Product` | `Offering` | `SetNull` — the price survives, unlinked |
 | `Product` | `ProductFeature` | `SetNull` — the row survives, unlinked |
-| `Offering` | `Agreement` | `SetNull` — the agreement survives, unlinked |
+| `Offering` | `Agreement`, `InvoiceLine` | `SetNull` — the row survives, unlinked |
+| `Price` | `InvoiceLine` | `SetNull` — the row survives, unlinked |
 | `Agreement` | `Subscription` | `Cascade` — see below; the one exception |
+| `Agreement` | `Invoice` | `SetNull` — the invoice survives, unlinked |
+| `Invoice` | `InvoiceLine` | `Cascade` — the second extension, same reasoning |
+| `Invoice` | `Payment` | `SetNull` — a refund has no invoice to begin with |
 | `Customer` | `IdentityAssertion` (both sides) | `Cascade` — a verdict about a row that no longer exists is not a verdict |
 | `CustomerAccount` | `CustomerAccountKey` | `Cascade` |
 | `CustomerAccount` | `Customer` | `SetNull` — the customer survives, unresolved |
@@ -518,8 +601,9 @@ correct rather than merely tidy. An empty account still holding a key claim
 would permanently block the right account from ever forming, because the unique
 means that key can only belong to one.
 
-**`Agreement` → `Subscription` is the one association here that cascades**, and
-it is worth understanding why rather than reading it as an inconsistency. Every
+**`Agreement` → `Subscription` is one of the two associations here that
+cascade**, and it is worth understanding why rather than reading it as an
+inconsistency. Every
 other nullable FK above points at a record that means something on its own: an
 offering without its product is still a readable price, a contact without its
 company is still a person. A `Subscription` row is a billing period, a trial
@@ -527,6 +611,17 @@ date and a cancellation flag — about nothing, if the agreement they describe i
 gone. So the FK is `NOT NULL`, `@unique` and `Cascade`, which together say "this
 is an extension of exactly one row" rather than "this is a collection hanging
 off one".
+
+**`Invoice` → `InvoiceLine` is the second, and is the same shape without the
+unique.** A line is an amount, a period and a description — about nothing if its
+invoice is gone — so the FK is `NOT NULL` and `Cascade`. It is not `@unique`
+because an invoice has many lines, which is the whole difference between the two:
+a subscription is its agreement's sole detail row, an invoice's lines are a
+collection. Both rows come off one provider payload in one run, which is why
+neither edge keeps an `external…Id` column and neither has a relink pass.
+`Payment` is deliberately the other way — `SetNull`, with its provider invoice id
+retained — because a Chargebee refund and a Stripe charge raised outside an
+invoice have no invoice at all, and null is the honest state for those.
 
 That also means `Subscription` is the only synced table with **no**
 `external…Id` column for late linking, and no relink pass. Both rows come off
@@ -544,7 +639,7 @@ place.
 | `User` | `email` | The stable handle the demo looks the user up by. |
 | `Customer` | `(integrationId, externalSourceId)` | The upsert key. Re-running a sync updates rather than duplicates. |
 | `Contact` | `(integrationId, externalSourceId)` | Same. |
-| `Product`, `Offering`, `ProductFeature`, `Agreement`, `Subscription` | `(integrationId, externalSourceId)` | Same — every synced table is keyed this way, which is what `findByExternalId` relies on. |
+| `Product`, `Offering`, `ProductFeature`, `Agreement`, `Subscription`, `Invoice`, `InvoiceLine`, `Payment` | `(integrationId, externalSourceId)` | Same — every synced table is keyed this way, which is what `findByExternalId` relies on. |
 | `Subscription` | `agreementId` | **Also unique on its own.** One detail row per agreement, not many: the unique is what makes it an extension rather than a collection, and what stops a re-sync inserting a second. |
 | `IntegrationFunction` | `(integrationId, functionName)` | A function is declared once per integration. |
 | `FieldMapping` | `(integrationId, functionName, targetObject, targetFieldPath)` | One rule per target field. Function and target object are part of the identity, because two functions on one integration can write to the same object. |
@@ -588,10 +683,14 @@ the source of truth.
 |---|---|---|
 | `Integration.status` | `pending_authorization`, `active`, `expired`, `requires_reauthorization`, `error` | `isIntegrationStatus` |
 | `Customer.type`, `CustomerAccount.type` | `prospect`, `customer`, `partner`, `vendor`, or null | `isCustomerType` |
-| `FieldMapping.targetObject` | `customer`, `contact`, `product`, `offering`, `productFeature`, `agreement`, `subscription` | `isTargetObject` |
+| `FieldMapping.targetObject` | `customer`, `contact`, `product`, `offering`, `productFeature`, `agreement`, `subscription`, `invoice`, `invoiceLine`, `payment` | `isTargetObject` |
 | `Offering.interval` | `day`, `week`, `month`, `year`, `one_time`, or null | `isBillingInterval` |
 | `Agreement.agreementType` | `subscription`, `order_form`, `contract`, `deal` — **never null** | `isAgreementType` |
 | `Agreement.status` | `draft`, `trialing`, `active`, `past_due`, `paused`, `canceled`, `expired`, or null | `isAgreementStatus` |
+| `Invoice.status` | `draft`, `open`, `paid`, `past_due`, `void`, `uncollectible`, or null | `isInvoiceStatus` |
+| `InvoiceLine.itemType` | `plan`, `add_on`, `usage`, `charge`, `proration`, `discount`, `credit`, `adjustment`, or null | `isInvoiceLineType` |
+| `Payment.kind` | `payment`, `refund` — **never null** | `isPaymentKind` |
+| `Payment.status` | `pending`, `succeeded`, `failed`, `refunded`, `reversed`, or null | `isPaymentStatus` |
 | `SyncRun.status`, `IdentityResolutionRun.status` | `running`, `success`, `partial`, `failed`, `discarded` | `isSyncRunStatus` |
 | `FieldMapping.transform` | `none`, `trim`, `lowercase`, `domainFromUrl`, `dateOnly` | [`transforms.ts`](../src/core/field-mapper/transforms.ts) |
 | `CustomerAccountKey.kind` | `external_ref`, `email`, `domain` | `isIdentityKeyKind` |
@@ -617,7 +716,17 @@ it is cannot be read at all — a writer that cannot parse it defaults to
 `Agreement.status` is deliberately **not** any provider's vocabulary: Stripe has
 eight subscription statuses, Salesforce Contract has its own, and folding them
 into these seven is the provider handler's job, so the collapse is visible in
-one place instead of assumed everywhere.
+one place instead of assumed everywhere. `Invoice.status` and `Payment.status`
+follow that rule, and each folds more than it names: Chargebee's `pending` is a
+`draft` invoice, its `payment_due` and `not_paid` are both `past_due`, and a
+Chargebee `needs_attention` transaction is `pending` rather than `failed`.
+
+`InvoiceLine.itemType` is a union of its own rather than reusing
+`AGREEMENT_ITEM_TYPES`, even though the two share three member names. The two
+answer different questions — an agreement item is a line on the subscription, an
+invoice line is a line on the bill — and the bill vocabulary additionally
+includes `discount`, `credit` and `adjustment`, none of which are subscription
+lines. A shared guard would store an invoice's discount as a `charge`.
 
 `emailClass` is stored to **explain** a key, never to filter one. Role addresses
 like `billing@` and `accounts@` are still keys — the spec's own seeds are
@@ -644,6 +753,8 @@ Read and written only through
 | `OAuthToken.providerMetadata` | `{}` | Provider extras from the token response, e.g. Salesforce `instance_url` and `organizationId` |
 | `SyncRun.errorsJson` | `[]` | `RecordIssue[]` — `{ sourceRecordId, targetObject, reason, fieldName?, severity }` |
 | `IdentityResolutionRun.issuesJson` | `[]` | `IdentityIssue[]` — a **discriminated union** on `kind`, not one shape with eight optional fields, so a renderer cannot read `fieldName` off a key conflict |
+| `Invoice.customFields`, `InvoiceLine.customFields`, `Payment.customFields` | `{}` | `Record<string, unknown>`, max 50 keys |
+| `Invoice.providerMetadata`, `InvoiceLine.providerMetadata`, `Payment.providerMetadata` | `{}` | Provider extras with no column of their own. Chargebee writes `subscription_id: "consolidated"` on an invoice whose lines span subscriptions |
 | `IntegrationDraft.functionNames` | none | `string[]` — the function names chosen, deduped and sorted before storage |
 
 The four `IdentityIssue` kinds are `key_claimed_elsewhere` (two accounts claim

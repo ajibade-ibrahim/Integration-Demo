@@ -64,6 +64,18 @@ export const CHARGEBEE_AGREEMENT_SCOPES = [
   "item_entitlements:read",
 ] as const;
 
+/**
+ * Scope strings for the Chargebee billing function.
+ *
+ * Symbolic like the others — Chargebee uses an API key, so nothing is granted
+ * or enforced — but they name the two resources the handler actually reads:
+ * `/invoices` (which inlines its lines) and `/transactions`.
+ */
+export const CHARGEBEE_BILLING_SCOPES = [
+  "invoices:read",
+  "transactions:read",
+] as const;
+
 /** Cap on connect-time probe timeout. */
 const PROBE_TIMEOUT_MS = 15_000;
 

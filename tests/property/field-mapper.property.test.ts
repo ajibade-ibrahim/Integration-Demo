@@ -26,7 +26,12 @@ const RUNS = 200;
  * function added without being wired in here fails loudly instead of quietly
  * going untested.
  */
-const FUNCTIONS_WITH_OBJECTS = ["identity", "catalog", "agreement"] as const;
+const FUNCTIONS_WITH_OBJECTS = [
+  "identity",
+  "catalog",
+  "agreement",
+  "billing",
+] as const;
 
 const functionArb = fc.constantFrom(...FUNCTIONS_WITH_OBJECTS);
 

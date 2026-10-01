@@ -131,7 +131,7 @@ Three consequences worth internalising before reading any file:
 | Consequence | Where you see it |
 |---|---|
 | An integration serves a **set** of functions, not one | `IntegrationFunction` is one-to-many; `resolveScopes` takes an array |
-| A function can be **declared without being built** | `billing`/`usage`/`communication` are registered with no handler, so "no provider supports this yet" is a real, reachable state. `agreement` spent a while there too — declared on four providers, built on one — which is the state the declaration is *for* |
+| A function can be **declared without being built** | `usage`/`communication` are registered with no handler, so "no provider supports this yet" is a real, reachable state. `agreement` and `billing` spent a while there too — declared ahead of their handlers — which is the state the declaration is *for* |
 | A provider is **added, not wired in** | New directory under `core/providers/` + one call in [`bootstrap.ts`](../src/core/bootstrap.ts). No orchestration code changes. |
 
 ---
@@ -287,14 +287,14 @@ flowchart TB
     G2 -->|no| LOCK["claim lock, create SyncRun(running)"]
 
     LOCK --> TOK["getValidToken()<br/><i>refreshes if within 5 min of expiry</i>"]
-    TOK --> ORDER["functionsInWriteOrder(declared)<br/><i>identity, then catalog, then agreement</i>"]
+    TOK --> ORDER["functionsInWriteOrder(declared)<br/><i>identity, then catalog, then agreement, then billing</i>"]
     ORDER --> LOOP["for each function, in that order:<br/>requireSyncHandler(fn, provider)<br/>+ findMappings(fn)"]
 
     LOOP --> FETCH["<b>handler.fetchPages()</b><br/><i>async iterable - pages are mapped<br/>as they arrive, never buffered whole</i>"]
     FETCH --> MAP["applyMappings() per record"]
 
-    MAP --> WC["<b>1. parent writer</b><br/>writeCustomers / writeProducts / writeAgreements<br/>upsert on integrationId + externalSourceId,<br/>building the external-to-internal index"]
-    WC --> WK["<b>2. child writers</b><br/>writeContacts / writeOfferings / writeProductFeatures / writeSubscriptions<br/>resolve through the index,<br/>then fall back to a DB lookup"]
+    MAP --> WC["<b>1. parent writer</b><br/>writeCustomers / writeProducts / writeAgreements / writeInvoices<br/>upsert on integrationId + externalSourceId,<br/>building the external-to-internal index"]
+    WC --> WK["<b>2. child writers</b><br/>writeContacts / writeOfferings / writeProductFeatures / writeSubscriptions<br/>writeInvoiceLines / writePayments<br/>resolve through the index,<br/>then fall back to a DB lookup"]
     WK --> RELINK["<b>3. relinkOrphansForFunction()</b><br/><i>children stranded by earlier runs<br/>get linked once their parent arrives</i>"]
 
     RELINK --> STATUS{"any rejected records?"}
@@ -323,9 +323,11 @@ The order itself is declared in
 [`object-schema.ts`](../src/core/object-schema.ts) rather than hardcoded per
 function — `identity: [customer, contact]`,
 `catalog: [product, offering, productFeature]`,
-`agreement: [agreement, subscription]`. Adding a function is a change there and
-in the writer's switch, not another branch in this loop. `catalog` is the one
-with two children of the same parent, and both resolve against the same index.
+`agreement: [agreement, subscription, agreementItem, agreementEntitlement, agreementDiscount]`,
+`billing: [invoice, invoiceLine, payment]`. Adding a function is a change there
+and in the writer's switch, not another branch in this loop. `catalog` is the one
+with two children of the same parent, and both resolve against the same index;
+`billing` is the one where the *first* entry is the parent both others attach to.
 
 **Why the *functions* are ordered too, which is newer.** Identity and catalog
 share nothing, so their order never mattered. An agreement does: it references a
@@ -353,6 +355,17 @@ unresolved parent means that product was rejected rather than late.
 rejected is rejected too, because its foreign key is required: the row would be
 a set of billing dates about nothing. Both come off the same provider record in
 the same run, so a missing parent can only mean the parent was itself refused.
+
+**`invoiceLine` is the second record with that required FK, and one of only two
+writers that delete.** Like a subscription it is an extension of one parent and
+both rows come off one payload, so a rejected invoice drops its lines. Unlike a
+subscription it is a *collection* rather than the sole detail row, so
+`writeInvoiceLines` reconciles — deleting the lines an invoice no longer has.
+That deletion is closed behind two gates, the object being mapped and the page
+declaring itself complete, because a line list truncated by a page bound looks
+exactly like a shorter invoice; see
+[`object-schema.ts`](../src/core/object-schema.ts) and the writer's
+`InvoiceLineReconcileContext`.
 
 **Per-record failures never abort a run.** A `RecordIssue` carries
 `severity: "warning" | "rejected"` — a malformed email rejects the contact
@@ -526,7 +539,9 @@ instantly instead of sitting through them.
 | I want to change… | Open |
 |---|---|
 | Which scopes a function asks a provider for | [`bootstrap.ts`](../src/core/bootstrap.ts) — every registration is in this one file |
-| The fields a mapping may write to | [`object-schema.ts`](../src/core/object-schema.ts) — the composed registry the validator, UI and engine all read. The per-object definitions are in `identity-schema.ts`, `catalog-schema.ts` and `agreement-schema.ts` beside it |
+| The fields a mapping may write to | [`object-schema.ts`](../src/core/object-schema.ts) — the composed
+  registry the validator, UI and engine all read. The per-object definitions are in `identity-schema.ts`,
+  `catalog-schema.ts`, `agreement-schema.ts` and `billing-schema.ts` beside it |
 | Which objects a function writes, and in what order | `FUNCTION_OBJECTS` in [`object-schema.ts`](../src/core/object-schema.ts) — and `functionsInWriteOrder` for the order of the functions themselves |
 | How a provider paginates or shapes its query | `core/providers/<name>/<function>-handler.ts` and `api.ts` |
 | What the mapping editor offers as sources | `core/providers/<name>/discovery.ts` |

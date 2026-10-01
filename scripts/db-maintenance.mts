@@ -185,6 +185,32 @@ report(
   }),
   " — they relink when the catalog syncs"
 );
+// Billing's two nullable invoice edges, reported separately for the reason the
+// agreement pair is: customer comes from identity and agreement from the
+// agreement function, so a row can have either half and not the other.
+report(
+  "invoices whose customer did not resolve",
+  await prisma.invoice.count({
+    where: { customerId: null, externalCustomerId: { not: null } },
+  }),
+  " — they relink when identity syncs"
+);
+report(
+  "invoices whose agreement did not resolve",
+  await prisma.invoice.count({
+    where: { agreementId: null, externalAgreementId: { not: null } },
+  }),
+  " — they relink when the agreement syncs"
+);
+// The clearest one on this page: a payment with a provider invoice id and no
+// internal link is a row the relink pass is expected to heal, not a bug.
+report(
+  "payments whose invoice did not resolve",
+  await prisma.payment.count({
+    where: { invoiceId: null, externalInvoiceId: { not: null } },
+  }),
+  " — they relink when the invoice syncs"
+);
 // Not an unresolved association but the same class of thing: a fact about the
 // row that is only visible if something says it out loud.
 //

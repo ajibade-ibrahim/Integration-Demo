@@ -67,6 +67,23 @@ export const STRIPE_AGREEMENT_SCOPES = ["subscriptions:read"] as const;
  */
 export const STRIPE_CATALOG_SCOPES = ["products:read", "prices:read"] as const;
 
+/**
+ * Scopes for the billing function.
+ *
+ * One entry per resource the handler actually reads, matching the "read" names
+ * a restricted key exposes: invoices, their lines (a sub-resource of invoices,
+ * costless on most), charges, refunds, and the `invoice_payments` allocation
+ * list that supplies the payment→invoice index (no rows of its own are
+ * written). Disjoint from the identity, catalog and agreement sets, which is
+ * what makes scope isolation checkable here.
+ */
+export const STRIPE_BILLING_SCOPES = [
+  "invoices:read",
+  "invoice_payments:read",
+  "charges:read",
+  "refunds:read",
+] as const;
+
 /** Cap on the connect-time probe, so a hung provider cannot wedge the request. */
 const PROBE_TIMEOUT_MS = 15_000;
 

@@ -29,7 +29,11 @@ import {
 } from "@/core/providers/salesforce/provider";
 import { METRIFOX_PROVIDER_NAME } from "@/core/providers/metrifox/provider";
 import { MOCK_PROVIDER_NAME } from "@/core/providers/mock/provider";
-import { STRIPE_PROVIDER_NAME } from "@/core/providers/stripe/provider";
+import {
+  STRIPE_BILLING_SCOPES,
+  STRIPE_PROVIDER_NAME,
+} from "@/core/providers/stripe/provider";
+import { CHARGEBEE_PROVIDER_NAME } from "@/core/providers/chargebee/provider";
 
 beforeEach(() => {
   resetBootstrapForTests();
@@ -88,8 +92,15 @@ describe("provider candidates for a function set", () => {
   });
 
   it("excludes a provider that covers only part of the set", () => {
-    // Billing is mock-only, so pairing it with identity leaves just the mock.
-    expect(providerNamesForFunctions(["identity", "billing"])).toEqual(["mock"]);
+    // Billing is built on Stripe and Chargebee and declared on the mock, so
+    // pairing it with identity leaves exactly those three — HubSpot, Salesforce
+    // and Metrifox have identity but no billing scope, and the whole-set rule
+    // is why they drop out.
+    expect(providerNamesForFunctions(["identity", "billing"])).toEqual([
+      "chargebee",
+      "mock",
+      "stripe",
+    ]);
     // And a function with no providers at all empties the intersection.
     expect(providerNamesForFunctions(["identity", "usage"])).toEqual([]);
   });
@@ -238,5 +249,75 @@ describe("the agreement function", () => {
     expect(providerNamesForFunction("agreement")).toContain(
       HUBSPOT_PROVIDER_NAME
     );
+  });
+});
+
+describe("the billing function", () => {
+  it("is served by the providers that ship it, in registry order", () => {
+    // The agreement test's sort proof, one function over: the registry sorts,
+    // so the expectation is alphabetical rather than insertion order.
+    expect(providerNamesForFunction("billing")).toEqual([
+      "chargebee",
+      "mock",
+      "stripe",
+    ]);
+  });
+
+  it("owns invoices, their lines and payments, and not subscriptions or charge", () => {
+    expect(functionRegistry.require("billing").dataModels).toEqual([
+      "invoice",
+      "invoiceLine",
+      "payment",
+    ]);
+    // The other half of the decision pinned above: a subscription is an
+    // agreement specialization while an invoice is a bill, so neither function
+    // may hold the other's table. And `charge` is absent deliberately — the
+    // word means three incompatible things across these providers, and what it
+    // used to stand in for is `invoiceLine`.
+    expect(functionRegistry.require("billing").dataModels).not.toContain(
+      "subscription"
+    );
+    expect(functionRegistry.require("billing").dataModels).not.toContain(
+      "charge"
+    );
+  });
+
+  it("is built on Stripe and Chargebee and on no other provider yet", () => {
+    // A named list rather than a loop, for the reason the agreement twin gives:
+    // a loop over every billing provider stops testing the unbuilt ones the
+    // moment one is built, and the fix then looks like deleting the test.
+    expect(getSyncHandler("billing", STRIPE_PROVIDER_NAME)).toBeDefined();
+    expect(getSyncHandler("billing", CHARGEBEE_PROVIDER_NAME)).toBeDefined();
+
+    for (const provider of [
+      HUBSPOT_PROVIDER_NAME,
+      SALESFORCE_PROVIDER_NAME,
+      METRIFOX_PROVIDER_NAME,
+      MOCK_PROVIDER_NAME,
+    ]) {
+      expect(
+        getSyncHandler("billing", provider),
+        `${provider} unexpectedly has a billing handler`
+      ).toBeUndefined();
+    }
+
+    // The mock is still offered, because declaring scopes ahead of handlers is
+    // the point — it simply cannot sync.
+    expect(providerNamesForFunction("billing")).toContain(MOCK_PROVIDER_NAME);
+  });
+
+  it("does not leak invoice scopes into an identity-only integration", () => {
+    const scopes = resolveScopes(["identity"], "stripe");
+    for (const scope of STRIPE_BILLING_SCOPES) {
+      expect(scopes).not.toContain(scope);
+    }
+  });
+
+  it("unions and deduplicates invoice scopes against identity", () => {
+    const scopes = resolveScopes(["identity", "billing"], "stripe");
+    for (const scope of STRIPE_BILLING_SCOPES) {
+      expect(scopes).toContain(scope);
+    }
+    expect(new Set(scopes).size).toBe(scopes.length);
   });
 });

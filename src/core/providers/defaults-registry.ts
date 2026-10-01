@@ -14,6 +14,7 @@ import { mockIdentityDefaults } from "./mock/defaults";
 import { metrifoxIdentityDefaults } from "./metrifox/defaults";
 import {
   stripeAgreementDefaults,
+  stripeBillingDefaults,
   stripeCatalogDefaults,
   stripeIdentityDefaults,
 } from "./stripe/defaults";
@@ -24,6 +25,7 @@ import { METRIFOX_PROVIDER_NAME } from "./metrifox/provider";
 import { STRIPE_PROVIDER_NAME } from "./stripe/provider";
 import {
   chargebeeAgreementDefaults,
+  chargebeeBillingDefaults,
   chargebeeCatalogDefaults,
   chargebeeIdentityDefaults,
 } from "./chargebee/defaults";
@@ -40,6 +42,8 @@ const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
   [`catalog:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeCatalogDefaults,
   [`agreement:${STRIPE_PROVIDER_NAME}`]: stripeAgreementDefaults,
   [`agreement:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeAgreementDefaults,
+  [`billing:${STRIPE_PROVIDER_NAME}`]: stripeBillingDefaults,
+  [`billing:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeBillingDefaults,
 };
 
 export function defaultMappingsFor(

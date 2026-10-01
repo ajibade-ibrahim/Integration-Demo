@@ -15,10 +15,11 @@ before consent.
 
 Currently implemented: the **identity** function on **HubSpot**, **Salesforce**,
 **Metrifox**, **Stripe**, and a built-in **mock provider** so the whole thing
-runs with no credentials — plus **catalog** (products, offerings and the features they include) and
-**agreement** (subscriptions) on **Stripe**.
+runs with no credentials — plus **catalog** (products, offerings and the features they include),
+**agreement** (subscriptions) and **billing** (invoices, their lines and the
+payments against them) on **Stripe** and **Chargebee**.
 
-The three functions are independent by design, and that independence is
+The four functions are independent by design, and that independence is
 observable: catalog needs no customer, identity needs no price, and an agreement
 references both but syncs without either — keeping the row, retaining the
 provider's ids, and linking itself once the other functions are connected.
@@ -76,9 +77,10 @@ refuses to start without a real one.
 
 ## The credential-free walkthrough
 
-1. **New integration** → select **Identity**. Note that selecting **Billing**
-   yields an empty provider list and blocks the flow — functions with no
-   provider support are honestly represented rather than hidden.
+1. **New integration** → select **Identity**. Selecting **Billing** now offers
+   Stripe and Chargebee, while **Usage** and **Support** are still honestly
+   empty — functions with no provider support are represented rather than
+   hidden.
 2. Pick **Mock CRM**. On the consent screen, confirm the scopes shown are
    exactly the identity scopes — no `billing.invoices.read`, no ticket scopes.
    This is the core feature made visible.
@@ -249,10 +251,11 @@ before consent.
 
 Currently implemented: the **identity** function on **HubSpot**, **Salesforce**,
 **Metrifox**, **Stripe**, and a built-in **mock provider** so the whole thing
-runs with no credentials — plus **catalog** (products, offerings and the features they include) and
-**agreement** (subscriptions) on **Stripe**.
+runs with no credentials — plus **catalog** (products, offerings and the features they include),
+**agreement** (subscriptions) and **billing** (invoices, their lines and the
+payments against them) on **Stripe** and **Chargebee**.
 
-The three functions are independent by design, and that independence is
+The four functions are independent by design, and that independence is
 observable: catalog needs no customer, identity needs no price, and an agreement
 references both but syncs without either — keeping the row, retaining the
 provider's ids, and linking itself once the other functions are connected.
@@ -310,9 +313,10 @@ refuses to start without a real one.
 
 ## The credential-free walkthrough
 
-1. **New integration** → select **Identity**. Note that selecting **Billing**
-   yields an empty provider list and blocks the flow — functions with no
-   provider support are honestly represented rather than hidden.
+1. **New integration** → select **Identity**. Selecting **Billing** now offers
+   Stripe and Chargebee, while **Usage** and **Support** are still honestly
+   empty — functions with no provider support are represented rather than
+   hidden.
 2. Pick **Mock CRM**. On the consent screen, confirm the scopes shown are
    exactly the identity scopes — no `billing.invoices.read`, no ticket scopes.
    This is the core feature made visible.
@@ -981,6 +985,7 @@ flagged and surfaced so they can revoke from the provider's side.
   permission is revoked *after* connection, the shared HTTP client special-cases
   401 only, so the mid-run 403 surfaces as a failed sync. The remedy is a new key
   from Stripe's dashboard either way.
-- **`support`, `billing`, `usage`, and `communication` have no handlers.** They
+- **`support`, `usage`, and `communication` have no handlers.** They
   are registered so the function picker shows the real roadmap and so "no
-  provider supports this yet" is a reachable state.
+  provider supports this yet" is a reachable state. **Billing** is no longer on
+  this list: Stripe and Chargebee both ship a handler for it.

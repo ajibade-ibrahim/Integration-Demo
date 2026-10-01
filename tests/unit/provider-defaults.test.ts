@@ -174,7 +174,17 @@ describe("shipped default mappings", () => {
     );
   });
 
-  it("has none for a function with no providers", () => {
-    expect(defaultMappingsFor("billing", "stripe")).toEqual([]);
+  it("ships billing defaults for the two providers that build it", () => {
+    // Billing is no longer a declared-but-empty function: Stripe and Chargebee
+    // both need a default rule set, and `payment.kind` must be among them
+    // because it is the one required field — the check above enforces that.
+    expect(defaultMappingsFor("billing", "stripe").length).toBeGreaterThan(0);
+    expect(defaultMappingsFor("billing", "chargebee").length).toBeGreaterThan(0);
+  });
+
+  it("has none for a provider with no handler for the function", () => {
+    // Defaults are keyed by (function, provider), so a provider that declares
+    // no billing scope has none even though billing itself now has defaults.
+    expect(defaultMappingsFor("billing", "hubspot")).toEqual([]);
   });
 });

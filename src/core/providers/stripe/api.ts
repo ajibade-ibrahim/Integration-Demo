@@ -114,6 +114,10 @@ export const STRIPE_RESOURCES = [
   "products",
   "prices",
   "subscriptions",
+  "invoices",
+  "charges",
+  "refunds",
+  "invoice_payments",
 ] as const;
 
 export type StripeResource = (typeof STRIPE_RESOURCES)[number];
@@ -1030,4 +1034,462 @@ export function subscriptionOfferingId(
 ): string | undefined {
   const price = firstItemPrice(subscription);
   return price === undefined ? undefined : priceProductId(price);
+}
+
+// ---------------------------------------------------------------------------
+// Billing
+//
+// Four resources feed one function, and each carries a different hazard:
+//
+//   `/v1/invoices`        one page yields one `invoice` per record.
+//   `/v1/invoices/{id}/lines`  only reached when `lines.has_more` is set, the
+//                         exact truncation hazard `subscriptionItemsUrl`
+//                         exists for. Missing it would delete every line past
+//                         the tenth on every sync.
+//   `/v1/charges`         `payment` rows of `kind: "payment"`.
+//   `/v1/refunds`         `payment` rows of `kind: "refund"`.
+//   `/v1/invoice_payments` is read as an *index*, not as rows — see
+//                         `flattenInvoicePaymentIndex`.
+//
+// A Stripe `Charge` and a `Refund` carry no invoice field at all on the pinned
+// API version, so the invoice link can only come from `InvoicePayment`. That
+// resource is an allocation (`inpay_…`) whose grain is not ours: taking it as
+// the payment row would fill `invoiceId` but darken `method`, `disputed` and
+// `failure_code` completely, because those live on the movement. So the index
+// is built and the charge or refund remains the row.
+// ---------------------------------------------------------------------------
+
+/**
+ * The line items inlined on an invoice, and whether that list is the whole of
+ * it — the same pair `subscriptionItems`/`subscriptionItemsComplete` provide
+ * one object over. Stripe inlines the first ten lines and sets
+ * `lines.has_more` beyond that.
+ */
+export function invoiceLines(invoice: RawRecord): readonly RawRecord[] {
+  const lines = asRecord(invoice["lines"]);
+  return asArray(lines?.["data"]).filter(
+    (row): row is RawRecord => asRecord(row) !== undefined
+  );
+}
+
+export function invoiceLinesComplete(invoice: RawRecord): boolean {
+  return asRecord(invoice["lines"])?.["has_more"] !== true;
+}
+
+/**
+ * The lines of one invoice, as a filtered top-level list.
+ *
+ * The `subscriptionItemsUrl` shape: only reached when the inlined list was
+ * truncated, with the same obligation — page it to exhaustion or fail, never
+ * return a short list that licenses a wrongful delete.
+ */
+export function invoiceLinesUrl(
+  invoiceId: string,
+  limit: number,
+  startingAfter?: string
+): string {
+  return paginatedUrl(
+    `/v1/invoices/${encodeURIComponent(invoiceId)}/lines`,
+    limit,
+    startingAfter
+  );
+}
+
+/**
+ * Our invoice status, from Stripe's five.
+ *
+ * Stripe states exactly the members ours has for it, so this is a translation
+ * of vocabulary rather than a collapse — but it still returns `undefined` for
+ * anything unrecognised so a future Stripe status reads as "we do not know"
+ * rather than silently becoming `open`.
+ */
+const STRIPE_INVOICE_STATUS: Readonly<Record<string, string>> = {
+  draft: "draft",
+  open: "open",
+  paid: "paid",
+  void: "void",
+  uncollectible: "uncollectible",
+};
+
+export function invoiceStatusOf(invoice: RawRecord): string | undefined {
+  const raw = asString(invoice["status"]);
+  return raw === undefined ? undefined : STRIPE_INVOICE_STATUS[raw];
+}
+
+/**
+ * Our payment status, from a charge.
+ *
+ * Stripe's charge status is three-valued (`succeeded`/`pending`/`failed`) and
+ * all three map across; the original plan omitted `pending`. A charge with
+ * `refunded: true` is reported as `refunded` regardless of its own status,
+ * because the movement a reader cares about has been returned.
+ */
+export function chargeStatusOf(charge: RawRecord): string | undefined {
+  if (charge["refunded"] === true) return "refunded";
+  switch (asString(charge["status"])) {
+    case "succeeded":
+      return "succeeded";
+    case "pending":
+      return "pending";
+    case "failed":
+      return "failed";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Our payment status, from a refund.
+ *
+ * A refund's own vocabulary differs from a charge's: `succeeded` becomes
+ * `refunded` (the money was returned), `requires_action` is still an
+ * unresolved flow so it reads as `pending`, and `canceled` is a failure of the
+ * refund attempt.
+ */
+export function refundStatusOf(refund: RawRecord): string | undefined {
+  switch (asString(refund["status"])) {
+    case "succeeded":
+      return "refunded";
+    case "pending":
+    case "requires_action":
+      return "pending";
+    case "failed":
+    case "canceled":
+      return "failed";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The id behind a Stripe reference field.
+ *
+ * Reads both the bare-id and expanded-object forms, as `priceProductId` does —
+ * the association must not break silently when `expand` is used.
+ */
+function referenceId(value: unknown): string | undefined {
+  const bare = asString(value);
+  if (bare !== undefined) return bare;
+  return asString(asRecord(value)?.["id"]);
+}
+
+/**
+ * The subscription an invoice belongs to, from wherever this API version keeps
+ * it.
+ *
+ * **The sharpest edge in the billing handler.** On the pinned version
+ * (2026-08-26.dahlia) the link is not at a top-level `subscription` field: it
+ * is under `parent.subscription_details.subscription`, and the line-level
+ * equivalent is `line.parent.invoice_item_details.subscription`. Reading one
+ * spelling only would leave every invoice with no agreement, no warning, and
+ * no null to notice — because null *is* the documented state for "we could not
+ * resolve it". All three are read, in order of specificity.
+ */
+export function stripeInvoiceSubscriptionId(
+  invoice: RawRecord
+): string | undefined {
+  const direct = referenceId(invoice["subscription"]);
+  if (direct !== undefined) return direct;
+
+  const details = asRecord(asRecord(invoice["parent"])?.["subscription_details"]);
+  const fromParent = referenceId(details?.["subscription"]);
+  if (fromParent !== undefined) return fromParent;
+
+  for (const line of invoiceLines(invoice)) {
+    const itemDetails = asRecord(
+      asRecord(line["parent"])?.["invoice_item_details"]
+    );
+    const fromLine = referenceId(itemDetails?.["subscription"]);
+    if (fromLine !== undefined) return fromLine;
+  }
+
+  return undefined;
+}
+
+export function stripeInvoiceCustomerId(
+  invoice: RawRecord
+): string | undefined {
+  return referenceId(invoice["customer"]);
+}
+
+/**
+ * A display value for a line's per-unit amount.
+ *
+ * Stripe's `pricing.unit_amount_decimal` is a decimal *string* that is
+ * legitimately fractional for tiered or usage prices. It is returned verbatim,
+ * so the record writer's `parseInteger` refuses a fractional value and leaves
+ * `unitAmountMinor` null rather than truncating it. Falls back to the price's
+ * integer `unit_amount` when the decimal form is absent.
+ */
+function lineUnitAmount(line: RawRecord): string | number | undefined {
+  const pricing = asRecord(line["pricing"]);
+  const decimal = asString(pricing?.["unit_amount_decimal"]);
+  if (decimal !== undefined) return decimal;
+
+  const price = asRecord(line["price"]);
+  const unit = price?.["unit_amount"];
+  return typeof unit === "number" ? unit : undefined;
+}
+
+/** Combine a charge's `failure_code` and `failure_message` for one column. */
+function failureReasonOf(record: RawRecord): string | undefined {
+  const code = asString(record["failure_code"]);
+  const message = asString(record["failure_message"]);
+  if (code !== undefined && message !== undefined) return `${code}: ${message}`;
+  return code ?? message;
+}
+
+/**
+ * The fields synthesized onto one invoice before mapping.
+ *
+ * Dates are the bulk of it: every date Stripe states is Unix epoch seconds and
+ * the writer reads `new Date(string)`, and two of them live under
+ * `status_transitions`. The subscription id is read through the three-spelling
+ * helper above. `tax_minor` and `discount_minor` are deliberately absent —
+ * Stripe carries arrays there, and null means "not stated".
+ */
+export function flattenStripeInvoice(invoice: RawRecord): RawRecord {
+  const status = invoiceStatusOf(invoice);
+  const rawStatus = asString(invoice["status"]);
+  const transitions = asRecord(invoice["status_transitions"]);
+  const metadata = providerMetadataOf(invoice);
+
+  const dates: Record<string, string> = {};
+  for (const [ours, theirs] of [
+    ["issued_at", "finalized_at"],
+    ["paid_at", "paid_at"],
+  ] as const) {
+    const iso = epochToIso(transitions?.[theirs]);
+    if (iso !== undefined) dates[ours] = iso;
+  }
+  for (const [ours, theirs] of [
+    ["due_at", "due_date"],
+    ["period_start", "period_start"],
+    ["period_end", "period_end"],
+    ["created_at", "created"],
+  ] as const) {
+    const iso = epochToIso(invoice[theirs]);
+    if (iso !== undefined) dates[ours] = iso;
+  }
+
+  return {
+    ...(status === undefined ? {} : { status }),
+    ...(rawStatus === undefined ? {} : { raw_status: rawStatus }),
+    // Stripe's `number` is null on a draft; `asString` drops it so no rule
+    // fires and the column stays null.
+    ...(asString(invoice["number"]) === undefined
+      ? {}
+      : { number: asString(invoice["number"]) }),
+    customer_id: stripeInvoiceCustomerId(invoice),
+    // The agreement link, from whichever spelling this version carries.
+    agreement_id: stripeInvoiceSubscriptionId(invoice),
+    ...(metadata === undefined ? {} : { provider_metadata: metadata }),
+    ...dates,
+  };
+}
+
+/**
+ * The fields synthesized onto one invoice line before mapping.
+ *
+ * `invoice_id` is injected by the caller from the invoice it was read from —
+ * the line carries its own `invoice` field and it is deliberately ignored, for
+ * `flattenAgreementItem`'s reason: this is a writer that deletes, so a line
+ * must not be able to name a different parent.
+ */
+export function flattenStripeInvoiceLine(
+  line: RawRecord,
+  invoiceId: string
+): RawRecord {
+  const period = asRecord(line["period"]);
+  const price = asRecord(line["price"]);
+  const parent = asRecord(line["parent"]);
+  const itemDetails = asRecord(parent?.["invoice_item_details"]);
+
+  const metadata = providerMetadataOf(line);
+  const unitAmount = lineUnitAmount(line);
+
+  const proration = itemDetails?.["proration"];
+
+  const dates: Record<string, string> = {};
+  for (const [ours, theirs] of [
+    ["period_start", "start"],
+    ["period_end", "end"],
+  ] as const) {
+    const iso = epochToIso(period?.[theirs]);
+    if (iso !== undefined) dates[ours] = iso;
+  }
+
+  return {
+    invoice_id: invoiceId,
+    price_id: asString(price?.["id"]),
+    offering_id: price === undefined ? undefined : priceProductId(price),
+    ...(unitAmount === undefined ? {} : { unit_amount_minor: unitAmount }),
+    // Only Stripe states a proration fact, and it states it here. Absent for
+    // Chargebee, which is why the column is nullable.
+    ...(typeof proration === "boolean" ? { is_proration: proration } : {}),
+    // Deliberately the only member of INVOICE_LINE_TYPES Stripe can populate: a
+    // proration line. Everything else on a Stripe invoice line is a plan, an
+    // add-on or a charge the API does not distinguish, so the column stays
+    // null rather than guessing.
+    ...(proration === true ? { item_type: "proration" } : {}),
+    ...(metadata === undefined ? {} : { provider_metadata: metadata }),
+    ...dates,
+  };
+}
+
+/**
+ * The fields synthesized onto one charge, as a `payment` of kind `payment`.
+ *
+ * `invoice_id` arrives from the `InvoicePayment` index, because a charge has no
+ * invoice field. It is `undefined` when the index had no entry — a real state,
+ * and the writer warns and leaves the link null rather than guessing.
+ */
+export function flattenStripeCharge(
+  charge: RawRecord,
+  invoiceId: string | undefined
+): RawRecord {
+  const status = chargeStatusOf(charge);
+  const method = asString(
+    asRecord(charge["payment_method_details"])?.["type"]
+  );
+  const failureReason = failureReasonOf(charge);
+  const providerReference = referenceId(charge["balance_transaction"]);
+  const processedAt = epochToIso(charge["created"]);
+  // `amount_refunded` has no column of its own — a refund is written as its own
+  // `payment` row — so it is kept beside the provider metadata rather than
+  // dropped. It is the one field a reader reconciling a partially-refunded
+  // charge would otherwise have to refetch from Stripe.
+  const metadataParts: Record<string, unknown> = {
+    ...(asRecord(charge["metadata"]) ?? {}),
+  };
+  const amountRefunded = charge["amount_refunded"];
+  if (typeof amountRefunded === "number" && amountRefunded > 0) {
+    metadataParts["amount_refunded"] = amountRefunded;
+  }
+  const metadata =
+    Object.keys(metadataParts).length === 0
+      ? undefined
+      : JSON.stringify(metadataParts);
+
+  return {
+    kind: "payment",
+    ...(status === undefined ? {} : { status }),
+    ...(asString(charge["status"]) === undefined
+      ? {}
+      : { raw_status: asString(charge["status"]) }),
+    ...(invoiceId === undefined ? {} : { invoice_id: invoiceId }),
+    customer_id: referenceId(charge["customer"]),
+    ...(method === undefined ? {} : { method }),
+    ...(failureReason === undefined
+      ? {}
+      : { failure_reason: failureReason.slice(0, 255) }),
+    // Stripe always sends `disputed`, so a boolean is ordinary rather than a
+    // guess. A charge that is not disputed is `false`, which the nullable
+    // column holds as the fact it is.
+    is_disputed: charge["disputed"] === true,
+    ...(providerReference === undefined
+      ? {}
+      : { provider_reference: providerReference }),
+    ...(processedAt === undefined ? {} : { processed_at: processedAt }),
+    ...(metadata === undefined ? {} : { provider_metadata: metadata }),
+  };
+}
+
+/**
+ * The fields synthesized onto one refund, as a `payment` of kind `refund`.
+ *
+ * `refund.payment_intent` (or `refund.charge`) is the same index key as a
+ * charge's; `refund.invoice` does not exist and is not read.
+ */
+export function flattenStripeRefund(
+  refund: RawRecord,
+  invoiceId: string | undefined
+): RawRecord {
+  const status = refundStatusOf(refund);
+  const providerReference = referenceId(refund["balance_transaction"]);
+  const processedAt = epochToIso(refund["created"]);
+  const metadata = providerMetadataOf(refund);
+
+  return {
+    kind: "refund",
+    ...(status === undefined ? {} : { status }),
+    ...(asString(refund["status"]) === undefined
+      ? {}
+      : { raw_status: asString(refund["status"]) }),
+    ...(invoiceId === undefined ? {} : { invoice_id: invoiceId }),
+    ...(providerReference === undefined
+      ? {}
+      : { provider_reference: providerReference }),
+    ...(processedAt === undefined ? {} : { processed_at: processedAt }),
+    ...(metadata === undefined ? {} : { provider_metadata: metadata }),
+  };
+}
+
+/**
+ * All of a charge's or refund's payment-intent keys, so the index can be looked
+ * up from whichever one the row carries.
+ *
+ * A charge carries `payment_intent`; a refund carries `payment_intent` and
+ * `charge`. Any of them is enough to find the `InvoicePayment` entry.
+ */
+export function paymentIntentKeysOf(record: RawRecord): string[] {
+  const keys: string[] = [];
+  const intent = referenceId(record["payment_intent"]);
+  if (intent !== undefined) keys.push(intent);
+  const charge = referenceId(record["charge"]);
+  if (charge !== undefined && charge !== intent) keys.push(charge);
+  return keys;
+}
+
+/**
+ * Build the payment-object → invoice-id index from a page of
+ * `InvoicePayment` records.
+ *
+ * This is the only resource that maps a payment object to an invoice: a Stripe
+ * `Charge` and a `Refund` carry no invoice field on the pinned version. Each
+ * entry is keyed by **both** the payment intent id and, when the allocation
+ * names a charge rather than an intent, that charge id — so a row can be looked
+ * up regardless of which key it happens to carry.
+ *
+ * The lookup is the return value rather than any row: nothing from an
+ * `InvoicePayment` is written, because its grain is the allocation and taking
+ * it as our payment row would darken `method` and `disputed` on every charge.
+ */
+export function flattenInvoicePaymentIndex(
+  records: readonly RawRecord[]
+): Map<string, string> {
+  const index = new Map<string, string>();
+
+  for (const record of records) {
+    const invoiceId = referenceId(record["invoice"]);
+    if (invoiceId === undefined) continue;
+
+    const payment = asRecord(record["payment"]);
+    const intent = referenceId(payment?.["payment_intent"]);
+    if (intent !== undefined) index.set(intent, invoiceId);
+
+    // Some allocations name a charge directly instead of an intent.
+    const charge = referenceId(record["charge"]);
+    if (charge !== undefined) index.set(charge, invoiceId);
+  }
+
+  return index;
+}
+
+/**
+ * Look a movement's invoice up in the index, trying every key it carries.
+ *
+ * Returns `undefined` when none is present, which is the honest answer for a
+ * charge raised outside an invoice and for an index page lost to the page
+ * bound. The writer warns and leaves the link null — never a guess.
+ */
+export function invoiceIdFromIndex(
+  record: RawRecord,
+  index: ReadonlyMap<string, string>
+): string | undefined {
+  for (const key of paymentIntentKeysOf(record)) {
+    const invoiceId = index.get(key);
+    if (invoiceId !== undefined) return invoiceId;
+  }
+  return undefined;
 }

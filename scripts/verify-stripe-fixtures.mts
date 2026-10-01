@@ -17,7 +17,9 @@
  */
 
 import { stripeAgreementHandler } from "../src/core/providers/stripe/agreement-handler";
+import { stripeBillingHandler } from "../src/core/providers/stripe/billing-handler";
 import { stripeCatalogHandler } from "../src/core/providers/stripe/catalog-handler";
+import { listUrl, parseListPage } from "../src/core/providers/stripe/api";
 import type { HandlerContext } from "../src/core/types/registry";
 import type { RawRecord, TargetObject } from "../src/core/types/common";
 import type { SyncHandler } from "../src/core/types/registry";
@@ -46,6 +48,11 @@ const ctx: HandlerContext = {
   requestedSourcePaths: new Map([
     ["feature", ["feature_name"]],
     ["entitlement", ["offering_id"]],
+    // Billing passes are gated the same way; without these the invoice, line
+    // and payment passes would never run and the section would report zero.
+    ["invoice", ["number"]],
+    ["invoiceLine", ["amount"]],
+    ["payment", ["kind"]],
   ]),
 };
 
@@ -153,6 +160,81 @@ for (const agreement of agreements) {
     str(agreement["customer_id"])
   );
 }
+
+// --- Billing ---------------------------------------------------------------
+
+const billingRecords = await collect(stripeBillingHandler);
+const invoices = billingRecords.get("invoice") ?? [];
+const invoiceLines = billingRecords.get("invoiceLine") ?? [];
+const payments = billingRecords.get("payment") ?? [];
+
+console.log(
+  `\n=== billing: ${invoices.length} invoices, ${invoiceLines.length} lines, ${payments.length} payments ===\n`
+);
+console.log(
+  "invoice".padEnd(18),
+  "status".padEnd(12),
+  "total".padEnd(9),
+  "paid".padEnd(9),
+  "issued".padEnd(11),
+  "customer"
+);
+for (const invoice of invoices) {
+  console.log(
+    str(invoice["number"] ?? invoice["id"]).slice(0, 17).padEnd(18),
+    str(invoice["status"]).padEnd(12),
+    str(invoice["total"]).padEnd(9),
+    str(invoice["amount_paid"]).padEnd(9),
+    day(invoice["issued_at"]).padEnd(11),
+    str(invoice["customer_id"])
+  );
+}
+console.log(
+  "\npayment".padEnd(18),
+  "kind".padEnd(9),
+  "status".padEnd(11),
+  "amount".padEnd(9),
+  "invoice".padEnd(16),
+  "method"
+);
+for (const payment of payments) {
+  console.log(
+    str(payment["id"]).slice(0, 17).padEnd(18),
+    str(payment["kind"]).padEnd(9),
+    str(payment["status"]).padEnd(11),
+    str(payment["amount"]).padEnd(9),
+    str(payment["invoice_id"]).slice(0, 15).padEnd(16),
+    str(payment["method"])
+  );
+}
+
+/**
+ * The two live facts the plan asks to confirm before trusting the link.
+ *
+ * A charge carries no invoice on the pinned version, so the only route is
+ * `/v1/invoice_payments`. Reading it directly here — with no `invoice` filter —
+ * confirms two things at once: that the endpoint lists account-wide without an
+ * invoice parameter, and that the `payment_intent` on an allocation is the same
+ * one the charge carries. If either is false the link degrades to a warning and
+ * a null, which is safe but wrong to assume.
+ */
+const allocationPage = parseListPage(
+  await (
+    await fetch(listUrl("invoice_payments", 100), {
+      headers: { Authorization: `Bearer ${ctx.accessToken}` },
+    })
+  ).json()
+);
+const allocationIntents = new Set(
+  allocationPage.records
+    .map((record) => {
+      const payment = record["payment"];
+      return payment === null || typeof payment !== "object"
+        ? undefined
+        : (payment as RawRecord)["payment_intent"];
+    })
+    .filter((intent): intent is string => typeof intent === "string")
+);
 
 // --- The branches these fixtures exist to cover ----------------------------
 
@@ -345,6 +427,35 @@ const checks: Array<[string, boolean, string]> = [
     ),
     "the column exists because the two are independent; deriving one from " +
       "the other would pass every test where they happen to agree",
+  ],
+  [
+    "the invoice_payments list is account-wide without an invoice filter",
+    allocationPage.records.length > 0,
+    "a charge carries no invoice on this version; this endpoint is the only " +
+      "route, and the fetch above sends no `invoice` parameter",
+  ],
+  [
+    "an allocation's payment_intent matches a charge's",
+    payments.some(
+      (p) =>
+        typeof p["invoice_id"] === "string" &&
+        allocationIntents.has(String(p["payment_intent"]))
+    ),
+    "the assumption the whole link rests on; if it is false the link degrades " +
+      "to a warning and a null rather than to a wrong invoice",
+  ],
+  [
+    "a payment resolved an invoice link through the index",
+    payments.some(
+      (p) => p["kind"] === "payment" && typeof p["invoice_id"] === "string"
+    ),
+    "the outcome the index exists for",
+  ],
+  [
+    "every yielded line carries an injected invoice id",
+    invoiceLines.length > 0 &&
+      invoiceLines.every((l) => typeof l["invoice_id"] === "string"),
+    "the parent is injected from the fetch, never read off the line",
   ],
 ];
 

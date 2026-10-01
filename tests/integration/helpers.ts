@@ -67,6 +67,9 @@ export async function collect(
     agreementItem: [],
     agreementEntitlement: [],
     agreementDiscount: [],
+    invoice: [],
+    invoiceLine: [],
+    payment: [],
   };
 
   for await (const page of handler.fetchPages(ctx)) {

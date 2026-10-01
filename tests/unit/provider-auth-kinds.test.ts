@@ -274,8 +274,8 @@ describe("function coverage", () => {
 
     // Metrifox carries orders and subscriptions, so agreement is a true claim
     // about the API even though no handler reads them yet. It carries invoices
-    // too — billing is held to the mock deliberately, to keep
-    // ["identity","billing"] a genuine partial intersection.
+    // too, but billing is built on Stripe and Chargebee rather than here, which
+    // keeps ["identity","billing"] a genuine partial intersection.
     expect(providerNamesForFunction("billing")).not.toContain("metrifox");
   });
 });
@@ -310,28 +310,29 @@ describe("Stripe as a second API-key provider", () => {
     expect(connectHrefFor("stripe", "int-1")).toBe("/integrations/int-1/connect");
   });
 
-  it("serves identity, catalog and agreement, but not billing", async () => {
+  it("serves identity, catalog, agreement and billing", async () => {
     const { functionNamesForProvider, providerNamesForFunction } = await import(
       "@/core/registries/function-registry"
     );
 
     // A declared scope set claims the provider *can* serve the function and
     // names what it would need — not that the handler exists. Stripe genuinely
-    // exposes subscriptions, so agreement is true of the API today; catalog is
-    // true *and* built.
+    // exposes subscriptions and invoices, so both are true of the API today;
+    // catalog and billing are true *and* built.
     expect(functionNamesForProvider("stripe")).toEqual([
       "agreement",
+      "billing",
       "catalog",
       "identity",
     ]);
     expect(providerNamesForFunction("catalog")).toEqual(["chargebee", "stripe"]);
     expect(providerNamesForFunction("identity")).toContain("stripe");
 
-    // Stripe has a billing API, conspicuously. Withholding it is a deliberate
-    // demo shape rather than a statement about the API: it is what keeps
-    // ["identity","billing"] resolving to the mock alone, which is the only
-    // place the whole-set coverage rule is observable.
-    expect(providerNamesForFunction("billing")).not.toContain("stripe");
+    // Stripe genuinely has a billing API, and now ships a handler for it. The
+    // partial intersection that keeps the whole-set coverage rule observable
+    // survives on HubSpot, Salesforce and Metrifox, which have identity but no
+    // billing scope.
+    expect(providerNamesForFunction("billing")).toContain("stripe");
   });
 
   it("declares the header its credential actually travels in", () => {

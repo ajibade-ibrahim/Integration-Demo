@@ -117,6 +117,9 @@ model Integration {
   agreementItems   AgreementItem[]
   agreementEntitlements AgreementEntitlement[]
   agreementDiscounts    AgreementDiscount[]
+  invoices         Invoice[]
+  invoiceLines     InvoiceLine[]
+  payments         Payment[]
   syncRuns         SyncRun[]
 
   @@index([userId])
@@ -287,6 +290,12 @@ model Customer {
   contacts   Contact[]
   agreements Agreement[]
 
+  /// Billing rows this customer is the subject of. Nullable on the billing
+  /// side because `billing` is a different function that may not be connected,
+  /// which is exactly the situation `Agreement.customerId` documents.
+  invoices   Invoice[]
+  payments   Payment[]
+
   /// Both sides of every human assertion naming this row. Two relations
   /// because the pair is canonically ordered by id, so a given customer may be
   /// on either side depending on who it is paired with.
@@ -399,6 +408,7 @@ model Offering {
   entitlements   Entitlement[]
   agreements     Agreement[]
   agreementItems AgreementItem[]
+  invoiceLines   InvoiceLine[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
@@ -437,6 +447,7 @@ model Price {
 
   updatedAt      DateTime        @updatedAt
   agreementItems AgreementItem[]
+  invoiceLines   InvoiceLine[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
@@ -639,6 +650,11 @@ model Agreement {
   items        AgreementItem[]
   entitlements AgreementEntitlement[]
   discounts    AgreementDiscount[]
+
+  /// Invoices raised under this agreement. Nullable and SetNull on the
+  /// invoice's side, for the reason this relation is declared at all: `billing`
+  /// and `agreement` are separate functions that may not both be connected.
+  invoices     Invoice[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
@@ -1015,6 +1031,296 @@ model AgreementDiscount {
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
   @@index([agreementId])
+}
+
+// ---------------------------------------------------------------------------
+// Billing
+//
+// What the customer was billed and what actually moved. Three objects, and the
+// split between them is the design:
+//
+//   `Invoice`      the document — a number, a status, a stated total, when it
+//                  was issued and when it was paid.
+//   `InvoiceLine`  what the document is made of. A child of the invoice with a
+//                  required cascade FK, the same shape `AgreementItem` has and
+//                  for the same reason: both rows come off one source record in
+//                  one run, so "arrived before its parent" cannot happen.
+//   `Payment`      a money movement — a charge or a refund, `kind` saying which.
+//                  The settled movement, not the authorization attempt behind
+//                  it, so Stripe's PaymentIntent and Chargebee's `authorization`
+//                  transactions are deliberately not written.
+//
+// Two absences are deliberate and load-bearing.
+//
+// `charge` is **not** an object here, although an earlier declaration of the
+// billing function named one. The word carries three incompatible meanings — a
+// line on an invoice, Chargebee's one-off item type, Stripe's own `Charge`
+// object — and as a placeholder it would mislead more than it documented. What
+// it meant ("the billed amount on the invoice") is precisely `InvoiceLine`.
+//
+// Invoice *totals* are **stated by the provider, never computed**. Both APIs
+// define `amount_due` as `total − paid − credits − credit notes`, and credit
+// notes are out of scope here, so reproducing that arithmetic would put a
+// confidently wrong number on the row the moment one moved. `totalMinor`,
+// `amountDueMinor` and `amountPaidMinor` therefore go in verbatim; nothing is
+// ever summed from `Payment`, and a reader must not "fix" the redundancy by
+// summing lines.
+//
+// Money is in the currency's **minor unit** on both providers — Chargebee's
+// docs say "in cents" on every amount, Stripe's say "smallest currency unit" —
+// so there is no conversion anywhere and `parseInteger` refuses a decimal
+// rather than truncating it.
+// ---------------------------------------------------------------------------
+
+/// One invoice document: what the customer was billed.
+model Invoice {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider-assigned id. The upsert key, paired with integrationId.
+  externalSourceId String
+
+  /// The human invoice number. Stripe's `number`, null while the invoice is a
+  /// draft. Chargebee has no separate field — its `id` *is* the sequential
+  /// invoice number — so the Chargebee handler maps `id` here in addition to
+  /// `externalSourceId`.
+  number String?
+
+  /// INVOICE_STATUSES: draft | open | paid | past_due | void | uncollectible.
+  /// Nullable, because a provider that reports no status has told us nothing.
+  status String?
+
+  /// Resolved internal customer. Nullable with the provider id retained, for
+  /// `Agreement.customerId`'s reason: `identity` is a separate function that
+  /// may not be connected, and a later relink repairs it.
+  customerId         String?
+  customer           Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  externalCustomerId String?
+
+  /// Resolved internal agreement. Nullable on the same terms: `agreement` is a
+  /// different function. A Chargebee invoice whose lines span several
+  /// subscriptions leaves this null on purpose — see the handler — rather than
+  /// linking the whole invoice to one of them.
+  agreementId         String?
+  agreement           Agreement? @relation(fields: [agreementId], references: [id], onDelete: SetNull)
+  externalAgreementId String?
+
+  /// ISO 4217, as the provider cased it.
+  currency String?
+
+  /// Stated amounts in the currency's minor unit. `subtotalMinor` is the sum of
+  /// the lines; `discountMinor` and `taxMinor` are stated scalars only — both
+  /// stay null on Stripe, whose discounts and taxes are arrays of per-source
+  /// amounts, and `discountMinor` stays null on Chargebee, which states none.
+  /// **Every null means "the provider did not state it", never zero.**
+  subtotalMinor  Int?
+  discountMinor  Int?
+  taxMinor       Int?
+  /// Stated by the provider, never computed. See the section comment above.
+  totalMinor     Int?
+  amountDueMinor Int?
+  /// Stated by the provider, never computed, and never summed from `Payment`:
+  /// that table is deliberately incomplete (dropped authorizations), so a sum
+  /// would be wrong in exactly the cases this number is right.
+  amountPaidMinor Int?
+
+  /// When the document was issued. Stripe's
+  /// `status_transitions.finalized_at` (null while a draft), Chargebee's
+  /// `generated_at` (absent until a pending invoice closes). Null on a draft.
+  issuedAt DateTime?
+  /// Stripe's `due_date` (null when collection is automatic), Chargebee's
+  /// `due_date`.
+  dueAt    DateTime?
+  /// Stripe's `period_start`/`period_end` — the window invoice items may be
+  /// attached to. Chargebee has no equivalent, so both are null there.
+  periodStart DateTime?
+  periodEnd   DateTime?
+  /// Stripe's `status_transitions.paid_at`, Chargebee's `paid_at`.
+  paidAt      DateTime?
+
+  /// Stripe's `hosted_invoice_url`. Chargebee has none. The one place a link
+  /// belongs on its own row.
+  hostedUrl String?
+
+  /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
+  customFields String @default("{}")
+
+  /// Provider-specific facts with no column of their own, as JSON. Serialized
+  /// via src/core/repositories/json-column.ts. Chargebee writes
+  /// `subscription_id: "consolidated"` here when an invoice's lines span several
+  /// subscriptions, which is the honest record of why `agreementId` is null.
+  providerMetadata String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  lines    InvoiceLine[]
+  payments Payment[]
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  @@index([customerId])
+  @@index([agreementId])
+  /// "Open invoices on this integration" without scanning the others.
+  @@index([integrationId, status])
+}
+
+/// One line on an invoice — the billed figure itself.
+///
+/// **This is the one deliberate departure from the no-amount rule** on
+/// `AgreementItem`. An agreement line is a *selection*, and its amount would be
+/// a second copy of the offering's price; an invoice line *is* the money, so
+/// `unitAmountMinor` and `amountMinor` belong here. Neither is ever summed into
+/// `Invoice.totalMinor`, which the provider states.
+model InvoiceLine {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider-assigned id. The upsert key, and what reconciliation compares.
+  externalSourceId String
+
+  /// Required and Cascade, for `Subscription`'s and `AgreementItem`'s reason:
+  /// this line extends exactly one invoice and is not salvageable without it.
+  /// Consequently there is no `externalInvoiceId` and no relink pass on this
+  /// edge — both rows come off one source record in one run.
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  description String?
+  quantity    Int?
+
+  /// The money, in the currency's minor unit. Stripe's per-unit figure arrives
+  /// as `pricing.unit_amount_decimal`, a decimal *string* that is legitimately
+  /// fractional for tiered or usage prices, so it can fail `parseInteger` and
+  /// leave `unitAmountMinor` null; `amountMinor` (the line total) is always an
+  /// integer smallest-unit value and is the reliable one.
+  unitAmountMinor Int?
+  amountMinor     Int?
+
+  /// The service window — Stripe's line `period`, Chargebee's
+  /// `date_from`/`date_to`. What makes an invoice answer "what was delivered in
+  /// March".
+  periodStart DateTime?
+  periodEnd   DateTime?
+
+  /// Stripe's `parent.invoice_item_details.proration`. Chargebee has no
+  /// spelling, so null there.
+  isProration Boolean?
+
+  /// INVOICE_LINE_TYPES — a vocabulary of its own, not `AGREEMENT_ITEM_TYPES`:
+  /// an invoice line answers "what kind of line is this on the bill?", which
+  /// includes `discount`, `credit` and `adjustment`.
+  itemType String?
+
+  /// The price this line was billed at, and the offering it belongs to.
+  /// Nullable and SetNull with the provider's own id retained beside each, for
+  /// `AgreementItem.priceId`'s reason: `catalog` may not be on this integration.
+  priceId         String?
+  price           Price?  @relation(fields: [priceId], references: [id], onDelete: SetNull)
+  externalPriceId String?
+  offeringId         String?
+  offering           Offering? @relation(fields: [offeringId], references: [id], onDelete: SetNull)
+  externalOfferingId String?
+
+  /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
+  customFields String @default("{}")
+
+  /// Provider-specific facts with no column of their own, as JSON. Serialized
+  /// via src/core/repositories/json-column.ts.
+  providerMetadata String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  /// Both the join and the reconciliation predicate.
+  @@index([invoiceId])
+  @@index([offeringId])
+  @@index([priceId])
+}
+
+/// A money movement — a settled charge or a refund.
+///
+/// The grain is the *movement*, not the allocation: Stripe's `Charge` or
+/// `Refund` (which carries `method`, `disputed` and `failure_code`), Chargebee's
+/// `payment`/`refund`/`payment_reversal` transaction. Stripe's `InvoicePayment`
+/// allocation object is read only as an index into the invoice link, because
+/// taking it as the row would darken every method and dispute field.
+///
+/// An authorization moves no money and is not written at all, so this table's
+/// counts will not match a provider's transaction count — correct and intended.
+model Payment {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider-assigned id. The upsert key, paired with integrationId.
+  externalSourceId String
+
+  /// Resolved internal invoice. **Nullable**, unlike `InvoiceLine.invoiceId`:
+  /// a Chargebee `linked_invoices` entry exists only for a payment (a refund
+  /// has none), a Stripe refund carries no invoice, and a charge raised outside
+  /// an invoice has none either. Needs a relink pass.
+  invoiceId         String?
+  invoice           Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  externalInvoiceId String?
+
+  /// Resolved internal customer, nullable on the same terms.
+  customerId         String?
+  customer           Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  externalCustomerId String?
+
+  /// PAYMENT_KINDS: payment | refund. **Not nullable.** Every row is a movement
+  /// and the direction is the first thing a reader needs; there is no third
+  /// possibility and the provider never leaves it blank.
+  kind String
+
+  /// PAYMENT_STATUSES. Nullable, because a provider may report a status this
+  /// union does not recognise, and an unsettled movement reports nothing usable
+  /// yet.
+  status String?
+
+  amountMinor Int?
+  currency    String?
+
+  /// Stripe charge `created`, Chargebee `settled_at`. Named `processedAt`
+  /// rather than `paidAt` because a refund is not a payment and one column
+  /// naming both would be wrong for one of them.
+  processedAt DateTime?
+
+  /// Stripe `payment_method_details.type`, Chargebee `payment_method`. Free
+  /// text, deliberately not an enum: Stripe ships ~90 live values and adds more.
+  method String?
+
+  /// Stripe charge `failure_code`/`failure_message`, Chargebee
+  /// `error_code`/`error_text`. Bounded; the full text goes to
+  /// `providerMetadata`.
+  failureReason String?
+
+  /// Stripe charge `disputed`, Chargebee `payment_method: "chargeback"`.
+  isDisputed Boolean?
+
+  /// The provider's own id where one exists — Stripe's `balance_transaction`,
+  /// Chargebee's `id_at_gateway` — kept beside ours for the same reason
+  /// `externalCouponId` is kept.
+  providerReference String?
+
+  /// JSON object of custom field key/values. Max 50 keys, enforced in app code.
+  customFields String @default("{}")
+
+  /// Provider-specific facts with no column of their own, as JSON. Serialized
+  /// via src/core/repositories/json-column.ts.
+  providerMetadata String @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId])
+  @@index([invoiceId])
+  @@index([customerId])
+  /// "What came in this month" is the first query this table exists to answer.
+  @@index([integrationId, processedAt])
 }
 
 // ---------------------------------------------------------------------------

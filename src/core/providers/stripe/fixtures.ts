@@ -445,3 +445,207 @@ export const STRIPE_AGREEMENT_ITEM_FIELDS: DiscoveredFieldDef[] = [
   },
   { path: "created", label: "Created (Unix epoch seconds, raw)", type: "number" },
 ];
+
+/**
+ * Invoice fields — one document, read from `/v1/invoices`.
+ *
+ * The synthesized paths lead, as everywhere: `status` is already translated
+ * into our vocabulary, and the dates are epoch seconds lifted to ISO. Two
+ * absences are deliberate. There is no scalar discount or tax path — Stripe
+ * carries `total_discount_amounts` and `total_taxes` as arrays — and there is
+ * no `subscription` path because on the pinned version the link is nested;
+ * `agreement_id` reads all three spellings.
+ */
+export const STRIPE_INVOICE_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Invoice ID", type: "string" },
+  { path: "number", label: "Invoice number (null on a draft)", type: "string" },
+  {
+    path: "status",
+    label: "Status (translated to draft/open/paid/void/uncollectible)",
+    type: "string",
+  },
+  {
+    path: "raw_status",
+    label: "Stripe's own status — map `status` instead unless you need the original",
+    type: "string",
+  },
+  { path: "currency", label: "Currency", type: "string" },
+  { path: "subtotal", label: "Subtotal (minor units)", type: "number" },
+  { path: "total", label: "Total (minor units)", type: "number" },
+  { path: "amount_due", label: "Amount due (minor units)", type: "number" },
+  { path: "amount_paid", label: "Amount paid (minor units)", type: "number" },
+  {
+    path: "issued_at",
+    label: "Issued at (ISO 8601, synthesized from status_transitions.finalized_at)",
+    type: "datetime",
+  },
+  {
+    path: "due_at",
+    label: "Due at (ISO 8601, synthesized from due_date)",
+    type: "datetime",
+  },
+  {
+    path: "period_start",
+    label: "Period start (ISO 8601, synthesized)",
+    type: "datetime",
+  },
+  {
+    path: "period_end",
+    label: "Period end (ISO 8601, synthesized)",
+    type: "datetime",
+  },
+  {
+    path: "paid_at",
+    label: "Paid at (ISO 8601, synthesized from status_transitions.paid_at)",
+    type: "datetime",
+  },
+  { path: "hosted_invoice_url", label: "Hosted invoice URL", type: "string" },
+  { path: "customer_id", label: "Customer ID (synthesized)", type: "string" },
+  {
+    path: "agreement_id",
+    label:
+      "Subscription ID (synthesized from any of the three spellings this version may use)",
+    type: "string",
+  },
+  {
+    path: "provider_metadata",
+    label: "Stripe metadata (JSON, synthesized)",
+    type: "string",
+  },
+  { path: "created", label: "Created (Unix epoch seconds, raw)", type: "number" },
+];
+
+/**
+ * Invoice-line fields — one `il_…` on one invoice.
+ *
+ * `invoice_id` is the injected parent, never the line's own `invoice` field;
+ * mapping the raw one would look right until it did not, and this is a writer
+ * that deletes. `unit_amount_minor` carries Stripe's `unit_amount_decimal`
+ * verbatim, so a fractional value resolves to null rather than truncating.
+ */
+export const STRIPE_INVOICE_LINE_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Invoice line ID", type: "string" },
+  {
+    path: "invoice_id",
+    label: "Invoice ID (synthesized from the fetch, not the record)",
+    type: "string",
+  },
+  {
+    path: "price_id",
+    label: "Price ID (synthesized from price.id)",
+    type: "string",
+  },
+  {
+    path: "offering_id",
+    label: "Offering ID (synthesized from price.product)",
+    type: "string",
+  },
+  {
+    path: "unit_amount_minor",
+    label:
+      "Unit amount (synthesized from pricing.unit_amount_decimal; null when fractional)",
+    type: "number",
+  },
+  { path: "amount", label: "Line amount (minor units)", type: "number" },
+  { path: "description", label: "Description", type: "string" },
+  { path: "quantity", label: "Quantity", type: "number" },
+  {
+    path: "period_start",
+    label: "Period start (ISO 8601, synthesized from period.start)",
+    type: "datetime",
+  },
+  {
+    path: "period_end",
+    label: "Period end (ISO 8601, synthesized from period.end)",
+    type: "datetime",
+  },
+  {
+    path: "is_proration",
+    label: "Is proration (synthesized from parent.invoice_item_details.proration)",
+    type: "boolean",
+  },
+  {
+    path: "item_type",
+    label: "Line type (synthesized; 'proration' only)",
+    type: "string",
+  },
+  {
+    path: "provider_metadata",
+    label: "Stripe metadata for the line (JSON, synthesized)",
+    type: "string",
+  },
+  { path: "price.id", label: "Price ID (raw)", type: "string" },
+  {
+    path: "pricing.unit_amount_decimal",
+    label: "Unit amount decimal string (raw)",
+    type: "string",
+  },
+  {
+    path: "parent.invoice_item_details.proration",
+    label: "Proration (raw)",
+    type: "boolean",
+  },
+];
+
+/**
+ * Payment fields — one charge or one refund.
+ *
+ * The two resources differ, so this list covers the union of what a default
+ * might read. `kind` is synthesized, because a charge is always a `payment` and
+ * a refund always a `refund`, and `status` is translated from either
+ * vocabulary. `method`, `failure_reason` and `is_disputed` are charge-only;
+ * `processed_at` and `provider_reference` exist on both.
+ */
+export const STRIPE_PAYMENT_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Charge or refund ID", type: "string" },
+  {
+    path: "kind",
+    label: "Kind (synthesized; 'payment' for a charge, 'refund' for a refund)",
+    type: "string",
+  },
+  {
+    path: "status",
+    label: "Status (translated to pending/succeeded/failed/refunded)",
+    type: "string",
+  },
+  {
+    path: "raw_status",
+    label: "Stripe's own status — map `status` instead unless you need the original",
+    type: "string",
+  },
+  { path: "amount", label: "Amount (minor units)", type: "number" },
+  { path: "currency", label: "Currency", type: "string" },
+  {
+    path: "processed_at",
+    label: "Processed at (ISO 8601, synthesized from created)",
+    type: "datetime",
+  },
+  {
+    path: "method",
+    label: "Method (synthesized from payment_method_details.type)",
+    type: "string",
+  },
+  {
+    path: "failure_reason",
+    label: "Failure reason (synthesized from failure_code/failure_message)",
+    type: "string",
+  },
+  { path: "is_disputed", label: "Is disputed", type: "boolean" },
+  {
+    path: "provider_reference",
+    label: "Provider reference (synthesized from balance_transaction)",
+    type: "string",
+  },
+  {
+    path: "invoice_id",
+    label: "Invoice ID (synthesized from the invoice_payments index)",
+    type: "string",
+  },
+  { path: "customer_id", label: "Customer ID (synthesized)", type: "string" },
+  {
+    path: "provider_metadata",
+    label: "Stripe metadata (JSON, synthesized)",
+    type: "string",
+  },
+  { path: "created", label: "Created (Unix epoch seconds, raw)", type: "number" },
+];

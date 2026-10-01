@@ -59,12 +59,14 @@ import {
   stripeProvider,
   STRIPE_IDENTITY_SCOPES,
   STRIPE_AGREEMENT_SCOPES,
+  STRIPE_BILLING_SCOPES,
   STRIPE_CATALOG_SCOPES,
   STRIPE_PROVIDER_NAME,
 } from "./providers/stripe/provider";
 import {
   chargebeeProvider,
   CHARGEBEE_AGREEMENT_SCOPES,
+  CHARGEBEE_BILLING_SCOPES,
   CHARGEBEE_CATALOG_SCOPES,
   CHARGEBEE_IDENTITY_SCOPES,
   CHARGEBEE_PROVIDER_NAME,
@@ -74,10 +76,12 @@ import { metrifoxIdentityHandler } from "./providers/metrifox/identity-handler";
 import { metrifoxFieldDiscovery } from "./providers/metrifox/discovery";
 import { stripeIdentityHandler } from "./providers/stripe/identity-handler";
 import { stripeAgreementHandler } from "./providers/stripe/agreement-handler";
+import { stripeBillingHandler } from "./providers/stripe/billing-handler";
 import { stripeCatalogHandler } from "./providers/stripe/catalog-handler";
 import { stripeFieldDiscovery } from "./providers/stripe/discovery";
 import { chargebeeCatalogHandler } from "./providers/chargebee/catalog-handler";
 import { chargebeeAgreementHandler } from "./providers/chargebee/agreement-handler";
+import { chargebeeBillingHandler } from "./providers/chargebee/billing-handler";
 import { chargebeeIdentityHandler } from "./providers/chargebee/identity-handler";
 import { chargebeeFieldDiscovery } from "./providers/chargebee/discovery";
 import { mockIdentityHandler } from "./providers/mock/identity-handler";
@@ -90,6 +94,7 @@ import { salesforceFieldDiscovery } from "./providers/salesforce/discovery";
 export const IDENTITY_FUNCTION = "identity";
 export const CATALOG_FUNCTION = "catalog";
 export const AGREEMENT_FUNCTION = "agreement";
+export const BILLING_FUNCTION = "billing";
 
 let bootstrapped = false;
 
@@ -123,11 +128,13 @@ export function bootstrap(): void {
   // does not claim we have built the handler — the picker reads the handler
   // registry separately and marks a function visibly unavailable.
   //
-  // Billing stays mock-only although Stripe and Metrifox both have invoice
-  // APIs. That is deliberate rather than an oversight: it keeps
+  // Billing is now real on Stripe and Chargebee, and stays declared on the mock
+  // so scope isolation ("authorizing for identity must never request
+  // `billing.invoices.read`") keeps a subject. That keeps
   // `providerNamesForFunctions(["identity","billing"])` a genuine partial
-  // intersection, which is the only place the "a provider must cover the whole
-  // set" rule is observable, and `tests/unit/multi-function.test.ts` pins it.
+  // intersection — hubspot, salesforce and metrifox have identity but not
+  // billing — which is the only place the "a provider must cover the whole set"
+  // rule is observable. `tests/unit/multi-function.test.ts` pins the result.
   // Agreement is the deliberate widening that comment used to ask for.
   const identityScopes: Array<[string, readonly string[]]> = [
     [HUBSPOT_PROVIDER_NAME, HUBSPOT_IDENTITY_SCOPES],
@@ -268,25 +275,32 @@ export function bootstrap(): void {
     scopesByProvider: scopeMap(supportScopes),
   });
 
-  // Functions with neither handlers nor providers yet. Selecting one correctly
-  // yields an empty provider list and blocks the flow. The mock declares
-  // billing scopes only so scope isolation stays observable — authorizing for
-  // identity must never request `billing.invoices.read`.
-  // Invoice, charge and payment — not subscription. A subscription is a
-  // *specialization of* agreement in the canonical model, not a sibling of
-  // invoice, and declaring it here is what would eventually produce the
-  // "subscription table" that order forms and amendments then have to be
-  // retrofitted onto. That retrofit is named as the expensive path in the
-  // framework doc, so the fix belongs at the declaration, before anything is
-  // built against it.
+  // Billing: the invoices a customer was sent and the money that moved. Real on
+  // the two providers that already ship the functions an invoice hangs off —
+  // Stripe and Chargebee — and declared on the mock only for scope isolation.
+  //
+  // The mock keeps its scopes so that authorizing for identity never requests a
+  // billing scope, which is the observable form of the isolation rule; it gets
+  // no handler, so it remains a deliberately unbuildable provider here.
+  //
+  // `dataModels` names three objects, and the order is the write order an
+  // invoice's children need. `charge` is deliberately absent: the word means
+  // three different things across these providers, and what it used to stand in
+  // for — the billed amount on the invoice — is `invoiceLine`.
+  const billingScopes: Array<[string, readonly string[]]> = [
+    [STRIPE_PROVIDER_NAME, STRIPE_BILLING_SCOPES],
+    [CHARGEBEE_PROVIDER_NAME, CHARGEBEE_BILLING_SCOPES],
+  ];
+  if (isMockEnabled()) {
+    billingScopes.push([MOCK_PROVIDER_NAME, MOCK_BILLING_SCOPES]);
+  }
+
   registerFunction({
     name: "billing",
     label: "Billing",
-    description: "Invoices, charges, and payment history.",
-    dataModels: ["invoice", "charge", "payment"],
-    scopesByProvider: scopeMap(
-      isMockEnabled() ? [[MOCK_PROVIDER_NAME, MOCK_BILLING_SCOPES]] : []
-    ),
+    description: "Invoices, invoice lines, and payment history.",
+    dataModels: ["invoice", "invoiceLine", "payment"],
+    scopesByProvider: scopeMap(billingScopes),
   });
 
   for (const [name, label, description, models] of [
@@ -391,6 +405,30 @@ export function bootstrap(): void {
   );
   registerFieldDiscovery(
     AGREEMENT_FUNCTION,
+    CHARGEBEE_PROVIDER_NAME,
+    chargebeeFieldDiscovery
+  );
+
+  // Billing, on the same two providers. The discoverer switches on the target
+  // object, so the same instance serves billing and the functions above.
+  registerSyncHandler(
+    BILLING_FUNCTION,
+    STRIPE_PROVIDER_NAME,
+    stripeBillingHandler
+  );
+  registerFieldDiscovery(
+    BILLING_FUNCTION,
+    STRIPE_PROVIDER_NAME,
+    stripeFieldDiscovery
+  );
+
+  registerSyncHandler(
+    BILLING_FUNCTION,
+    CHARGEBEE_PROVIDER_NAME,
+    chargebeeBillingHandler
+  );
+  registerFieldDiscovery(
+    BILLING_FUNCTION,
     CHARGEBEE_PROVIDER_NAME,
     chargebeeFieldDiscovery
   );

@@ -444,7 +444,10 @@
       metrifox: ["orders:read", "subscriptions:read"],
       mock: ["crm.objects.deals.read", "crm.schemas.read"]
     },
-    billing: { mock: ["billing.invoices.read"] },
+    billing: {
+      stripe: ["invoices:read", "invoice_payments:read", "charges:read", "refunds:read"],
+      mock: ["billing.invoices.read"]
+    },
     usage: {},
     communication: {}
   };
