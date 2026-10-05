@@ -30,6 +30,8 @@ import {
   chargebeeIdentityDefaults,
 } from "./chargebee/defaults";
 import { CHARGEBEE_PROVIDER_NAME } from "./chargebee/provider";
+import { stiggIdentityDefaults } from "./stigg/defaults";
+import { STIGG_PROVIDER_NAME } from "./stigg/provider";
 
 const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
   [`identity:${HUBSPOT_PROVIDER_NAME}`]: hubspotIdentityDefaults,
@@ -38,6 +40,7 @@ const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
   [`identity:${METRIFOX_PROVIDER_NAME}`]: metrifoxIdentityDefaults,
   [`identity:${STRIPE_PROVIDER_NAME}`]: stripeIdentityDefaults,
   [`identity:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeIdentityDefaults,
+  [`identity:${STIGG_PROVIDER_NAME}`]: stiggIdentityDefaults,
   [`catalog:${STRIPE_PROVIDER_NAME}`]: stripeCatalogDefaults,
   [`catalog:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeCatalogDefaults,
   [`agreement:${STRIPE_PROVIDER_NAME}`]: stripeAgreementDefaults,

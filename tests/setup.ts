@@ -57,6 +57,12 @@ process.env["STRIPE_API_VERSION"] = "2026-08-26.dahlia";
 // own default.
 delete process.env["STRIPE_PAGE_SIZE"];
 
+// Same hazard, same remedy, for Stigg. The base is assigned unconditionally so
+// a developer pointing `STIGG_API_BASE` at a live tenant cannot redirect a
+// mocked request; the page size is deleted so per-case values are not masked.
+process.env["STIGG_API_BASE"] = "https://api.stigg.io";
+delete process.env["STIGG_PAGE_SIZE"];
+
 process.env["HUBSPOT_CLIENT_ID"] ??= "test-hubspot-client-id";
 process.env["HUBSPOT_CLIENT_SECRET"] ??= "test-hubspot-client-secret";
 process.env["SALESFORCE_CLIENT_ID"] ??= "test-salesforce-client-id";

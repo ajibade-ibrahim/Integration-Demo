@@ -71,6 +71,11 @@ import {
   CHARGEBEE_IDENTITY_SCOPES,
   CHARGEBEE_PROVIDER_NAME,
 } from "./providers/chargebee/provider";
+import {
+  stiggProvider,
+  STIGG_IDENTITY_SCOPES,
+  STIGG_PROVIDER_NAME,
+} from "./providers/stigg/provider";
 
 import { metrifoxIdentityHandler } from "./providers/metrifox/identity-handler";
 import { metrifoxFieldDiscovery } from "./providers/metrifox/discovery";
@@ -84,6 +89,8 @@ import { chargebeeAgreementHandler } from "./providers/chargebee/agreement-handl
 import { chargebeeBillingHandler } from "./providers/chargebee/billing-handler";
 import { chargebeeIdentityHandler } from "./providers/chargebee/identity-handler";
 import { chargebeeFieldDiscovery } from "./providers/chargebee/discovery";
+import { stiggIdentityHandler } from "./providers/stigg/identity-handler";
+import { stiggFieldDiscovery } from "./providers/stigg/discovery";
 import { mockIdentityHandler } from "./providers/mock/identity-handler";
 import { mockFieldDiscovery } from "./providers/mock/discovery";
 import { hubspotIdentityHandler } from "./providers/hubspot/identity-handler";
@@ -120,6 +127,9 @@ export function bootstrap(): void {
   registerProvider(metrifoxProvider);
   registerProvider(stripeProvider);
   registerProvider(chargebeeProvider);
+  // Same again: Stigg's server key is pasted per integration, so there is
+  // nothing deployment-level to configure.
+  registerProvider(stiggProvider);
   if (isMockEnabled()) registerProvider(mockProvider);
 
   // --- functions ---------------------------------------------------------
@@ -142,6 +152,7 @@ export function bootstrap(): void {
     [METRIFOX_PROVIDER_NAME, METRIFOX_IDENTITY_SCOPES],
     [STRIPE_PROVIDER_NAME, STRIPE_IDENTITY_SCOPES],
     [CHARGEBEE_PROVIDER_NAME, CHARGEBEE_IDENTITY_SCOPES],
+    [STIGG_PROVIDER_NAME, STIGG_IDENTITY_SCOPES],
   ];
   if (isMockEnabled()) {
     identityScopes.push([MOCK_PROVIDER_NAME, MOCK_IDENTITY_SCOPES]);
@@ -362,6 +373,21 @@ export function bootstrap(): void {
     IDENTITY_FUNCTION,
     CHARGEBEE_PROVIDER_NAME,
     chargebeeFieldDiscovery
+  );
+
+  // Stigg joins as an identity-only provider. Its discovery instance switches
+  // on the target object and answers `[]` for everything outside identity, so
+  // registering it once here is the whole wiring — no catalog, agreement or
+  // billing scopes are declared for it yet.
+  registerSyncHandler(
+    IDENTITY_FUNCTION,
+    STIGG_PROVIDER_NAME,
+    stiggIdentityHandler
+  );
+  registerFieldDiscovery(
+    IDENTITY_FUNCTION,
+    STIGG_PROVIDER_NAME,
+    stiggFieldDiscovery
   );
 
   // The same discoverer serves all three functions: it switches on the target

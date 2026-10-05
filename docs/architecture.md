@@ -37,7 +37,7 @@ flowchart TB
     subgraph registries["Registries — the extension seam"]
         direction LR
         FREG["functionRegistry<br/><i>identity, catalog, agreement,<br/>billing, support,<br/>usage, communication</i>"]
-        PREG["providerRegistry<br/><i>hubspot, salesforce,<br/>metrifox, stripe,<br/>chargebee, mock</i>"]
+        PREG["providerRegistry<br/><i>hubspot, salesforce,<br/>metrifox, stripe,<br/>chargebee, stigg, mock</i>"]
         HREG["handler + discovery<br/>keyed <b>function:provider</b>"]
     end
 
@@ -66,6 +66,7 @@ flowchart TB
         MF["metrifox/"]
         ST["stripe/"]
         CB["chargebee/"]
+        SG["stigg/"]
         MK["mock/"]
         HTTP["<b>providers/http.ts</b><br/>shared failure policy<br/>401 / 429 / 5xx"]
     end
@@ -170,7 +171,7 @@ sequenceDiagram
         OA->>OA: consumeState() - single-use, constant-time compare
         OA->>P: exchange code for tokens
         P-->>OA: access + refresh + granted scopes
-    else auth.kind === "apiKey" (Metrifox, Stripe, Chargebee)
+    else auth.kind === "apiKey" (Metrifox, Stripe, Chargebee, Stigg)
         U->>AK: POST /api/integrations/connect {draftId, apiKey}
         AK->>AK: validateKeyShape() - local, no network
         AK->>P: probeCredential() - prove it works
@@ -687,7 +688,7 @@ flowchart LR
 
     subgraph outside["Outside the app"]
         W["scripts/worker.ts<br/><i>polls every 60s</i>"]
-        EXT["HubSpot - Salesforce -<br/>Metrifox - Stripe - Chargebee"]
+        EXT["HubSpot - Salesforce -<br/>Metrifox - Stripe -<br/>Chargebee - Stigg"]
     end
 
     CC -->|fetch| RH
@@ -731,7 +732,12 @@ the session options) and cursor rather than page-number pagination. Chargebee wa
 the second, and a harder one: HTTP Basic with the site name as the username,
 from a pasted `site:api_key` pair, a `tenant`-scoped external id keyed on that
 site, **four** handlers at once — and still no orchestration, route or UI
-change.
+change. Stigg was the third, and a fifth credential shape again: a custom
+`X-API-KEY` header, opaque server-issued cursors, a synthesized billing contact,
+and a `tenant`-scoped id whose scope is not knowable from the list API at all —
+so it emits no identity key, the same honest fail-closed state Metrifox and
+HubSpot are in. Registering it was a directory and registration calls, exactly
+as this list predicts.
 
 **A new function:** `registerFunction` with its `scopesByProvider`, and it
 appears in the picker immediately — with no handler it correctly reports that no
