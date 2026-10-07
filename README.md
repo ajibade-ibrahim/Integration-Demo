@@ -14,12 +14,13 @@ tickets; the scopes requested are the union across the selected set, resolved
 before consent.
 
 Currently implemented: the **identity** function on **HubSpot**, **Salesforce**,
-**Metrifox**, **Stripe**, **Chargebee**, and a built-in **mock provider** so the
-whole thing runs with no credentials — plus **catalog** (products, the offerings
-that price them, prices, and the features each offering carries),
-**agreement** (subscriptions, their lines, the entitlements they confer and the
-discounts on them) and **billing** (invoices, their lines and the payments
-against them) on **Stripe** and **Chargebee**.
+**Metrifox**, **Stripe**, **Chargebee**, **Stigg**, and a built-in **mock
+provider** so the whole thing runs with no credentials — plus **catalog**
+(products, the offerings that price them, prices, and the features each
+offering carries) and **agreement** (subscriptions, their lines, the
+entitlements they confer and the discounts on them) on **Stripe**, **Chargebee**
+and **Stigg**, and **billing** (invoices, their lines and the payments against
+them) on **Stripe** and **Chargebee**.
 
 The four functions are independent by design, and that independence is
 observable: catalog needs no customer, identity needs no price, and an agreement

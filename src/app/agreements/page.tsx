@@ -75,9 +75,10 @@ export default async function AgreementsPage() {
           {/*
             The multi-item caveat, narrowed to what is still true. Every line
             is stored now and listed under the agreement's name — what has not
-            changed is that the Price column reads the *one* offering the
-            agreement links, so a plan plus 25 seats still shows the plan's
-            price. Saying nothing would make that look like the whole amount.
+            changed is that the Offering and Price columns read the *one* line
+            the agreement links, so a plan plus 25 seats still shows the plan's
+            own price. Saying nothing would make that look like the whole
+            amount.
           */}
           {totals.multiItem > 0 && (
             <Notice>
@@ -95,6 +96,7 @@ export default async function AgreementsPage() {
               "Type",
               "Status",
               "Customer",
+              "Offering",
               "Price",
               "Renews",
               "Source",
@@ -129,18 +131,17 @@ export default async function AgreementsPage() {
                   />
                 </Td>
                 <Td>
-                  {row.price ?? (
-                    <LinkCell
-                      name={row.offeringName}
-                      externalId={row.externalOfferingId}
-                    />
-                  )}
+                  <LinkCell
+                    name={row.offeringName}
+                    externalId={row.externalOfferingId}
+                  />
                   {row.quantity !== null && row.quantity > 1 && (
                     <span className="ml-1 text-xs text-slate-500">
                       × {row.quantity}
                     </span>
                   )}
                 </Td>
+                <Td>{row.price ?? <Empty />}</Td>
                 <Td className="text-slate-600">
                   {row.currentPeriodEnd === null ? (
                     <Empty />

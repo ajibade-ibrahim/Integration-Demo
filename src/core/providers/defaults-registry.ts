@@ -30,7 +30,11 @@ import {
   chargebeeIdentityDefaults,
 } from "./chargebee/defaults";
 import { CHARGEBEE_PROVIDER_NAME } from "./chargebee/provider";
-import { stiggCatalogDefaults, stiggIdentityDefaults } from "./stigg/defaults";
+import {
+  stiggAgreementDefaults,
+  stiggCatalogDefaults,
+  stiggIdentityDefaults,
+} from "./stigg/defaults";
 import { STIGG_PROVIDER_NAME } from "./stigg/provider";
 
 const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
@@ -46,6 +50,7 @@ const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
   [`catalog:${STIGG_PROVIDER_NAME}`]: stiggCatalogDefaults,
   [`agreement:${STRIPE_PROVIDER_NAME}`]: stripeAgreementDefaults,
   [`agreement:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeAgreementDefaults,
+  [`agreement:${STIGG_PROVIDER_NAME}`]: stiggAgreementDefaults,
   [`billing:${STRIPE_PROVIDER_NAME}`]: stripeBillingDefaults,
   [`billing:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeBillingDefaults,
 };

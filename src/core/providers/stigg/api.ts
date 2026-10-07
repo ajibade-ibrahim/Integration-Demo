@@ -668,3 +668,531 @@ export function flattenEntitlement(
     value: stiggEntitlementValue(entitlement),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Agreement
+// ---------------------------------------------------------------------------
+
+/**
+ * Every subscription status Stigg defines.
+ *
+ * Sent as an explicit `status` filter on every list request rather than left
+ * off. The parameter is documented as optional with no stated default, and the
+ * two ends of this are worlds apart: if the default were "active only", every
+ * canceled and expired subscription would simply never arrive, and because
+ * `Agreement` and `Subscription` are upsert-only nothing else in the run would
+ * notice. Asking for all six makes "we see every subscription" a property of
+ * our request rather than of an undocumented default — Stripe's `status=all`
+ * reasoning, made explicit here because Stigg has no `all` keyword.
+ */
+export const STIGG_SUBSCRIPTION_STATUSES = [
+  "PAYMENT_PENDING",
+  "ACTIVE",
+  "EXPIRED",
+  "IN_TRIAL",
+  "CANCELED",
+  "NOT_STARTED",
+] as const;
+
+/**
+ * The subscriptions list, with the all-statuses filter applied.
+ *
+ * `status` is a single comma-separated parameter (`style: form`,
+ * `explode: false` in the OpenAPI), so the six values are joined. `URL`'s
+ * percent-encoding of the commas is the same encoding a server decodes before
+ * splitting; the integration test asserts the decoded value, and this is the
+ * one contract a live key should confirm first.
+ */
+export function subscriptionsUrl(limit: number, after?: string): string {
+  const url = new URL(listUrl("/api/v1/subscriptions", limit, after));
+  url.searchParams.set("status", STIGG_SUBSCRIPTION_STATUSES.join(","));
+  return url.toString();
+}
+
+/**
+ * Stigg's six subscription statuses, mapped onto ours.
+ *
+ * Six into seven, and three of the collapses are the interesting part:
+ *
+ *   `NOT_STARTED` → `scheduled` — agreed but not yet begun. `draft` cannot hold
+ *   it: `draft` means *never agreed*, and this is exactly the distinction
+ *   `AGREEMENT_STATUSES.scheduled` was added for (see its comment).
+ *
+ *   `PAYMENT_PENDING` → `draft` — provisioned but the first payment never
+ *   completed, the state Stripe's `incomplete` maps to. Calling it `active`
+ *   would count revenue no one committed to.
+ *
+ *   `cancelReason` is deliberately **not** read: it says why a cancellation
+ *   happened, which is detail rather than standing.
+ *
+ * `past_due` and `paused` are unreachable from these six; a Stigg subscription
+ * cannot be in either, so the handler comment says so rather than pretending to
+ * cover the union. Anything unrecognised returns undefined and the writer warns
+ * and leaves the column null, exactly as Stripe's unknown status does.
+ */
+const STIGG_AGREEMENT_STATUS: Readonly<Record<string, string>> = {
+  ACTIVE: "active",
+  IN_TRIAL: "trialing",
+  CANCELED: "canceled",
+  EXPIRED: "expired",
+  NOT_STARTED: "scheduled",
+  PAYMENT_PENDING: "draft",
+};
+
+export function stiggAgreementStatus(
+  subscription: RawRecord,
+): string | undefined {
+  const raw = asString(subscription["status"]);
+  return raw === undefined ? undefined : STIGG_AGREEMENT_STATUS[raw];
+}
+
+/**
+ * Our collection method, from Stigg's three words.
+ *
+ * `NONE` is the member Stripe cannot produce and Chargebee cannot either: Stigg
+ * says outright that no collection happens, which is a fact rather than the
+ * absence a null would mean. An absent or unrecognised value returns undefined
+ * and the column stays null rather than holding a word the writer would warn
+ * about.
+ */
+export function stiggCollectionMethod(
+  subscription: RawRecord,
+): string | undefined {
+  switch (asString(subscription["paymentCollectionMethod"])) {
+    case "CHARGE":
+      return "automatic";
+    case "INVOICE":
+      return "manual";
+    case "NONE":
+      return "none";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * A display name for a subscription.
+ *
+ * Stigg gives a subscription no name, while `Agreement.name` is required — so
+ * without this every subscription is rejected for a missing name on every sync,
+ * forever, with a `partial` run status as the only evidence. Exactly the trap
+ * `agreementDisplayName` plays for Stripe.
+ *
+ * The plan is the name: it is the one human-recognisable thing the payload
+ * carries, and it matches how the offering row is labelled. Stigg supports
+ * multiple subscriptions on one plan per customer (`resourceId`), so when a
+ * resource is named it is appended to keep two rows distinguishable. The 255
+ * bound is enforced here rather than left to the writer's truncation: a
+ * `planId` is already up to 255 chars, and a silently truncated name would read
+ * as a different plan. Over the bound, the subscription id is used instead —
+ * itself ≤255 by the API contract, and always unique.
+ */
+export function agreementDisplayName(subscription: RawRecord): string {
+  const planId = asString(subscription["planId"]);
+  const id = asString(subscription["id"]);
+  const name = planId ?? id ?? "Subscription";
+
+  const resourceId = asString(subscription["resourceId"]);
+  if (resourceId === undefined) return name;
+
+  const combined = `${name} · ${resourceId}`;
+  return combined.length <= 255 ? combined : (id ?? name);
+}
+
+/**
+ * A subscription's currency, from the first price or the minimum spend.
+ *
+ * Stigg states no top-level currency on a subscription, so it is read from the
+ * `prices` override list when there is one and from `minimumSpend` when there
+ * is not. As Stigg cases it (lowercase codes).
+ */
+export function subscriptionCurrency(
+  subscription: RawRecord,
+): string | undefined {
+  const firstPrice = asRecord(asArray(subscription["prices"])[0]);
+  return (
+    asString(firstPrice?.["currency"]) ??
+    asString(asRecord(subscription["minimumSpend"])?.["currency"])
+  );
+}
+
+/**
+ * A record's `metadata` bag, serialized for a `providerMetadata` column.
+ *
+ * Stigg's `metadata` is flat and string-valued, so `JSON.stringify` is the whole
+ * translation. Absent metadata returns undefined rather than `"{}"`, so the
+ * mapping rule does not fire and no bag and an empty bag read the same — which
+ * is correct because Stigg does not distinguish them.
+ */
+function metadataJson(record: RawRecord): string | undefined {
+  const metadata = asRecord(record["metadata"]);
+  return metadata === undefined ? undefined : JSON.stringify(metadata);
+}
+
+/**
+ * The fields synthesized onto a subscription before mapping.
+ *
+ * Everything here is either nested, in the wrong vocabulary, or absent from the
+ * payload, and each is read into a key our default rules expect:
+ *
+ *   `agreement_name`         — the plan (plus resource); see above.
+ *   `agreement_type`         — constant `"subscription"` for this endpoint.
+ *   `status` / `raw_status`  — our vocabulary, and Stigg's own word kept beside
+ *                              it under a name that cannot collide. The map is
+ *                              lossy (`NOT_STARTED` and `PAYMENT_PENDING` both
+ *                              become a kind of not-yet-active), which is
+ *                              exactly why the raw word stays reachable.
+ *   `currency`               — from the first price; see above.
+ *   `customer_id`            — `customerId` under a snake_case key.
+ *   `offering_id`            — the plan, so the agreement links to the catalog
+ *                              offering.
+ *   `item_count`             — the plan line plus one per addon.
+ *   `collection_method`      — translated to our `automatic`/`manual`/`none`.
+ *   `provider_metadata`      — Stigg's flat bag, serialized.
+ *   dates                    — already ISO-8601 in Stigg's payload (unlike
+ *                              Stripe's epoch seconds), so they pass through
+ *                              and no conversion is done.
+ *
+ * Three dates are synthesized rather than passed through, because Stigg states
+ * the inputs but no single field says what we need:
+ *
+ *   `end_date`            — the day the subscription *actually stops*: for a
+ *                           terminated one, `endDate` (Stigg's own end) with
+ *                           `effectiveEndDate` as the fallback, and nothing for
+ *                           one still running. `effectiveEndDate` is populated
+ *                           on healthy active subscriptions too — it is the
+ *                           current term's boundary — so using it
+ *                           unconditionally would end-date every agreement.
+ *   `cancel_at`           — `effectiveEndDate` when a cancellation was
+ *                           requested, so it names the moment the scheduled or
+ *                           completed cancellation takes effect.
+ *   `cancel_at_period_end`— a flag Stigg does not state. True exactly when the
+ *                           subscription is still `ACTIVE` and carries a
+ *                           `cancellationDate` (a scheduled cancellation keeps
+ *                           it active until the effective date); false
+ *                           otherwise.
+ *   `next_billing_at`     — `currentBillingPeriodEnd` when nothing is
+ *                           cancelling and the subscription is not terminated.
+ *                           A cancelling or ended subscription renews nothing,
+ *                           so the date is omitted rather than stated wrongly.
+ */
+export function flattenSubscription(subscription: RawRecord): RawRecord {
+  const rawStatus = asString(subscription["status"]);
+  const status = stiggAgreementStatus(subscription);
+  const collectionMethod = stiggCollectionMethod(subscription);
+  const currency = subscriptionCurrency(subscription);
+  const providerMetadata = metadataJson(subscription);
+
+  const cancellationDate = asString(subscription["cancellationDate"]);
+  const effectiveEndDate = asString(subscription["effectiveEndDate"]);
+  const endDate = asString(subscription["endDate"]);
+  const currentPeriodEnd = asString(subscription["currentBillingPeriodEnd"]);
+
+  const terminal = rawStatus === "CANCELED" || rawStatus === "EXPIRED";
+  const cancelAtPeriodEnd =
+    rawStatus === "ACTIVE" && cancellationDate !== undefined;
+  const agreementEndDate = terminal ? (endDate ?? effectiveEndDate) : endDate;
+  const nextBillingAt =
+    terminal || cancelAtPeriodEnd ? undefined : currentPeriodEnd;
+
+  const dates: Record<string, string> = {};
+  for (const [ours, theirs] of [
+    ["effective_date", "startDate"],
+    ["current_period_start", "currentBillingPeriodStart"],
+    ["current_period_end", "currentBillingPeriodEnd"],
+    ["trial_ends_at", "trialEndDate"],
+    ["canceled_at", "cancellationDate"],
+  ] as const) {
+    const iso = asString(subscription[theirs]);
+    if (iso !== undefined) dates[ours] = iso;
+  }
+  if (agreementEndDate !== undefined) dates["end_date"] = agreementEndDate;
+  if (cancellationDate !== undefined && effectiveEndDate !== undefined) {
+    dates["cancel_at"] = effectiveEndDate;
+  }
+  if (nextBillingAt !== undefined) dates["next_billing_at"] = nextBillingAt;
+
+  return {
+    agreement_name: agreementDisplayName(subscription),
+    agreement_type: "subscription",
+    // Omitted rather than a guess when Stigg sends a status we do not know, so
+    // no rule fires and the writer never sees a value to warn about.
+    ...(status === undefined ? {} : { status }),
+    ...(rawStatus === undefined ? {} : { raw_status: rawStatus }),
+    ...(currency === undefined ? {} : { currency }),
+    customer_id: asString(subscription["customerId"]),
+    offering_id: asString(subscription["planId"]),
+    item_count: 1 + asArray(subscription["addons"]).length,
+    ...(collectionMethod === undefined
+      ? {}
+      : { collection_method: collectionMethod }),
+    // Always emitted, never null: the flag is a synthesis, and both states are
+    // something we can read. See the doc comment.
+    cancel_at_period_end: cancelAtPeriodEnd,
+    ...(providerMetadata === undefined
+      ? {}
+      : { provider_metadata: providerMetadata }),
+    ...dates,
+  };
+}
+
+/**
+ * A subscription's inline price overrides.
+ *
+ * Each entry is `{ amount, currency, featureId?, addonId?, baseCharge?, … }`:
+ * a per-subscription override of one charge's price, not the plan's catalogue
+ * price. Tolerates an absent or malformed list.
+ */
+function priceOverrides(subscription: RawRecord): readonly RawRecord[] {
+  return asArray(subscription["prices"]).filter(
+    (entry): entry is RawRecord => asRecord(entry) !== undefined,
+  );
+}
+
+/**
+ * The minor-unit amount of the single override matching `predicate`.
+ *
+ * One match or none, and that is the whole rule. Stigg localizes a price by
+ * country, so several entries can carry the same `addonId`/`baseCharge` at
+ * different amounts; picking one would assert which country's price applies,
+ * and the subscription never says. Multiple matches or a non-numeric amount
+ * both yield undefined, and the column stays null — the honest answer, not a
+ * guess. The amount is in major units and converted with `toMinorUnits`.
+ */
+function matchedOverrideAmountMinor(
+  overrides: readonly RawRecord[],
+  predicate: (override: RawRecord) => boolean,
+  fallbackCurrency: string | undefined,
+): number | undefined {
+  const matches = overrides.filter(predicate);
+  if (matches.length !== 1) return undefined;
+
+  const entry = matches[0];
+  const amount = entry === undefined ? undefined : asNumber(entry["amount"]);
+  if (amount === undefined) return undefined;
+
+  return toMinorUnits(amount, asString(entry?.["currency"]) ?? fallbackCurrency);
+}
+
+/**
+ * The stable synthetic id for one line of a subscription.
+ *
+ * ALGORITHM v1 — changing this re-keys every existing Stigg line. `AgreementItem`
+ * is unique on `(integrationId, externalSourceId)`, and a Stigg subscription
+ * carries no line ids at all, so the id is built from the subscription and what
+ * the line is: `:plan` for the plan, `:addon:<id>` for each addon. The `addon:`
+ * prefix is load-bearing — Stigg's id alphabet allows an addon literally named
+ * `plan`, which a bare `${subscriptionId}:${addonId}` would collide with the
+ * plan line against. Stigg ids cannot contain `:`.
+ */
+export function stiggItemExternalId(
+  subscriptionId: string,
+  addonId?: string,
+): string {
+  return addonId === undefined
+    ? `${subscriptionId}:plan`
+    : `${subscriptionId}:addon:${addonId}`;
+}
+
+/**
+ * The synthesized fields for every line of one subscription.
+ *
+ * Two kinds of line, and no more:
+ *
+ *   the plan   — `position 0`, `item_type "plan"`, `offering_id` the plan.
+ *   each addon — `position i+1` in payload order, `item_type "add_on"`,
+ *                `offering_id` the addon's id, `quantity` its stated count.
+ *
+ * A metered-feature override in `prices` is deliberately **not** a line: it
+ * adjusts how a charge is priced, it is not provisioned state, and treating it
+ * as one would inflate `itemCount`. The raw `prices` array stays on the
+ * subscription record for custom-field mapping.
+ *
+ * `unit_price_minor` is the one piece of per-line money the payload can yield —
+ * the matching override — read by `matchedOverrideAmountMinor`. `billing_model`
+ * is deliberately absent, as it is on Chargebee's lines: Stigg states it on the
+ * charge, which is a catalog row.
+ */
+export function flattenAgreementItems(
+  subscription: RawRecord,
+  subscriptionId: string,
+): RawRecord[] {
+  const overrides = priceOverrides(subscription);
+  const currency = subscriptionCurrency(subscription);
+  const records: RawRecord[] = [];
+
+  const planId = asString(subscription["planId"]);
+  const planUnitPrice = matchedOverrideAmountMinor(
+    overrides,
+    (override) => override["baseCharge"] === true,
+    currency,
+  );
+  records.push({
+    item_id: stiggItemExternalId(subscriptionId),
+    agreement_id: subscriptionId,
+    ...(planId === undefined ? {} : { offering_id: planId }),
+    item_type: "plan",
+    position: 0,
+    ...(planUnitPrice === undefined ? {} : { unit_price_minor: planUnitPrice }),
+  });
+
+  asArray(subscription["addons"]).forEach((raw, index) => {
+    const addon = asRecord(raw);
+    const addonId = addon === undefined ? undefined : asString(addon["id"]);
+    // An addon with no id cannot be keyed or linked to its offering, so it is
+    // dropped rather than emitted as a nameless line.
+    if (addonId === undefined) return;
+
+    const quantity = asNumber(addon?.["quantity"]);
+    const unitPrice = matchedOverrideAmountMinor(
+      overrides,
+      (override) => asString(override["addonId"]) === addonId,
+      currency,
+    );
+
+    records.push({
+      item_id: stiggItemExternalId(subscriptionId, addonId),
+      agreement_id: subscriptionId,
+      offering_id: addonId,
+      item_type: "add_on",
+      position: index + 1,
+      ...(quantity === undefined ? {} : { quantity }),
+      ...(unitPrice === undefined ? {} : { unit_price_minor: unitPrice }),
+    });
+  });
+
+  return records;
+}
+
+/**
+ * Whether a subscription's `addons` key is present at all.
+ *
+ * The key-presence gate, not the array length: an absent `addons` would
+ * otherwise look exactly like "this subscription has no addons", and the
+ * reconciling writer would delete every stored line. A missing key withholds
+ * the item page's `complete` flag; an empty array does not.
+ */
+export function hasAddonsKey(subscription: RawRecord): boolean {
+  return subscription["addons"] !== undefined;
+}
+
+export function hasCouponsKey(subscription: RawRecord): boolean {
+  return subscription["coupons"] !== undefined;
+}
+
+/** A subscription's inline coupons, tolerating an absent or malformed list. */
+export function subscriptionCoupons(
+  subscription: RawRecord,
+): readonly RawRecord[] {
+  return asArray(subscription["coupons"]).filter(
+    (row): row is RawRecord => asRecord(row) !== undefined,
+  );
+}
+
+/**
+ * The stable synthetic id for one coupon attached to one subscription.
+ *
+ * ALGORITHM v1 — changing this re-keys every existing Stigg discount. A Stigg
+ * coupon id is account-wide and the same coupon can be applied to many
+ * subscriptions, while `AgreementDiscount` is unique on
+ * `(integrationId, externalSourceId)`. Used raw, every subscriber's discount
+ * would collapse onto one row; the subscription id is what keeps them apart.
+ */
+export function stiggDiscountExternalId(
+  subscriptionId: string,
+  couponId: string,
+): string {
+  return `${subscriptionId}:coupon:${couponId}`;
+}
+
+/** Our discount kind, from the shape of the coupon's stated off. */
+function stiggDiscountKind(coupon: RawRecord): string | undefined {
+  if (asNumber(coupon["percentOff"]) !== undefined) return "percentage";
+  if (asArray(coupon["amountsOff"]).length > 0) return "fixed_amount";
+  return undefined;
+}
+
+/** Our discount status, from Stigg's three. Unknown values stay unmapped. */
+function stiggDiscountStatus(coupon: RawRecord): string | undefined {
+  switch (asString(coupon["status"])) {
+    case "ACTIVE":
+      return "active";
+    case "EXPIRED":
+      return "expired";
+    case "REMOVED":
+      return "removed";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The minor-unit amount off, from the one `amountsOff` entry that applies.
+ *
+ * `amountsOff` is an array by currency. The entry matching the subscription's
+ * currency wins; failing that a lone entry is used; several entries with none
+ * matching yield undefined rather than a guess. The amount is in major units.
+ */
+function discountAmountOffMinor(
+  coupon: RawRecord,
+  currency: string | undefined,
+): number | undefined {
+  const amounts = asArray(coupon["amountsOff"]).filter(
+    (entry): entry is RawRecord => asRecord(entry) !== undefined,
+  );
+  if (amounts.length === 0) return undefined;
+
+  const matching =
+    currency === undefined
+      ? undefined
+      : amounts.find((entry) => asString(entry["currency"]) === currency);
+  const entry =
+    matching ?? (amounts.length === 1 ? amounts[0] : undefined);
+  if (entry === undefined) return undefined;
+
+  const amount = asNumber(entry["amount"]);
+  if (amount === undefined) return undefined;
+  return toMinorUnits(amount, asString(entry["currency"]) ?? currency);
+}
+
+/**
+ * The synthesized fields for one coupon attached to a subscription.
+ *
+ * A coupon with no id cannot be keyed, so it yields nothing. The raw coupon is
+ * spread first, so its own `name`, `percentOff` and `amountsOff` stay reachable;
+ * the synthesized keys win where names collide.
+ *
+ * `discount_kind` and `discount_status` are translated rather than passed
+ * through for the same reason status is: a mapping transform cannot rewrite a
+ * value. `coupon_id` and `coupon_name` are the coupon's own fields under keys
+ * that read as what they are on a discount row, and `amount_off_minor` is the
+ * major-to-minor conversion.
+ *
+ * No `starts_at`/`ends_at`: the inline coupon states no window.
+ */
+export function flattenAgreementDiscount(
+  coupon: RawRecord,
+  subscriptionId: string,
+  currency: string | undefined,
+): RawRecord | undefined {
+  const couponId = asString(coupon["id"]);
+  if (couponId === undefined) return undefined;
+
+  const couponName = asString(coupon["name"]);
+  const kind = stiggDiscountKind(coupon);
+  const status = stiggDiscountStatus(coupon);
+  const percentOff = asNumber(coupon["percentOff"]);
+  const amountOffMinor = discountAmountOffMinor(coupon, currency);
+
+  return {
+    ...coupon,
+    discount_id: stiggDiscountExternalId(subscriptionId, couponId),
+    agreement_id: subscriptionId,
+    coupon_id: couponId,
+    ...(couponName === undefined ? {} : { coupon_name: couponName }),
+    ...(kind === undefined ? {} : { discount_kind: kind }),
+    ...(status === undefined ? {} : { discount_status: status }),
+    ...(percentOff === undefined ? {} : { percent_off: percentOff }),
+    ...(amountOffMinor === undefined ? {} : { amount_off_minor: amountOffMinor }),
+  };
+}

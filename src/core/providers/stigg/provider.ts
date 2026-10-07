@@ -61,6 +61,22 @@ export const STIGG_CATALOG_SCOPES = [
   "entitlements:read",
 ] as const;
 
+/**
+ * Scope strings for the agreement function.
+ *
+ * One, because the whole function is one endpoint: the subscription list
+ * carries the plan, the addons, the price overrides, the coupons and the dates
+ * inline. Deliberately disjoint from the identity and catalog sets, so the same
+ * scope-isolation property holds for a third function.
+ *
+ * `entitlements:read` is absent even though `STIGG_CATALOG_SCOPES` carries it:
+ * the agreement handler writes no entitlement rows at all (Stigg's REST API
+ * exposes no per-subscription effective entitlement values — see
+ * `agreement-handler.ts`), so claiming it here would be a scope for a read this
+ * function never makes.
+ */
+export const STIGG_AGREEMENT_SCOPES = ["subscriptions:read"] as const;
+
 /** Cap on the connect-time probe, so a hung provider cannot wedge the request. */
 const PROBE_TIMEOUT_MS = 15_000;
 

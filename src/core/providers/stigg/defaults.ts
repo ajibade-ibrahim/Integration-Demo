@@ -123,3 +123,77 @@ export const stiggCatalogDefaults: readonly FieldMappingRule[] = [
   { sourceFieldPath: "value", targetObject: "entitlement", targetFieldPath: "value", transform: "none" },
   { sourceFieldPath: "usageLimit", targetObject: "entitlement", targetFieldPath: "limitValue", transform: "none" },
 ];
+
+/**
+ * Suggested mappings for the Stigg agreement.
+ *
+ * Covers four objects — `agreement`, `subscription`, `agreementItem` and
+ * `agreementDiscount`. Almost every source path is synthesized by
+ * `flattenSubscription`, `flattenAgreementItems` and `flattenAgreementDiscount`,
+ * because Stigg states the values nested, in its own vocabulary, or split across
+ * fields; `agreement_name` is the required column and is synthesized for the
+ * same reason Stripe's is — Stigg gives a subscription no name.
+ *
+ * Deliberate absences:
+ *
+ *   `agreementEntitlement` — no rules, because the handler writes no rows for
+ *       the object. Stigg's REST API exposes no per-subscription effective
+ *       entitlement values, and the customer-level state folds every
+ *       subscription and the promotional grants together; a rule set here would
+ *       describe an object nothing ever yields. See `agreement-handler.ts`.
+ *   `subscription.billingPeriod`/`billingPeriodCount` — Stigg states no cadence
+ *       on a subscription; the plan holds it, and it is a catalog fact.
+ *   `subscription.quantity` — Stigg states quantities per addon and per billable
+ *       feature, never for the plan itself.
+ *   `subscription.trialStartsAt` — Stigg states a trial's end, not its start.
+ *   `agreementItem.billingModel` — stated on the charge, a catalog row, exactly
+ *       as Chargebee's line leaves it null.
+ *   discount `startsAt`/`endsAt` — the inline coupon states no window.
+ *   `metadata.*` rules — per-environment, the reason every provider here gives.
+ */
+export const stiggAgreementDefaults: readonly FieldMappingRule[] = [
+  // --- agreement ---
+  { sourceFieldPath: "agreement_name", targetObject: "agreement", targetFieldPath: "name", transform: "trim" },
+  { sourceFieldPath: "agreement_type", targetObject: "agreement", targetFieldPath: "agreementType", transform: "none" },
+  // The translated status; `raw_status` keeps Stigg's own word beside it, under
+  // a key that reads as a Stigg fact rather than ours.
+  { sourceFieldPath: "status", targetObject: "agreement", targetFieldPath: "status", transform: "none" },
+  { sourceFieldPath: "raw_status", targetObject: "agreement", targetFieldPath: "customFields.stigg_status", transform: "none" },
+  { sourceFieldPath: "effective_date", targetObject: "agreement", targetFieldPath: "effectiveDate", transform: "none" },
+  { sourceFieldPath: "end_date", targetObject: "agreement", targetFieldPath: "endDate", transform: "none" },
+  // Already lowercase from Stigg; the transform is here so the rule reads the
+  // same as Stripe's and survives a provider that starts shouting.
+  { sourceFieldPath: "currency", targetObject: "agreement", targetFieldPath: "currency", transform: "lowercase" },
+  { sourceFieldPath: "provider_metadata", targetObject: "agreement", targetFieldPath: "providerMetadata", transform: "none" },
+
+  // --- subscription ---
+  { sourceFieldPath: "current_period_start", targetObject: "subscription", targetFieldPath: "currentPeriodStart", transform: "none" },
+  { sourceFieldPath: "current_period_end", targetObject: "subscription", targetFieldPath: "currentPeriodEnd", transform: "none" },
+  { sourceFieldPath: "trial_ends_at", targetObject: "subscription", targetFieldPath: "trialEndsAt", transform: "none" },
+  { sourceFieldPath: "canceled_at", targetObject: "subscription", targetFieldPath: "canceledAt", transform: "none" },
+  { sourceFieldPath: "cancel_at", targetObject: "subscription", targetFieldPath: "cancelAt", transform: "none" },
+  { sourceFieldPath: "next_billing_at", targetObject: "subscription", targetFieldPath: "nextBillingAt", transform: "none" },
+  { sourceFieldPath: "cancel_at_period_end", targetObject: "subscription", targetFieldPath: "cancelAtPeriodEnd", transform: "none" },
+  { sourceFieldPath: "collection_method", targetObject: "subscription", targetFieldPath: "collectionMethod", transform: "none" },
+  { sourceFieldPath: "item_count", targetObject: "subscription", targetFieldPath: "itemCount", transform: "none" },
+  { sourceFieldPath: "provider_metadata", targetObject: "subscription", targetFieldPath: "providerMetadata", transform: "none" },
+
+  // --- agreementItem ---
+  // `offering_id` and `agreement_id` are associations the engine resolves from
+  // the record's refs, so neither has a rule; `unit_price_minor` is synthesized
+  // from the matching price override, and omitted when none matches cleanly.
+  { sourceFieldPath: "item_type", targetObject: "agreementItem", targetFieldPath: "itemType", transform: "none" },
+  { sourceFieldPath: "quantity", targetObject: "agreementItem", targetFieldPath: "quantity", transform: "none" },
+  { sourceFieldPath: "position", targetObject: "agreementItem", targetFieldPath: "position", transform: "none" },
+  { sourceFieldPath: "unit_price_minor", targetObject: "agreementItem", targetFieldPath: "unitPriceMinor", transform: "none" },
+
+  // --- agreementDiscount ---
+  // `discount_kind` and `discount_status` are translated for the reason `status`
+  // is: a mapping transform cannot rewrite a value.
+  { sourceFieldPath: "coupon_id", targetObject: "agreementDiscount", targetFieldPath: "externalCouponId", transform: "none" },
+  { sourceFieldPath: "coupon_name", targetObject: "agreementDiscount", targetFieldPath: "label", transform: "trim" },
+  { sourceFieldPath: "discount_kind", targetObject: "agreementDiscount", targetFieldPath: "kind", transform: "none" },
+  { sourceFieldPath: "percent_off", targetObject: "agreementDiscount", targetFieldPath: "percentOff", transform: "none" },
+  { sourceFieldPath: "amount_off_minor", targetObject: "agreementDiscount", targetFieldPath: "amountOffMinor", transform: "none" },
+  { sourceFieldPath: "discount_status", targetObject: "agreementDiscount", targetFieldPath: "status", transform: "none" },
+];

@@ -34,6 +34,7 @@ import {
   STRIPE_PROVIDER_NAME,
 } from "@/core/providers/stripe/provider";
 import { CHARGEBEE_PROVIDER_NAME } from "@/core/providers/chargebee/provider";
+import { STIGG_PROVIDER_NAME } from "@/core/providers/stigg/provider";
 
 beforeEach(() => {
   resetBootstrapForTests();
@@ -161,6 +162,7 @@ describe("the agreement function", () => {
       "metrifox",
       "mock",
       "salesforce",
+      "stigg",
       "stripe",
     ]);
   });
@@ -220,17 +222,20 @@ describe("the agreement function", () => {
     );
   });
 
-  // Built on Stripe, declared on the rest. The picker reads the handler
-  // registry separately and offers a function as visibly unavailable per
-  // provider, so this pins the boundary: one provider real, four still not.
+  // Built on Stripe, Chargebee and Stigg; declared on the rest. The picker reads
+  // the handler registry separately and offers a function as visibly unavailable
+  // per provider, so this pins the boundary: three providers real, four still
+  // not.
   //
   // It is a list rather than a loop over every agreement provider, which is
   // what it used to be. A loop asserting "no handler anywhere" stops being a
   // statement about the unbuilt providers the moment one is built — it just
   // fails, and the fix looks like deleting the test. Naming them keeps the
   // assertion meaningful and makes the next provider a one-line change.
-  it("is built on Stripe and on no other provider yet", () => {
+  it("is built on Stripe, Chargebee and Stigg, and on no other provider yet", () => {
     expect(getSyncHandler("agreement", STRIPE_PROVIDER_NAME)).toBeDefined();
+    expect(getSyncHandler("agreement", CHARGEBEE_PROVIDER_NAME)).toBeDefined();
+    expect(getSyncHandler("agreement", STIGG_PROVIDER_NAME)).toBeDefined();
 
     for (const provider of [
       HUBSPOT_PROVIDER_NAME,

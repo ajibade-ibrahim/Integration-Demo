@@ -310,8 +310,9 @@ describe("Stigg catalog handler identity", () => {
     ).toEqual({});
   });
 
-  it("is registered for catalog and identity", () => {
+  it("is registered for catalog, identity and agreement", () => {
     expect(functionNamesForProvider(STIGG_PROVIDER_NAME)).toEqual([
+      "agreement",
       "catalog",
       "identity",
     ]);

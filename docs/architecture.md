@@ -740,7 +740,13 @@ HubSpot are in. Registering it was a directory and registration calls, exactly
 as this list predicts. Its catalog handler followed the same way: features and
 entitlements are first-class in Stigg, so it is the first provider whose catalog
 maps both natively, and adding it was a second handler file plus a scope set —
-no orchestration change.
+no orchestration change. Its agreement handler was the third file, and the first
+agreement handler that needed no fan-out at all: Stigg's subscription list
+carries the plan, the addons, the price overrides and the coupons inline, so a
+single endpoint and a single scope cover the whole function. It is also the
+first agreement handler to *decline* an object on purpose — `agreementEntitlement`
+is unbuilt because Stigg states effective entitlement values only at the
+customer level, where they fold every subscription together.
 
 **A new function:** `registerFunction` with its `scopesByProvider`, and it
 appears in the picker immediately — with no handler it correctly reports that no

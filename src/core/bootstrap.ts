@@ -73,6 +73,7 @@ import {
 } from "./providers/chargebee/provider";
 import {
   stiggProvider,
+  STIGG_AGREEMENT_SCOPES,
   STIGG_CATALOG_SCOPES,
   STIGG_IDENTITY_SCOPES,
   STIGG_PROVIDER_NAME,
@@ -92,6 +93,7 @@ import { chargebeeIdentityHandler } from "./providers/chargebee/identity-handler
 import { chargebeeFieldDiscovery } from "./providers/chargebee/discovery";
 import { stiggIdentityHandler } from "./providers/stigg/identity-handler";
 import { stiggCatalogHandler } from "./providers/stigg/catalog-handler";
+import { stiggAgreementHandler } from "./providers/stigg/agreement-handler";
 import { stiggFieldDiscovery } from "./providers/stigg/discovery";
 import { mockIdentityHandler } from "./providers/mock/identity-handler";
 import { mockFieldDiscovery } from "./providers/mock/discovery";
@@ -204,6 +206,9 @@ export function bootstrap(): void {
   // subscription and a sales-led order form, and the scope sets are where that
   // claim first becomes checkable: Salesforce supplies Contract, Stripe
   // supplies subscriptions, Metrifox supplies both, HubSpot supplies deals.
+  // Stigg joins with a fifth contract-like shape — the subscription it already
+  // supplies catalog and identity for — and is the first provider whose lines
+  // type themselves first-class (a plan line and its addons).
   //
   // `dataModels` names two objects, and the pair is the whole design. The
   // canonical AGREEMENT node is six fields — id, account, offering, type,
@@ -226,14 +231,18 @@ export function bootstrap(): void {
   // because line items belong to every type and are the *primary* structure of
   // three of them — Salesforce ContractLineItem and OrderItem, HubSpot deal
   // line items, and an order form that is little more than a header plus its
-  // lines. Only Stripe has a handler today, so only subscriptions produce
-  // them; the table is shaped for the other three regardless.
+  // lines. Stripe, Chargebee and Stigg all produce them today; the table is
+  // shaped for the other two regardless.
   //
   // `agreementEntitlement` and `agreementDiscount` are the fourth and fifth:
   // what this subscriber actually gets and what was taken off, both off the
   // same subscription record. They are the first agreement objects that can
   // legitimately be empty per subscription, which is why the writer's
-  // completeness signal exists.
+  // completeness signal exists. Stigg builds the discount one and deliberately
+  // not the entitlement one: its REST API exposes no effective entitlement
+  // values per subscription, so the catalog function owns plan-level
+  // entitlements and the agreement function leaves this object unbuilt rather
+  // than misattributing a customer-wide aggregate.
   //
   // The rest of the twelve-object zoom-in (terms, amendments, acceptance,
   // renewals, concessions) is still additive and still unbuilt — modelling
@@ -244,6 +253,7 @@ export function bootstrap(): void {
     [METRIFOX_PROVIDER_NAME, METRIFOX_AGREEMENT_SCOPES],
     [STRIPE_PROVIDER_NAME, STRIPE_AGREEMENT_SCOPES],
     [CHARGEBEE_PROVIDER_NAME, CHARGEBEE_AGREEMENT_SCOPES],
+    [STIGG_PROVIDER_NAME, STIGG_AGREEMENT_SCOPES],
   ];
   if (isMockEnabled()) {
     agreementScopes.push([MOCK_PROVIDER_NAME, MOCK_AGREEMENT_SCOPES]);
@@ -379,9 +389,10 @@ export function bootstrap(): void {
     chargebeeFieldDiscovery
   );
 
-  // Stigg joins as an identity provider, and (below) a catalog one. Its
-  // discovery instance switches on the target object, so the same instance is
-  // registered for both functions rather than duplicated per function.
+  // Stigg joins as an identity provider, and (below) catalog and agreement
+  // ones. Its discovery instance switches on the target object, so the same
+  // instance is registered for all three functions rather than duplicated per
+  // function.
   registerSyncHandler(
     IDENTITY_FUNCTION,
     STIGG_PROVIDER_NAME,
@@ -451,6 +462,20 @@ export function bootstrap(): void {
     AGREEMENT_FUNCTION,
     CHARGEBEE_PROVIDER_NAME,
     chargebeeFieldDiscovery
+  );
+
+  // Stigg's agreement handler, after Chargebee's, and the same discoverer
+  // instance again. One endpoint means one file: the subscription list carries
+  // the lines and coupons inline, so there is nothing here for a fan-out.
+  registerSyncHandler(
+    AGREEMENT_FUNCTION,
+    STIGG_PROVIDER_NAME,
+    stiggAgreementHandler
+  );
+  registerFieldDiscovery(
+    AGREEMENT_FUNCTION,
+    STIGG_PROVIDER_NAME,
+    stiggFieldDiscovery
   );
 
   // Billing, on the same two providers. The discoverer switches on the target

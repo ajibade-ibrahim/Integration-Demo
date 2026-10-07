@@ -35,6 +35,7 @@ import {
   parseStiggPage,
   productsUrl,
   STIGG_DISCOVERY_SAMPLE,
+  subscriptionsUrl,
 } from "./api";
 import { STIGG_SESSION_OPTIONS } from "./identity-handler";
 
@@ -193,12 +194,97 @@ export const STIGG_ENTITLEMENT_FIELDS: DiscoveredFieldDef[] = [
 ];
 
 /**
+ * Subscriptions, as the agreement handler yields them: the agreement's own
+ * fields. Most are Stigg's; `agreement_name`, `agreement_type`, `status`,
+ * `raw_status`, `end_date` and `currency` are synthesized (see
+ * `flattenSubscription`), and `metadata.*` keys are sampled from one page.
+ */
+export const STIGG_AGREEMENT_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Subscription ID", type: "string" },
+  {
+    path: "agreement_name",
+    label: "Name (synthesized: the plan, plus the resource when multi-resource)",
+    type: "string",
+  },
+  { path: "agreement_type", label: "Agreement type (synthesized; always subscription)", type: "string" },
+  { path: "status", label: "Status (synthesized: active, trialing, scheduled, draft, canceled, expired)", type: "string" },
+  { path: "raw_status", label: "Status (Stigg's own word)", type: "string" },
+  { path: "effective_date", label: "Effective date (synthesized: subscription start)", type: "datetime" },
+  { path: "end_date", label: "End date (synthesized; set once canceled or expired)", type: "datetime" },
+  { path: "currency", label: "Currency (synthesized from the first price)", type: "string" },
+  { path: "cancelReason", label: "Cancel reason", type: "string" },
+  { path: "resourceId", label: "Resource ID (when multi-resource)", type: "string" },
+  { path: "payingCustomerId", label: "Paying customer ID (delegated billing)", type: "string" },
+  { path: "billingId", label: "Billing ID (the id in the connected billing provider)", type: "string" },
+  { path: "contractId", label: "Contract ID", type: "string" },
+  { path: "pricingType", label: "Pricing type (FREE, PAID or CUSTOM)", type: "string" },
+  { path: "createdAt", label: "Created at (ISO 8601)", type: "datetime" },
+];
+
+/**
+ * The subscription-specific fields of the same record.
+ *
+ * Static: every path is synthesized from the subscription payload, and the raw
+ * inputs (`currentBillingPeriodEnd`, `trialEndDate`, `cancellationDate`, …) are
+ * listed alongside so a user can override the synthesis if they want to.
+ */
+export const STIGG_SUBSCRIPTION_FIELDS: DiscoveredFieldDef[] = [
+  { path: "current_period_start", label: "Current period start (synthesized)", type: "datetime" },
+  { path: "current_period_end", label: "Current period end (synthesized)", type: "datetime" },
+  { path: "trial_ends_at", label: "Trial ends at (synthesized)", type: "datetime" },
+  { path: "canceled_at", label: "Canceled at (synthesized; when cancellation was requested)", type: "datetime" },
+  { path: "cancel_at", label: "Cancels at (synthesized; absent unless a cancellation is scheduled)", type: "datetime" },
+  { path: "next_billing_at", label: "Next billing at (synthesized; absent when cancelling or ended)", type: "datetime" },
+  { path: "cancel_at_period_end", label: "Cancels at period end (synthesized)", type: "boolean" },
+  { path: "collection_method", label: "Collection method (synthesized: automatic, manual or none)", type: "string" },
+  { path: "item_count", label: "Item count (synthesized: plan plus addons)", type: "number" },
+  { path: "provider_metadata", label: "Provider metadata (JSON; synthesized)", type: "string" },
+  { path: "currentBillingPeriodStart", label: "Current billing period start (ISO 8601)", type: "datetime" },
+  { path: "currentBillingPeriodEnd", label: "Current billing period end (ISO 8601)", type: "datetime" },
+  { path: "cancellationDate", label: "Cancellation date (ISO 8601)", type: "datetime" },
+  { path: "effectiveEndDate", label: "Effective end date (ISO 8601)", type: "datetime" },
+  { path: "paymentCollectionMethod", label: "Payment collection method (CHARGE, INVOICE or NONE)", type: "string" },
+  { path: "pricingType", label: "Pricing type (FREE, PAID or CUSTOM)", type: "string" },
+];
+
+/**
+ * Line items. Every path is synthesized; Stigg states no line ids and no line
+ * money beyond the price override the handler folds into `unit_price_minor`.
+ */
+export const STIGG_AGREEMENT_ITEM_FIELDS: DiscoveredFieldDef[] = [
+  { path: "item_id", label: "Line ID (synthesized: subscription:plan / :addon:<id>)", type: "string" },
+  { path: "agreement_id", label: "Agreement ID (association, synthesized)", type: "string" },
+  { path: "offering_id", label: "Offering ID (association, synthesized: the plan or addon)", type: "string" },
+  { path: "item_type", label: "Line type (synthesized: plan or add_on)", type: "string" },
+  { path: "position", label: "Position (synthesized: 0 is the plan)", type: "number" },
+  { path: "quantity", label: "Quantity (addons only)", type: "number" },
+  { path: "unit_price_minor", label: "Unit price (minor units; synthesized from the price override)", type: "number" },
+];
+
+/**
+ * Discounts, from the subscription's inline `coupons`. Every path but the raw
+ * coupon fields is synthesized; there is no window, so no `starts_at`/`ends_at`.
+ */
+export const STIGG_AGREEMENT_DISCOUNT_FIELDS: DiscoveredFieldDef[] = [
+  { path: "discount_id", label: "Discount ID (synthesized: subscription:coupon:<id>)", type: "string" },
+  { path: "agreement_id", label: "Agreement ID (association, synthesized)", type: "string" },
+  { path: "coupon_id", label: "Coupon ID (provider)", type: "string" },
+  { path: "coupon_name", label: "Coupon name", type: "string" },
+  { path: "discount_kind", label: "Kind (synthesized: percentage or fixed_amount)", type: "string" },
+  { path: "discount_status", label: "Status (synthesized: active, expired or removed)", type: "string" },
+  { path: "percent_off", label: "Percent off", type: "number" },
+  { path: "amount_off_minor", label: "Amount off (minor units; synthesized from amountsOff)", type: "number" },
+  { path: "amountsOff", label: "Amounts off (raw, by currency)", type: "json" },
+];
+
+/**
  * A static field list, plus whatever `metadata.*` keys one sample page reveals.
  *
- * Takes the list and the URL rather than hardcoding customers, because products
- * and features are sampled the same way. Offering, price and entitlement are
- * not: the first comes from two endpoints and the other two carry no metadata,
- * so all three are answered statically.
+ * Takes the list and the URL rather than hardcoding customers, because
+ * customers, products, features and subscriptions are all sampled the same way.
+ * Offering, price, entitlement and the agreement children are not: the first
+ * comes from two endpoints, the next two carry no metadata, and the children
+ * are synthesized rather than sampled.
  */
 async function withMetadataKeys(
   ctx: Omit<HandlerContext, "requestedSourcePaths">,
@@ -261,16 +347,33 @@ export const stiggFieldDiscovery: FieldDiscovery = {
         return [...STIGG_PRICE_FIELDS];
       case "entitlement":
         return [...STIGG_ENTITLEMENT_FIELDS];
+      // The agreement is the subscription record, so its metadata keys are
+      // sampled from the subscription list like a customer's are. The other
+      // agreement objects are synthesized in full and stated statically.
+      case "agreement":
+        return withMetadataKeys(
+          ctx,
+          STIGG_AGREEMENT_FIELDS,
+          subscriptionsUrl(STIGG_DISCOVERY_SAMPLE),
+        );
+      case "subscription":
+        return [...STIGG_SUBSCRIPTION_FIELDS];
+      case "agreementItem":
+        return [...STIGG_AGREEMENT_ITEM_FIELDS];
+      case "agreementDiscount":
+        return [...STIGG_AGREEMENT_DISCOUNT_FIELDS];
+      // `agreementEntitlement` is deliberately built on no endpoint: the
+      // subscription payload carries no effective entitlement values and the
+      // customer-level state folds every subscription and the promotional
+      // grants together. See `agreement-handler.ts` for the full reason. `[]` is
+      // the truthful answer here, not a list for an object this provider never
+      // yields.
+      case "agreementEntitlement":
       // Every other object is declared here as empty rather than reaching a
       // catch-all: the compiler then asks this question again when a future
       // function adds an object, and until then `[]` is the truthful answer
       // instead of a plausible-looking list for an object this provider never
       // yields.
-      case "agreement":
-      case "subscription":
-      case "agreementItem":
-      case "agreementEntitlement":
-      case "agreementDiscount":
       case "invoice":
       case "invoiceLine":
       case "payment":
