@@ -11,7 +11,7 @@
  */
 
 import type { ObjectSchema } from "./object-schema";
-import { BILLING_INTERVALS } from "./types/common";
+import { BILLING_INTERVALS, BILLING_MODELS } from "./types/common";
 
 // ---------------------------------------------------------------------------
 // Product
@@ -65,6 +65,17 @@ const PRICE_SCHEMA: ObjectSchema = {
       kind: "string",
       maxLength: 10,
     },
+    // How the price is charged. Null means "not told" — see the column comment;
+    // the three catalog providers synthesize the canonical word.
+    {
+      name: "billingModel",
+      label: "Billing model",
+      kind: "enum",
+      enumValues: BILLING_MODELS,
+      maxLength: 20,
+    },
+    // Units per block for a block-priced charge; Stigg only.
+    { name: "blockSize", label: "Block size", kind: "number" },
     {
       name: "interval",
       label: "Billing interval",

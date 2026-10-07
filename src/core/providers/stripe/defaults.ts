@@ -103,6 +103,8 @@ export const stripeCatalogDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "interval", targetObject: "price", targetFieldPath: "interval", transform: "none" },
   { sourceFieldPath: "interval_count", targetObject: "price", targetFieldPath: "intervalCount", transform: "none" },
   { sourceFieldPath: "active", targetObject: "price", targetFieldPath: "active", transform: "none" },
+  // Synthesized by `flattenPrice` from three nested fields no rule can combine.
+  { sourceFieldPath: "billing_model", targetObject: "price", targetFieldPath: "billingModel", transform: "none" },
 
   // --- feature ---
   // The definition. `feature_name` and `lookup_key` are synthesized by

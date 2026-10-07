@@ -427,9 +427,11 @@ export function isSubscriptionBillingPeriod(
  *
  * Stripe states it across two fields (`billing_scheme` and `recurring.usage_type`)
  * and Chargebee keeps it on the item price as `pricing_model`; the handler is
- * the only place either spelling should appear. `flat_fee` and `per_unit` are
- * distinct because a flat line bills the same regardless of quantity, which is
- * a different commitment from a per-seat one.
+ * the only place either spelling should appear. Stigg states `billingModel`
+ * directly, and is the only provider that says `minimum_spend` or
+ * `credit_based`. `flat_fee` and `per_unit` are distinct because a flat line
+ * bills the same regardless of quantity, which is a different commitment from a
+ * per-seat one.
  */
 export const BILLING_MODELS = [
   "flat_fee",
@@ -437,6 +439,8 @@ export const BILLING_MODELS = [
   "tiered",
   "usage_based",
   "one_time",
+  "minimum_spend",
+  "credit_based",
 ] as const;
 
 export type BillingModel = (typeof BILLING_MODELS)[number];

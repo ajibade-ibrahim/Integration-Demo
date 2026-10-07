@@ -462,6 +462,41 @@ describe("catalog validation policy", () => {
     expect(row.interval).toBe("one_time");
   });
 
+  it("stores the billing model and block size", async () => {
+    await writePrices(
+      INTEGRATION_ID,
+      [
+        priceRecord("price_1", undefined, {
+          billingModel: "usage_based",
+          blockSize: "100",
+        }),
+      ],
+      new Map()
+    );
+
+    const row = await prisma.price.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+    });
+    expect(row.billingModel).toBe("usage_based");
+    expect(row.blockSize).toBe(100);
+  });
+
+  it("warns and unsets an unrecognised billing model", async () => {
+    const result = await writePrices(
+      INTEGRATION_ID,
+      [priceRecord("price_1", undefined, { billingModel: "per_seat" })],
+      new Map()
+    );
+
+    expect(result.written).toBe(1);
+    expect(result.issues[0]?.severity).toBe("warning");
+    expect(result.issues[0]?.fieldName).toBe("billingModel");
+    const row = await prisma.price.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+    });
+    expect(row.billingModel).toBeNull();
+  });
+
   it("distinguishes an unstated active flag from a false one", async () => {
     await writeProducts(INTEGRATION_ID, [
       productRecord("prod_told", { active: "false" }),
@@ -1101,6 +1136,32 @@ describe("what the catalog page reads", () => {
     expect(row?.amountMinor).toBe(4900);
     expect(row?.currency).toBe("usd");
     expect(row?.interval).toBe("month");
+  });
+
+  it("surfaces the primary price's billing model and block size", async () => {
+    const products = await writeProducts(INTEGRATION_ID, [
+      productRecord("prod_1"),
+    ]);
+    const offerings = await writeOfferings(
+      INTEGRATION_ID,
+      [offeringRecord("off_1", "prod_1")],
+      products.externalToInternal
+    );
+    await writePrices(
+      INTEGRATION_ID,
+      [
+        priceRecord("price_1", "off_1", {
+          billingModel: "usage_based",
+          blockSize: "100",
+        }),
+      ],
+      offerings.externalToInternal
+    );
+
+    const page = await loadCatalog(USER_ID);
+    const row = page.offerings[0];
+    expect(row?.billingModel).toBe("usage_based");
+    expect(row?.blockSize).toBe(100);
   });
 
   it("scopes to the requesting user", async () => {

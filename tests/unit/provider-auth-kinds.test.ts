@@ -325,7 +325,11 @@ describe("Stripe as a second API-key provider", () => {
       "catalog",
       "identity",
     ]);
-    expect(providerNamesForFunction("catalog")).toEqual(["chargebee", "stripe"]);
+    expect(providerNamesForFunction("catalog")).toEqual([
+      "chargebee",
+      "stigg",
+      "stripe",
+    ]);
     expect(providerNamesForFunction("identity")).toContain("stripe");
 
     // Stripe genuinely has a billing API, and now ships a handler for it. The

@@ -112,6 +112,14 @@ export const chargebeeCatalogDefaults: readonly FieldMappingRule[] = [
     targetFieldPath: "intervalCount",
     transform: "none",
   },
+  // Synthesized by `flattenItemPrice`: Chargebee's `volume`/`stairstep` collapse
+  // to our single `tiered`, which no raw transform can express.
+  {
+    sourceFieldPath: "billing_model",
+    targetObject: "price",
+    targetFieldPath: "billingModel",
+    transform: "none",
+  },
 
   // Feature definition mapping rules (Chargebee `/features`).
   //

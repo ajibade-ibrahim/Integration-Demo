@@ -117,7 +117,16 @@ export default async function CatalogPage({
 
           {view === "offerings" ? (
             <Table
-              headers={["Offering", "Price", "Product", "Entitlements", "Active", "Source"]}
+              headers={[
+                "Offering",
+                "Price",
+                "Billing model",
+                "Block size",
+                "Product",
+                "Entitlements",
+                "Active",
+                "Source",
+              ]}
             >
               {offerings.map((row) => {
                 const price = formatOfferingPrice(row);
@@ -125,6 +134,29 @@ export default async function CatalogPage({
                   <tr key={row.id} className="border-t border-slate-100">
                     <Td className="font-medium">{row.name}</Td>
                     <Td>{price ?? <Empty />}</Td>
+                    {/*
+                      Rendered only when the provider typed the price — Stripe's
+                      flat prices are indistinguishable, so an empty cell is the
+                      honest answer rather than a guessed "flat fee".
+                    */}
+                    <Td>
+                      {row.billingModel === null ? (
+                        <Empty />
+                      ) : (
+                        <span className="rounded bg-slate-100 px-1 py-0.5 text-slate-600">
+                          {row.billingModel.replace("_", " ")}
+                        </span>
+                      )}
+                    </Td>
+                    <Td>
+                      {row.blockSize === null ? (
+                        <Empty />
+                      ) : row.blockSize === 1 ? (
+                        "1 unit"
+                      ) : (
+                        `${row.blockSize} units`
+                      )}
+                    </Td>
                     <Td>
                       <ParentCell
                         name={row.productName}

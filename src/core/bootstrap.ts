@@ -73,6 +73,7 @@ import {
 } from "./providers/chargebee/provider";
 import {
   stiggProvider,
+  STIGG_CATALOG_SCOPES,
   STIGG_IDENTITY_SCOPES,
   STIGG_PROVIDER_NAME,
 } from "./providers/stigg/provider";
@@ -90,6 +91,7 @@ import { chargebeeBillingHandler } from "./providers/chargebee/billing-handler";
 import { chargebeeIdentityHandler } from "./providers/chargebee/identity-handler";
 import { chargebeeFieldDiscovery } from "./providers/chargebee/discovery";
 import { stiggIdentityHandler } from "./providers/stigg/identity-handler";
+import { stiggCatalogHandler } from "./providers/stigg/catalog-handler";
 import { stiggFieldDiscovery } from "./providers/stigg/discovery";
 import { mockIdentityHandler } from "./providers/mock/identity-handler";
 import { mockFieldDiscovery } from "./providers/mock/discovery";
@@ -170,11 +172,12 @@ export function bootstrap(): void {
   // Catalog: what the company sells, and the second function with a working
   // handler.
   //
-  // Stripe only, for now, and honestly so — it is the provider whose API maps
-  // onto this cleanly, a `product` to a Product and a `price` to an Offering.
-  // The CRMs have product objects too (HubSpot line items, Salesforce
-  // Product2/PricebookEntry) and declaring scopes for them here would be a
-  // claim we have not checked.
+  // Chargebee and Stigg are on the list. Stigg is the first provider whose API
+  // serves `feature` and `entitlement` natively — features are first-class and
+  // an entitlement is a feature's configuration on a package, not an
+  // approximation. The CRMs have product objects too (HubSpot line items,
+  // Salesforce Product2/PricebookEntry) and declaring scopes for them here
+  // would be a claim we have not checked.
   //
   // Independent of identity by construction: a product exists whether or not
   // anyone has bought it, and nothing in the catalog references a customer. So
@@ -183,6 +186,7 @@ export function bootstrap(): void {
   const catalogScopes: Array<[string, readonly string[]]> = [
     [STRIPE_PROVIDER_NAME, STRIPE_CATALOG_SCOPES],
     [CHARGEBEE_PROVIDER_NAME, CHARGEBEE_CATALOG_SCOPES],
+    [STIGG_PROVIDER_NAME, STIGG_CATALOG_SCOPES],
   ];
 
   registerFunction({
@@ -375,10 +379,9 @@ export function bootstrap(): void {
     chargebeeFieldDiscovery
   );
 
-  // Stigg joins as an identity-only provider. Its discovery instance switches
-  // on the target object and answers `[]` for everything outside identity, so
-  // registering it once here is the whole wiring — no catalog, agreement or
-  // billing scopes are declared for it yet.
+  // Stigg joins as an identity provider, and (below) a catalog one. Its
+  // discovery instance switches on the target object, so the same instance is
+  // registered for both functions rather than duplicated per function.
   registerSyncHandler(
     IDENTITY_FUNCTION,
     STIGG_PROVIDER_NAME,
@@ -405,6 +408,21 @@ export function bootstrap(): void {
     CATALOG_FUNCTION,
     CHARGEBEE_PROVIDER_NAME,
     chargebeeFieldDiscovery
+  );
+
+  // Stigg's catalog handler, after Chargebee's. The discoverer is the same
+  // instance the identity registration uses — the switch is on the object, not
+  // the function — so this is an entry the (function, provider) key requires
+  // rather than a second implementation.
+  registerSyncHandler(
+    CATALOG_FUNCTION,
+    STIGG_PROVIDER_NAME,
+    stiggCatalogHandler
+  );
+  registerFieldDiscovery(
+    CATALOG_FUNCTION,
+    STIGG_PROVIDER_NAME,
+    stiggFieldDiscovery
   );
 
   // Stripe is the first provider to make `agreement` real. Its scopes were

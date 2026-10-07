@@ -40,6 +40,27 @@ export const STIGG_PROVIDER_NAME = "stigg";
  */
 export const STIGG_IDENTITY_SCOPES = ["customers:read"] as const;
 
+/**
+ * Scope strings for the catalog function.
+ *
+ * Named after the resources the catalog handler actually reads, one per
+ * endpoint family, and deliberately disjoint from `customers:read`: that is
+ * what keeps the scope-isolation property ("authorizing catalog must never
+ * request customers:read") observable rather than a formality.
+ *
+ * Like the identity set, none of these is transmitted — Stigg has no consent
+ * screen — but they are what the picker shows before a user connects, and they
+ * record what the function reads.
+ */
+export const STIGG_CATALOG_SCOPES = [
+  "products:read",
+  "plans:read",
+  "addons:read",
+  "features:read",
+  "charges:read",
+  "entitlements:read",
+] as const;
+
 /** Cap on the connect-time probe, so a hung provider cannot wedge the request. */
 const PROBE_TIMEOUT_MS = 15_000;
 

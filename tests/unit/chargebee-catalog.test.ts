@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bootstrap, resetBootstrapForTests } from "@/core/bootstrap";
 import {
+  chargebeeBillingModel,
   featureItemEntitlementsUrl,
   featuresUrl,
   flattenItemPrice,
@@ -113,6 +114,22 @@ describe("Chargebee Catalog API & Parsing", () => {
     const merged = { ...itemPriceRecord, ...flattened };
     expect(merged["price"]).toBe(9900);
     expect(merged["currency_code"]).toBe("USD");
+  });
+
+  it("synthesizes the billing model, collapsing Chargebee's tier variants", () => {
+    expect(chargebeeBillingModel({ pricing_model: "flat_fee" })).toBe("flat_fee");
+    expect(chargebeeBillingModel({ pricing_model: "per_unit" })).toBe("per_unit");
+    expect(chargebeeBillingModel({ pricing_model: "tiered" })).toBe("tiered");
+    // Our canonical vocabulary has one tiered member, so both collapse onto it.
+    expect(chargebeeBillingModel({ pricing_model: "volume" })).toBe("tiered");
+    expect(chargebeeBillingModel({ pricing_model: "stairstep" })).toBe("tiered");
+    expect(chargebeeBillingModel({})).toBeUndefined();
+
+    expect(
+      flattenItemPrice({ id: "p", item_id: "i", pricing_model: "per_unit" })[
+        "billing_model"
+      ]
+    ).toBe("per_unit");
   });
 });
 

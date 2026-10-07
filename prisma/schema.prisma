@@ -437,6 +437,15 @@ model Price {
   /// ISO 4217, as the provider cased it.
   currency String?
 
+  /// BILLING_MODELS: how this price is charged. Stripe's
+  /// `billing_scheme`/`recurring.usage_type`, Chargebee's `pricing_model`,
+  /// Stigg's `billingModel`. Null when the provider did not say.
+  billingModel String?
+
+  /// Units per block for a block-priced charge — Stigg's `blockSize`. Null for
+  /// every other provider and for an unblocked price.
+  blockSize Int?
+
   /// BillingInterval: day | week | month | year | one_time.
   interval      String?
   intervalCount Int?
@@ -844,8 +853,9 @@ model AgreementItem {
   ///
   /// Null for Chargebee today: it states metering on the *item price*, which
   /// the subscription list payload does not inline, so the handler declines
-  /// rather than guess. The follow-up is `Price.pricingModel` on the catalog
-  /// function; faking it here would put a wrong value behind a right column.
+  /// rather than guess. The catalog function does resolve it, onto
+  /// `Price.billingModel`; faking it here would put a wrong value behind a
+  /// right column.
   billingModel String?
 
   /// What the provider says this line bills per unit for *this subscription*,

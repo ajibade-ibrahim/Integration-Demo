@@ -28,7 +28,7 @@ import {
   resolveTargetField,
   schemasForFunction,
 } from "@/core/object-schema";
-import { BILLING_INTERVALS, TARGET_OBJECTS } from "@/core/types/common";
+import { BILLING_INTERVALS, BILLING_MODELS, TARGET_OBJECTS } from "@/core/types/common";
 import type { FieldMappingRule } from "@/core/types/mapping";
 import { formatOfferingPrice } from "@/core/repositories/catalog-repository";
 
@@ -126,6 +126,16 @@ describe("the catalog schema", () => {
     // The editor's dropdown and the writer's guard read the same list; if they
     // diverged the UI would offer a value the writer then warns about.
     expect(interval?.enumValues).toEqual(BILLING_INTERVALS);
+  });
+
+  it("offers the billing models and the block size as price targets", () => {
+    const model = OBJECT_SCHEMAS.price.fields.find(
+      (f) => f.name === "billingModel"
+    );
+    expect(model?.enumValues).toEqual(BILLING_MODELS);
+    // Mappable, not read-only: the providers' defaults write to it.
+    expect(mappableFields("price").map((f) => f.name)).toContain("billingModel");
+    expect(mappableFields("price").map((f) => f.name)).toContain("blockSize");
   });
 
   it("does not let a user map the derived product association", () => {

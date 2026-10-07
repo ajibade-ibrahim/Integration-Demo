@@ -782,6 +782,21 @@ export async function writePrices(
       }
     }
 
+    // Same policy as `agreementItem.billingModel`: a price whose model we
+    // cannot read is still a price, and null already means "the provider did
+    // not say", so an unreadable value lands in exactly the right state.
+    const rawBillingModel = normalize(mapped.fields["billingModel"] ?? null);
+    const billingModel = parseEnum(rawBillingModel, isBillingModel);
+    if (rawBillingModel !== null && billingModel === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "price",
+        reason: `Unrecognised billing model '${rawBillingModel}'; left unset`,
+        fieldName: "billingModel",
+        severity: "warning",
+      });
+    }
+
     const offeringId = await resolveAssociation(
       integrationId,
       "offering",
@@ -810,6 +825,8 @@ export async function writePrices(
       ),
       interval,
       intervalCount: parseInteger(mapped.fields["intervalCount"] ?? null),
+      billingModel,
+      blockSize: parseInteger(mapped.fields["blockSize"] ?? null),
       active: parseBoolean(mapped.fields["active"] ?? null),
       customFields: writeJsonObject(boundedCustomFields(mapped.customFields)),
     };

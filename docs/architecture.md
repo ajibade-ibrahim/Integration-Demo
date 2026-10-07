@@ -737,7 +737,10 @@ change. Stigg was the third, and a fifth credential shape again: a custom
 and a `tenant`-scoped id whose scope is not knowable from the list API at all —
 so it emits no identity key, the same honest fail-closed state Metrifox and
 HubSpot are in. Registering it was a directory and registration calls, exactly
-as this list predicts.
+as this list predicts. Its catalog handler followed the same way: features and
+entitlements are first-class in Stigg, so it is the first provider whose catalog
+maps both natively, and adding it was a second handler file plus a scope set —
+no orchestration change.
 
 **A new function:** `registerFunction` with its `scopesByProvider`, and it
 appears in the picker immediately — with no handler it correctly reports that no

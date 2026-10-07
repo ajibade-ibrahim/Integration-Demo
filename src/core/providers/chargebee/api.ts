@@ -358,14 +358,43 @@ export function flattenItemPrice(itemPrice: RawRecord): RawRecord {
 
   const name = asString(itemPrice["name"]) ?? asString(itemPrice["id"]) ?? "Price";
   const createdAt = epochToIso(itemPrice["created_at"]);
+  const billingModel = chargebeeBillingModel(itemPrice);
 
   return {
     price_name: name,
     offering_id: asString(itemPrice["item_id"]),
     interval,
     interval_count: typeof period === "number" ? period : 1,
+    ...(billingModel === undefined ? {} : { billing_model: billingModel }),
     ...(createdAt === undefined ? {} : { created_at: createdAt }),
   };
+}
+
+/**
+ * The canonical billing-model word for an item price.
+ *
+ * Chargebee's `pricing_model` is one value on the Item Price object, so unlike
+ * Stripe this could almost be a raw mapping rule — except that its vocabulary is
+ * wider than ours. `flat_fee`, `per_unit` and `tiered` pass through; `volume`
+ * and `stairstep` are two more tiered schemes and collapse to our single
+ * `tiered`. An absent or unrecognised value yields nothing, so the column stays
+ * null rather than receiving a word we invented.
+ */
+export function chargebeeBillingModel(
+  itemPrice: RawRecord
+): string | undefined {
+  switch (asString(itemPrice["pricing_model"])) {
+    case "flat_fee":
+      return "flat_fee";
+    case "per_unit":
+      return "per_unit";
+    case "tiered":
+    case "volume":
+    case "stairstep":
+      return "tiered";
+    default:
+      return undefined;
+  }
 }
 
 // ---------------------------------------------------------------------------

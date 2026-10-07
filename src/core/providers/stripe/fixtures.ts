@@ -141,6 +141,11 @@ export const STRIPE_PRICE_FIELDS: DiscoveredFieldDef[] = [
     type: "number",
   },
   { path: "product_id", label: "Product ID (synthesized)", type: "string" },
+  {
+    path: "billing_model",
+    label: "Billing model (synthesized; one word from type/scheme/usage_type)",
+    type: "string",
+  },
   { path: "nickname", label: "Nickname (often empty)", type: "string" },
   { path: "unit_amount", label: "Unit amount (minor units)", type: "number" },
   { path: "currency", label: "Currency", type: "string" },

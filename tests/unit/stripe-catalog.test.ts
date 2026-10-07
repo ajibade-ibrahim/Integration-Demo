@@ -13,6 +13,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  billingModelFromPrice,
   flattenPrice,
   offeringDisplayName,
   listUrl,
@@ -154,6 +155,49 @@ describe("flattenPrice", () => {
     expect(flattenPrice(price({ created: "yesterday" }))).not.toHaveProperty(
       "created_at"
     );
+  });
+
+  it("synthesizes the billing model from the price object", () => {
+    expect(
+      flattenPrice(price({ recurring: { interval: "month", usage_type: "metered" } }))[
+        "billing_model"
+      ]
+    ).toBe("usage_based");
+    expect(flattenPrice(price({ billing_scheme: "tiered" }))["billing_model"]).toBe(
+      "tiered"
+    );
+    expect(flattenPrice(price({ billing_scheme: "per_unit" }))["billing_model"]).toBe(
+      "per_unit"
+    );
+  });
+
+  it("omits the billing model when Stripe states none we can name", () => {
+    // A flat price is indistinguishable from a per-unit one in Stripe's
+    // payload, so the field is absent rather than a guessed `flat_fee`.
+    expect(flattenPrice(price())).not.toHaveProperty("billing_model");
+    expect(flattenPrice(price({ type: "one_time", recurring: null }))["billing_model"]).toBe(
+      "one_time"
+    );
+  });
+});
+
+describe("billingModelFromPrice", () => {
+  it("reads Stripe's three fields as one word", () => {
+    expect(billingModelFromPrice({ type: "one_time" })).toBe("one_time");
+    expect(
+      billingModelFromPrice({ type: "recurring", recurring: { usage_type: "metered" } })
+    ).toBe("usage_based");
+    expect(billingModelFromPrice({ type: "recurring", billing_scheme: "tiered" })).toBe(
+      "tiered"
+    );
+    expect(billingModelFromPrice({ type: "recurring", billing_scheme: "per_unit" })).toBe(
+      "per_unit"
+    );
+  });
+
+  it("returns undefined for a flat price Stripe cannot spell", () => {
+    expect(billingModelFromPrice({ type: "recurring" })).toBeUndefined();
+    expect(billingModelFromPrice({})).toBeUndefined();
   });
 });
 

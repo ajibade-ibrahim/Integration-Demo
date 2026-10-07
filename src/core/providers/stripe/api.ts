@@ -450,7 +450,7 @@ export function offeringDisplayName(price: RawRecord): string {
 /**
  * The fields synthesized onto a price before mapping.
  *
- * Three of them exist because the shape Stripe returns cannot survive the trip
+ * Four of them exist because the shape Stripe returns cannot survive the trip
  * through the mapper on its own:
  *
  *   `offering_name`  — see `offeringDisplayName`; `name` is required.
@@ -463,6 +463,8 @@ export function offeringDisplayName(price: RawRecord): string {
  *                      expanded object when the caller asked for it. Reading
  *                      both here means the association does not silently break
  *                      if expansion is ever turned on.
+ *   `billing_model`  — see `billingModelFromPrice`; spread across three nested
+ *                      fields, so a mapping rule cannot combine it.
  */
 export function flattenPrice(price: RawRecord): RawRecord {
   const recurring = asRecord(price["recurring"]);
@@ -470,12 +472,14 @@ export function flattenPrice(price: RawRecord): RawRecord {
   const countRaw = recurring?.["interval_count"];
 
   const createdAt = epochToIso(price["created"]);
+  const billingModel = billingModelFromPrice(price);
 
   return {
     offering_name: offeringDisplayName(price),
     interval: interval ?? "one_time",
     interval_count: typeof countRaw === "number" ? countRaw : 1,
     product_id: priceProductId(price),
+    ...(billingModel === undefined ? {} : { billing_model: billingModel }),
     ...(createdAt === undefined ? {} : { created_at: createdAt }),
   };
 }
@@ -688,10 +692,9 @@ export function providerMetadataOf(record: RawRecord): string | undefined {
  * indistinguishable from a per-unit one in the payload. Returning `undefined`
  * for anything else is the same "we were not told" the column is nullable for.
  */
-export function billingModelOf(item: RawRecord): string | undefined {
-  const price = asRecord(item["price"]);
-  if (price === undefined) return undefined;
-
+export function billingModelFromPrice(
+  price: RawRecord
+): string | undefined {
   if (asString(price["type"]) === "one_time") return "one_time";
 
   const recurring = asRecord(price["recurring"]);
@@ -705,6 +708,18 @@ export function billingModelOf(item: RawRecord): string | undefined {
     default:
       return undefined;
   }
+}
+
+/**
+ * How a line is priced, in our vocabulary, from a subscription item.
+ *
+ * A thin wrapper over `billingModelFromPrice`: a subscription item nests the
+ * price object under `price`, while a catalog price *is* the price object, and
+ * both callers must agree on the reading.
+ */
+export function billingModelOf(item: RawRecord): string | undefined {
+  const price = asRecord(item["price"]);
+  return price === undefined ? undefined : billingModelFromPrice(price);
 }
 
 /**

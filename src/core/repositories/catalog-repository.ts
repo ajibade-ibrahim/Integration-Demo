@@ -26,6 +26,10 @@ export interface OfferingRow {
   name: string;
   amountMinor: number | null;
   currency: string | null;
+  /** BILLING_MODELS word for the primary price, or null when the provider did not say. */
+  billingModel: string | null;
+  /** Units per block for a block-priced primary price; Stigg only. */
+  blockSize: number | null;
   interval: string | null;
   intervalCount: number | null;
   active: boolean | null;
@@ -189,6 +193,8 @@ export async function loadCatalog(
         name: row.name,
         amountMinor: primaryPrice?.amountMinor ?? null,
         currency: primaryPrice?.currency ?? null,
+        billingModel: primaryPrice?.billingModel ?? null,
+        blockSize: primaryPrice?.blockSize ?? null,
         interval: primaryPrice?.interval ?? null,
         intervalCount: primaryPrice?.intervalCount ?? null,
         active: row.active,

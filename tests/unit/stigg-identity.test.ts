@@ -64,8 +64,11 @@ describe("Stigg provider registration & auth", () => {
     expect(auth.header).toBe("X-API-KEY");
   });
 
-  it("serves identity only", () => {
-    expect(functionNamesForProvider(STIGG_PROVIDER_NAME)).toEqual(["identity"]);
+  it("serves identity and catalog", () => {
+    expect(functionNamesForProvider(STIGG_PROVIDER_NAME)).toEqual([
+      "catalog",
+      "identity",
+    ]);
   });
 });
 

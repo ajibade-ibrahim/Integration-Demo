@@ -57,6 +57,11 @@ export const CHARGEBEE_OFFERING_FIELDS: readonly DiscoveredFieldDef[] = [
 export const CHARGEBEE_PRICE_FIELDS: readonly DiscoveredFieldDef[] = [
   { path: "id", label: "Item Price ID", type: "string" },
   { path: "price_name", label: "Price Name", type: "string" },
+  {
+    path: "billing_model",
+    label: "Billing model (synthesized from pricing_model)",
+    type: "string",
+  },
   { path: "item_id", label: "Item ID", type: "string" },
   { path: "price", label: "Price Amount", type: "number" },
   { path: "currency_code", label: "Currency Code", type: "string" },
