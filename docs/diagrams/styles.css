@@ -672,3 +672,15 @@ footer.foot a { color: var(--ink-2); }
   border-style: dashed; text-align: center;
 }
 .node.start .t { font-size: 11.5px; font-weight: 550; color: var(--ink-2); }
+
+/* ==========================================================================
+   revenue-graph.html — coverage statuses, always paired with a word
+   ========================================================================== */
+
+.legend-sw.k-good { background: color-mix(in oklab, var(--st-good) var(--tint-strong), var(--surface-1)); border-color: var(--st-good); }
+.legend-sw.k-warn { background: color-mix(in oklab, var(--st-warn) var(--tint-strong), var(--surface-1)); border-color: var(--st-warn); }
+.legend-sw.k-off { background: var(--surface-1); border-color: var(--rule); }
+
+.chip.st-good { background: color-mix(in oklab, var(--st-good) var(--tint), var(--surface-1)); border-color: var(--st-good); color: var(--ink-1); }
+.chip.st-warn { background: color-mix(in oklab, var(--st-warn) var(--tint), var(--surface-1)); border-color: var(--st-warn); color: var(--ink-1); }
+.chip.st-off { color: var(--ink-3); }

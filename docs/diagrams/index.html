@@ -34,6 +34,7 @@
   <nav class="pageswitch" aria-label="Pages">
     <a href="index.html" aria-current="page">Architecture</a>
     <a href="data-model.html">Data model</a>
+    <a href="revenue-graph.html">Revenue graph</a>
   </nav>
   <div class="spacer"></div>
   <button class="btn" id="themeBtn" type="button">Dark mode</button>
@@ -47,10 +48,13 @@
 
     <div class="lede">
       <h1>Architecture diagrams</h1>
-      <p>The same nine diagrams as <code>docs/architecture.md</code>, rendered as HTML so they
-         are actually legible: zoom, drag to pan, full screen, and hover any box to isolate
-         what it connects to. The scope matrix in §2 is live — tick functions and watch
-         <code>resolveScopes()</code> recompute.</p>
+      <p>Nine diagrams of the current platform, rendered as HTML so they are legible:
+         zoom, drag to pan, full screen, and hover any box to isolate what it connects
+         to. The scope matrix in §2 and its resolver are live — all seven functions and
+         all seven providers, including Catalog, Agreement, Billing, Chargebee and
+         Stigg. The entity-level drawings of the 28 tables are on the
+         <a href="data-model.html">data model</a> page; the plain-language description
+         is <a href="../README.md">docs/README.md</a>.</p>
       <p>Everything here is static and dependency-free. Open <code>index.html</code> straight
          off disk; no server, no build, no network.</p>
       <div class="legend">
@@ -116,8 +120,8 @@
             <section class="group" id="s1-reg" data-k="seam">
               <h3 class="gh">Registries<span class="gh-note">the extension seam</span></h3>
               <div class="gb c3">
-                <div class="node" id="s1-reg-fn"><span class="t">functionRegistry</span><span class="n">identity · support · billing · usage · communication</span></div>
-                <div class="node" id="s1-reg-prov"><span class="t">providerRegistry</span><span class="n">hubspot · salesforce · metrifox · stripe · mock</span></div>
+                <div class="node" id="s1-reg-fn"><span class="t">functionRegistry</span><span class="n">identity · catalog · agreement · billing · support · usage · communication</span></div>
+                <div class="node" id="s1-reg-prov"><span class="t">providerRegistry</span><span class="n">hubspot · salesforce · metrifox · stripe · chargebee · stigg · mock</span></div>
                 <div class="node" id="s1-reg-han"><span class="t">handler + discovery</span><span class="n">keyed <code>function:provider</code></span></div>
               </div>
             </section>
@@ -139,7 +143,7 @@
             <section class="group" id="s1-pure" data-k="a3">
               <h3 class="gh">Pure logic<span class="gh-note">no I/O</span></h3>
               <div class="gb">
-                <div class="node" data-k="a3" id="s1-schema"><span class="t">identity-schema.ts</span><span class="n">The target contract — one source of truth for three readers</span></div>
+                <div class="node" data-k="a3" id="s1-schema"><span class="t">object-schema.ts</span><span class="n">Composed per-function target schemas — one source of truth for four readers</span></div>
                 <div class="node" data-k="a3" id="s1-mapper"><span class="t">field-mapper/</span><span class="n">validate · apply · serialize</span></div>
                 <div class="node" data-k="a3" id="s1-crypto"><span class="t">oauth/crypto.ts</span><span class="n">AES-256-GCM, no fallback key</span></div>
                 <div class="node" data-k="a3" id="s1-ident"><span class="t">identity/</span><span class="n">normalize · evidence · survivorship · assertions · crosswalk</span></div>
@@ -148,11 +152,13 @@
 
             <section class="group" id="s1-prov" data-k="a2">
               <h3 class="gh">Providers<span class="gh-note">one directory each, all interchangeable</span></h3>
-              <div class="gb c2">
+              <div class="gb c3">
                 <div class="node" data-k="a2" id="s1-hs"><span class="t">hubspot/</span><span class="n">OAuth · granular scopes</span></div>
                 <div class="node" data-k="a2" id="s1-sf"><span class="t">salesforce/</span><span class="n">OAuth · SOQL · instance_url</span></div>
                 <div class="node" data-k="a2" id="s1-mf"><span class="t">metrifox/</span><span class="n">API key · x-api-key header</span></div>
                 <div class="node" data-k="a2" id="s1-st"><span class="t">stripe/</span><span class="n">API key · bearer + pinned version · cursor paging</span></div>
+                <div class="node" data-k="a2" id="s1-cb"><span class="t">chargebee/</span><span class="n">API key · Basic site:key · symbolic scopes</span></div>
+                <div class="node" data-k="a2" id="s1-sg"><span class="t">stigg/</span><span class="n">API key · X-API-KEY · plans, features, subscriptions</span></div>
                 <div class="node" data-k="a2" id="s1-mk"><span class="t">mock/</span><span class="n">OAuth · runs with no credentials</span></div>
               </div>
               <div class="gb" style="margin-top:10px">
@@ -162,7 +168,7 @@
 
             <div class="stack">
               <div class="node" data-k="store" id="s1-repo"><span class="t">repositories/</span><span class="n">The modules that speak Prisma</span></div>
-              <div class="node" data-k="store" id="s1-db"><span class="t">Postgres via Prisma</span><span class="n">15 tables — a sync spine and an identity layer</span></div>
+              <div class="node" data-k="store" id="s1-db"><span class="t">Postgres via Prisma</span><span class="n">28 tables — a sync spine, the commercial records and an identity layer</span></div>
             </div>
           </div>
 
@@ -193,6 +199,8 @@
                 <th scope="col">Salesforce</th>
                 <th scope="col">Metrifox</th>
                 <th scope="col">Stripe</th>
+                <th scope="col">Chargebee</th>
+                <th scope="col">Stigg</th>
                 <th scope="col">Mock CRM</th>
               </tr>
             </thead>
@@ -203,6 +211,8 @@
                 <td><span class="chip">api</span><span class="chip">refresh_token</span></td>
                 <td><span class="chip">customers:read</span><span class="chip">contacts:read</span></td>
                 <td><span class="chip">customers:read</span></td>
+                <td><span class="chip">customers:read</span><span class="chip">contacts:read</span></td>
+                <td><span class="chip">customers:read</span></td>
                 <td><span class="chip">crm.objects.companies.read</span><span class="chip">crm.objects.contacts.read</span><span class="chip">crm.schemas.read</span></td>
               </tr>
               <tr>
@@ -211,35 +221,43 @@
                 <td><span class="chip">api</span><span class="chip">refresh_token</span></td>
                 <td class="none">—</td>
                 <td class="none">—</td>
+                <td class="none">—</td>
+                <td class="none">—</td>
                 <td><span class="chip">crm.objects.tickets.read</span><span class="chip">crm.schemas.read</span></td>
               </tr>
               <tr>
-                <th scope="row">Catalog<span class="sub">product · offering · feature</span></th>
-                <td class="none">—</td><td class="none">—</td>
+                <th scope="row">Catalog<span class="sub">product · offering · price · feature · entitlement</span></th>
+                <td class="none">—</td><td class="none">—</td><td class="none">—</td>
                 <td><span class="chip">products:read</span><span class="chip">prices:read</span></td>
-                <td class="none">—</td><td class="none">—</td>
+                <td><span class="chip">item_families:read</span><span class="chip">items:read</span><span class="chip">item_prices:read</span><span class="chip">features:read</span><span class="chip">item_entitlements:read</span></td>
+                <td><span class="chip">products:read</span><span class="chip">plans:read</span><span class="chip">addons:read</span><span class="chip">features:read</span><span class="chip">charges:read</span><span class="chip">entitlements:read</span></td>
+                <td class="none">—</td>
               </tr>
               <tr>
-                <th scope="row">Agreement<span class="sub">agreement · subscription</span></th>
+                <th scope="row">Agreement<span class="sub">agreement · subscription · items · entitlements · discounts</span></th>
                 <td><span class="chip">crm.objects.deals.read</span><span class="chip">crm.schemas.deals.read</span></td>
                 <td><span class="chip">api</span><span class="chip">refresh_token</span></td>
-                <td><span class="chip">subscriptions:read</span></td>
                 <td><span class="chip">orders:read</span><span class="chip">subscriptions:read</span></td>
+                <td><span class="chip">subscriptions:read</span></td>
+                <td><span class="chip">subscriptions:read</span><span class="chip">subscription_entitlements:read</span><span class="chip">features:read</span><span class="chip">item_entitlements:read</span></td>
+                <td><span class="chip">subscriptions:read</span></td>
                 <td><span class="chip">crm.objects.deals.read</span><span class="chip">crm.schemas.read</span></td>
               </tr>
               <tr>
                 <th scope="row">Billing<span class="sub">invoice · invoiceLine · payment</span></th>
                 <td class="none">—</td><td class="none">—</td><td class="none">—</td>
                 <td><span class="chip">invoices:read</span><span class="chip">invoice_payments:read</span><span class="chip">charges:read</span><span class="chip">refunds:read</span></td>
+                <td><span class="chip">invoices:read</span><span class="chip">transactions:read</span></td>
+                <td class="none">—</td>
                 <td><span class="chip">billing.invoices.read</span></td>
               </tr>
               <tr>
                 <th scope="row">Usage<span class="sub">usageEvent</span></th>
-                <td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td>
+                <td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td>
               </tr>
               <tr>
                 <th scope="row">Communication<span class="sub">message</span></th>
-                <td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td>
+                <td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td><td class="none">—</td>
               </tr>
             </tbody>
           </table>
@@ -267,8 +285,9 @@
       <p class="fig-note"><strong>Try it:</strong> tick <b>Support</b> alongside Identity. HubSpot's
         request widens by three scopes; Salesforce's does not move, because its coarse <code>api</code>
         scope already spans Case. Both are true at once only because scopes are held per
-        <em>(function, provider)</em> pair rather than per function. Tick <b>Billing</b> and every real
-        provider drops out — the flow is blocked rather than silently degraded.</p>
+        <em>(function, provider)</em> pair rather than per function. Tick <b>Billing</b> and the
+        offer narrows to Stripe and Chargebee — the CRMs and Metrifox declare no billing scopes and
+        drop out, so the flow is blocked rather than silently degraded.</p>
       <p class="fig-note">The same pair keys three more things: the <b>sync handler</b>, the
         <b>field discovery</b>, and the <b>default mappings</b>. Mock CRM only registers when
         <code>ENABLE_MOCK_PROVIDER=true</code>.</p>
@@ -335,7 +354,7 @@
               </div>
 
               <div class="seq branch" data-k="a2">
-                <div class="seq-title"><b>Branch B — API key</b><span class="cond">auth.kind === "apiKey" · Metrifox</span></div>
+                <div class="seq-title"><b>Branch B — API key</b><span class="cond">auth.kind === "apiKey" · Metrifox, Stripe, Chargebee, Stigg</span></div>
                 <div class="seq-grid" style="grid-template-columns:repeat(3,1fr)">
                   <div class="seq-lifelines" style="grid-template-columns:repeat(3,1fr)"><i></i><i></i><i></i></div>
                   <div class="seq-actor" style="grid-column:1">User</div>
@@ -400,7 +419,7 @@
           {"from":"m-rule","to":"m-tf"},
           {"from":"m-tf","to":"m-out"},
           {"from":"m-schema","to":"m-rule","label":"legal target paths"},
-          {"from":"m-schema","to":"m-cons","label":"one definition,\nthree readers"}
+          {"from":"m-schema","to":"m-cons","label":"one definition,\nfour readers"}
         ]'>
 
           <div class="pipe">
@@ -420,14 +439,15 @@
           </div>
 
           <div class="contract">
-            <div class="node" data-k="a3" id="m-schema"><span class="t">identity-schema.ts</span><span class="s">IDENTITY_SCHEMA</span><span class="n">The single source of truth. <code>contact.associatedCustomerId</code> is marked read-only and never offered — the sync engine derives it.</span></div>
+            <div class="node" data-k="a3" id="m-schema"><span class="t">object-schema.ts</span><span class="s">OBJECT_SCHEMAS</span><span class="n">Composed from the per-function schemas — identity, catalog, agreement, billing. <code>contact.associatedCustomerId</code> is marked read-only and never offered — the sync engine derives it.</span></div>
 
             <section class="group" id="m-cons" data-k="a3">
-              <h3 class="gh">Three readers<span class="gh-note">so they cannot drift apart</span></h3>
-              <div class="gb c3">
+              <h3 class="gh">Four readers<span class="gh-note">so they cannot drift apart</span></h3>
+              <div class="gb c4">
                 <div class="node" data-k="a3" id="m-c1"><span class="t">validateMappings()</span><span class="n">Every rule checked, every violation reported at once</span></div>
                 <div class="node" data-k="a3" id="m-c2"><span class="t">mapping editor</span><span class="n">The target dropdown</span></div>
                 <div class="node" data-k="a3" id="m-c3"><span class="t">sync engine</span><span class="n">Record validation at write time</span></div>
+                <div class="node" data-k="a3" id="m-c4"><span class="t">identity survivorship</span><span class="n">Which integration's value wins a field</span></div>
               </div>
             </section>
           </div>
@@ -457,7 +477,8 @@
       <div class="fig-head">
         <h2><span class="n">5</span>Sync — the pipeline, and the ordering that matters</h2>
         <p>Provider specifics live in handlers. This is what holds regardless of provider: one run at a
-           time, customers before contacts, per-record failures that do not abort the run, and a durable
+           time, purposes in dependency order (identity → catalog → agreement → billing), parents
+           before children, per-record failures that do not abort the run, and a durable
            account of what happened.</p>
       </div>
       <div class="fig-tools">
@@ -500,13 +521,13 @@
 
           <div class="node" id="p-lock" style="grid-row:4;grid-column:1"><span class="t">claim the lock · create SyncRun(running)</span><span class="n">Released in a <code>finally</code>, or the integration is wedged until the process restarts</span></div>
           <div class="node" id="p-token" style="grid-row:5;grid-column:1"><span class="t">getValidToken()</span><span class="n">Refreshes proactively within 5 min of expiry, so a run never starts on a dying token</span></div>
-          <div class="node" id="p-loop" style="grid-row:6;grid-column:1"><span class="t">for each declared function</span><span class="n"><code>requireSyncHandler(fn, provider)</code> + <code>findMappings(fn)</code> — no rules is an error, not a silent empty run</span></div>
+          <div class="node" id="p-loop" style="grid-row:6;grid-column:1"><span class="t">for each function, in write order</span><span class="n"><code>functionsInWriteOrder()</code> — identity → catalog → agreement → billing. Then <code>requireSyncHandler(fn, provider)</code> + <code>findMappings(fn)</code> — no rules is an error, not a silent empty run</span></div>
           <div class="node" data-k="a2" id="p-fetch" style="grid-row:7;grid-column:1"><span class="t">handler.fetchPages()</span><span class="n">An async iterable — pages are mapped as they arrive. Buffering a whole org buys nothing and risks memory on large tenants.</span></div>
           <div class="node" data-k="a3" id="p-map" style="grid-row:8;grid-column:1"><span class="t">applyMappings() per record</span></div>
 
-          <div class="node" data-k="store" id="p-wc" style="grid-row:9;grid-column:1"><span class="t">1 · writeCustomers()</span><span class="n">Upsert on <code>(integrationId, externalSourceId)</code>. Re-running updates rather than duplicates.</span></div>
-          <div class="node" data-k="store" id="p-wk" style="grid-row:10;grid-column:1"><span class="t">2 · writeContacts()</span><span class="n">Resolve the association through the index, then fall back to a DB lookup for customers written by earlier runs</span></div>
-          <div class="node" data-k="store" id="p-relink" style="grid-row:11;grid-column:1"><span class="t">3 · relinkOrphanedContacts()</span><span class="n">Contacts stranded by earlier runs get linked as soon as their company arrives</span></div>
+          <div class="node" data-k="store" id="p-wc" style="grid-row:9;grid-column:1"><span class="t">1 · write parents first</span><span class="n">Each function's objects in dependency order — a customer before its contacts, a product before its offering and price, an agreement before its subscription and lines. Upsert on <code>(integrationId, externalSourceId)</code>, so re-running updates rather than duplicates.</span></div>
+          <div class="node" data-k="store" id="p-wk" style="grid-row:10;grid-column:1"><span class="t">2 · write the children</span><span class="n">A child resolves its parent through the <code>external → internal</code> index built this run, then falls back to a database lookup for parents written by earlier runs. A required parent must resolve; a nullable link may stay empty, the provider id retained for the relink below.</span></div>
+          <div class="node" data-k="store" id="p-relink" style="grid-row:11;grid-column:1"><span class="t">3 · relink what was waiting</span><span class="n">Rows stranded by earlier runs — a contact's company, an agreement's customer or offering, a payment's invoice — get linked as soon as the missing record arrives</span></div>
 
           <div class="node dec" id="p-g3" style="grid-row:12;grid-column:1"><span class="t">any rejected records?</span></div>
           <div class="node" data-k="good" id="p-ok" style="grid-row:12;grid-column:3"><span class="t">success</span></div>
@@ -515,12 +536,15 @@
           <div class="node" id="p-done" style="grid-row:14;grid-column:1"><span class="t">release the lock · markLastSync()</span></div>
         </div>
       </div>
-      <p class="fig-note"><strong>Why customers go first.</strong> Providers return their <em>own</em>
-        company id on a contact — HubSpot in an associations block, Salesforce as <code>AccountId</code> —
-        never our internal UUID. Writing that into a foreign key produces a dangling reference. Customers
-        are written first to build the <code>external → internal</code> index; a contact that still cannot
-        be resolved is <strong>kept with a null link and a warning</strong>, its
-        <code>externalCustomerId</code> retained so a later run links it.</p>
+      <p class="fig-note"><strong>Why parents go first.</strong> Providers return their <em>own</em>
+        ids — HubSpot's company id on a contact, Stripe's price id on a subscription item — never our
+        internal UUIDs. Writing one into a foreign key produces a dangling reference. Parents are
+        written first to build the <code>external → internal</code> index; a child whose <em>nullable</em>
+        link still cannot resolve is <strong>kept with a null link and a warning</strong>, its external
+        id retained so a later run links it. Children that cannot exist alone — a subscription's detail
+        row, agreement lines, entitlements and discounts, an invoice's lines — are refused as a set if
+        their parent was refused. Payments are the exception: a refund may never name an invoice, so an
+        unlinked payment can be correct forever.</p>
       <p class="fig-note"><strong>Severity decides.</strong> A malformed email <em>rejects</em> a contact —
         a broken primary identifier poisons later matching. An unrecognised customer type only
         <em>warns</em> — an org-specific picklist value shouldn't cost the whole record. A malformed
@@ -822,7 +846,7 @@
             <h3 class="gh">Outside the app</h3>
             <div class="gb">
               <div class="node" data-k="a2" id="r8-worker"><span class="t">scripts/worker.ts</span><span class="n">Polls every 60 s. Next has no scheduler, so the policy lives in a plain function an HTTP route pokes.</span></div>
-              <div class="node" data-k="a2" id="r8-ext"><span class="t">HubSpot · Salesforce · Metrifox</span><span class="n">The real APIs</span></div>
+              <div class="node" data-k="a2" id="r8-ext"><span class="t">HubSpot · Salesforce · Metrifox · Stripe · Chargebee · Stigg</span><span class="n">The real APIs</span></div>
             </div>
           </section>
 

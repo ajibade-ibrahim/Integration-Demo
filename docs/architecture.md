@@ -1,817 +1,419 @@
-# Architecture
+# Architecture — how the platform works
 
-A map of the codebase for someone who has never opened it. The
-[README](../README.md) explains *what the platform does* and *why the decisions
-went the way they did*; [`data-model.md`](./data-model.md) covers the
-twenty-eight tables. This document covers **where the code lives and how a
-request moves through it**.
+This document explains how the Integration Platform is put together and what
+happens behind the scenes when you connect a system and bring data in. It is
+written in everyday language; the technical names of things are included in
+parentheses so you can match this document to what you see in the software.
 
-Read the first two sections and you can find anything. The rest is one section
-per aspect, each answering a single question.
-
-> **The diagrams below also exist as an interactive page** —
-> [`docs/diagrams/index.html`](./diagrams/index.html). Same nine diagrams, but
-> zoomable, hover-to-isolate, dark-mode, and with a live `resolveScopes()`
-> matrix in §2. Open it in a browser; it needs no server.
+For **what the platform stores**, see [`data-model.md`](./data-model.md). For a
+quick orientation and the list of supported systems, see
+[this folder's README](./README.md).
 
 ---
 
-## 1. The whole system in one picture
+## 1. The system at a glance
 
-Four entry points, one framework-free core, one database. The core never
-imports Next.js; the app layer never talks to Prisma directly (with two
-documented exceptions, noted in §9).
+There are three layers, plus the outside world:
 
-```mermaid
-flowchart TB
-    subgraph entry["Entry points — every code path starts in one of these"]
-        direction LR
-        PAGES["<b>Server components</b><br/>src/app/**/page.tsx<br/><i>read state, render</i>"]
-        ROUTES["<b>Route handlers</b><br/>src/app/api/**/route.ts<br/><i>mutate state</i>"]
-        CRONR["<b>Cron route</b><br/>/api/cron/sync<br/><i>poked by scripts/worker.ts</i>"]
-        SCRIPTS["<b>Scripts</b><br/>prisma/seed.ts<br/>scripts/*.mts"]
-    end
-
-    BOOT["<b>bootstrap()</b> — src/core/bootstrap.ts<br/>idempotent; every entry point calls it first"]
-
-    subgraph registries["Registries — the extension seam"]
-        direction LR
-        FREG["functionRegistry<br/><i>identity, catalog, agreement,<br/>billing, support,<br/>usage, communication</i>"]
-        PREG["providerRegistry<br/><i>hubspot, salesforce,<br/>metrifox, stripe,<br/>chargebee, stigg, mock</i>"]
-        HREG["handler + discovery<br/>keyed <b>function:provider</b>"]
-    end
-
-    subgraph services["Orchestration — provider-agnostic policy"]
-        direction LR
-        OAUTHS["oauth/oauth-service<br/><i>authorize, callback,<br/>refresh, revoke</i>"]
-        KEYS["credentials/api-key-service<br/><i>validate, probe, store</i>"]
-        ENGINE["sync/sync-engine<br/><i>guard, fetch, map,<br/>write, record</i>"]
-        DISCO["sync/discovery-service<br/><i>source fields + cache</i>"]
-        SCHED["sync/scheduler<br/><i>what is due</i>"]
-        RESOLVE["identity/identity-resolver<br/><i>per user, after sync —<br/>one company from many rows</i>"]
-    end
-
-    subgraph pure["Pure logic — no I/O, no database, trivially testable"]
-        direction LR
-        SCHEMA["object-schema.ts<br/><i>the target contract</i>"]
-        MAPPER["field-mapper/<br/><i>validate, apply, serialize</i>"]
-        CRYPTO["oauth/crypto.ts<br/><i>AES-256-GCM</i>"]
-        IDENT["identity/<br/><i>normalize · evidence ·<br/>survivorship · assertions</i>"]
-    end
-
-    subgraph provs["Providers — one directory each, all interchangeable"]
-        direction LR
-        HS["hubspot/"]
-        SF["salesforce/"]
-        MF["metrifox/"]
-        ST["stripe/"]
-        CB["chargebee/"]
-        SG["stigg/"]
-        MK["mock/"]
-        HTTP["<b>providers/http.ts</b><br/>shared failure policy<br/>401 / 429 / 5xx"]
-    end
-
-    REPOS["<b>repositories/</b> — the modules that speak Prisma"]
-    DB[("Postgres via Prisma<br/>28 tables")]
-
-    entry --> BOOT
-    BOOT --> registries
-    entry --> services
-    services --> registries
-    services --> pure
-    services --> provs
-    provs --> HTTP
-    services --> REPOS
-    provs -.->|"no DB access:<br/>refresh arrives as a callback"| services
-    REPOS --> DB
-
-    style BOOT fill:#e8eef7,stroke:#4a6fa5
-    style registries fill:#f2eef7,stroke:#7a5fa5
-    style pure fill:#eef7ee,stroke:#5a8a5a
-    style REPOS fill:#f7f1e8,stroke:#a5824a
-```
-
-**The one rule that shapes everything:** `src/core/` is framework-free. It has no
-`next/*` imports, so the sync engine, the OAuth flow and every provider can be
-exercised from a plain script or a test with no HTTP server running. `src/app/`
-is a thin adapter — parse the request, call a core function, shape a response.
-
----
-
-## 2. The one idea, and why the code is shaped around it
-
-> **An integration declares which _functions_ it serves, and that declaration
-> determines the OAuth scopes requested.**
-
-That single sentence explains most of the structure. Because scopes depend on
-*both* the function and the provider — HubSpot's scopes are granular, Salesforce's
-`api` scope already covers everything — nothing can be keyed by function alone or
-provider alone. So the central data structure is a **grid**:
+- **The app** — the screens you use: connecting systems, editing translation
+  rules, browsing synced data, reviewing combined companies.
+- **The core** — the working engine: it holds permissions, fetches data,
+  translates it, saves it, and matches companies across systems. It is kept
+  deliberately separate from the screens, so the same engine can run from a
+  command line or an automated test.
+- **The database** — one PostgreSQL database holding everything: connections,
+  translation rules, synced records, and combined company profiles.
+- **Outside systems** — HubSpot, Salesforce, Metrifox, Stripe, Chargebee and
+  Stigg, reached through their own public interfaces. Each has its own "plug"
+  (called a **provider** in the software).
 
 ```mermaid
 flowchart LR
-    subgraph grid["Everything provider-specific is keyed by function x provider"]
-        direction TB
-        G["<b>scopesByProvider</b><br/>function-registry.ts<br/><i>what consent asks for</i>"]
-        H["<b>syncHandler</b><br/>handler-registry.ts<br/><i>how to fetch pages</i>"]
-        I["<b>fieldDiscovery</b><br/>handler-registry.ts<br/><i>what can be mapped from</i>"]
-        J["<b>defaultMappings</b><br/>defaults-registry.ts<br/><i>so it syncs immediately</i>"]
-    end
-
-    RS["<b>resolveScopes(functions, provider)</b><br/>= union of scopesByProvider<br/>across the selected functions"]
-
-    G --> RS
-    RS --> CONSENT["Consent screen shows<br/>exactly these scopes"]
-    RS --> STORED["OAuthToken.grantedScopes<br/>records what was <i>actually</i> granted"]
-    STORED --> DRIFT["checkReauthorization():<br/>function added later =><br/>explicit reconnect prompt,<br/>not an opaque mid-sync 403"]
-
-    style RS fill:#f2eef7,stroke:#7a5fa5
+    B["Browser<br/>screens and tables"] --> APP["The app<br/>server-side pages and routes"]
+    APP --> CORE["The core<br/>connections · mapping · refresh · matching"]
+    CORE --> P["Provider plugs<br/>one per outside system"]
+    P --> EXT["Outside systems<br/>HubSpot · Salesforce · Metrifox<br/>Stripe · Chargebee · Stigg"]
+    CORE --> DB[("One PostgreSQL database<br/>all synced data")]
 ```
 
-Three consequences worth internalising before reading any file:
+The core never assumes anything about a provider's shape. Providers are
+interchangeable: adding one is adding a folder of plug files, not redesigning
+the engine. The built-in Mock CRM is proof — it is a full provider, served like
+any other, that runs with no credentials so the whole product can be
+demonstrated.
 
-| Consequence | Where you see it |
+## 2. The building blocks
+
+| Term in the software | What it means |
 |---|---|
-| An integration serves a **set** of functions, not one | `IntegrationFunction` is one-to-many; `resolveScopes` takes an array |
-| A function can be **declared without being built** | `usage`/`communication` are registered with no handler, so "no provider supports this yet" is a real, reachable state. `support` has scopes on both CRMs and no handler anywhere; `agreement` is declared on all five providers but only Stripe and Chargebee can serve it |
-| A provider is **added, not wired in** | New directory under `core/providers/` + one call in [`bootstrap.ts`](../src/core/bootstrap.ts). No orchestration code changes. |
+| **Provider** | An outside system (HubSpot, Stripe, …) plus the knowledge of how to talk to it. |
+| **Connection** (`Integration`) | One configured link to one provider account. It has a label, a status, a priority, and a refresh schedule. |
+| **Purpose** (`Function`) | A kind of job the connection does. Seven are defined; four sync data today. |
+| **Credential** | What proves the connection may read data: an approved sign-in, or an API key. Stored encrypted. |
+| **Permission** (`Scope`) | One thing a provider allows, such as "read invoices". Requested based on chosen purposes. |
+| **Translation rule** (`FieldMapping`) | "Take this field from the provider, clean it up if needed, store it as that field of ours." |
+| **Refresh** (`Sync run`) | One execution of fetch → translate → save → report. |
+| **Record** | One stored item: a customer, a contact, an invoice, and so on. |
+| **Company profile** (`CustomerAccount`) | The combined view of one real company, built from matching records across connections. |
 
----
+## 3. Choosing purposes determines permissions
 
-## 3. Connecting — two credential kinds, one destination
+This is the defining rule of the product. Permissions are not chosen one by
+one, and they are not fixed per system. They are **derived from the purposes
+you pick**.
 
-The trickiest thing to hold in your head is that **there are two ways to get a
-credential and they converge**. `ProviderDefinition.auth` is a discriminated
-union (`kind: "oauth" | "apiKey"`), so the compiler forces every branch to be
-handled rather than letting an API-key provider quietly assume a token endpoint.
+- Each purpose needs different things from each system. Reading "identity"
+  from HubSpot means companies, contacts and their field definitions; reading
+  "billing" from Stripe means invoices, payments, charges and refunds.
+- Because you can pick several purposes at once, the permission request is the
+  **combination** (the union) of everything selected — no more.
+- Because the platform knows what each purpose needs from each system before
+  anyone signs in, the approval screen shows exactly the right list. Picking
+  Identity alone will never ask for invoice access.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor U as User
-    participant NEW as /integrations/new
-    participant API as /api/integrations
-    participant OA as oauth-service
-    participant AK as api-key-service
-    participant P as Provider
-    participant FIN as createIntegrationFromDraft
+Three consequences worth remembering:
 
-    U->>NEW: pick functions, then a provider
-    Note over NEW: providerNamesForFunctions()<br/>lists only providers covering<br/>ALL selected functions
-    NEW->>API: POST - create a draft
-    Note over API: nothing is written to the database:<br/>a rejected or abandoned connect<br/>must leave no row behind
-    API-->>U: draftId + connectUrl
+1. **A connection serves a *set* of purposes, not one.** One HubSpot
+   connection can supply companies *and* tickets.
+2. **A system only appears if it covers *every* purpose you picked.** Pick
+   Identity + Billing and you will be offered only systems that can do both.
+3. **New purpose, new permission.** If you add a purpose to an existing
+   connection, the permission you granted earlier is narrower than what is now
+   needed. The platform keeps a record of what was actually granted, notices
+   the gap, and asks you to reconnect — instead of failing anonymously in the
+   middle of a refresh.
 
-    alt auth.kind === "oauth" (HubSpot, Salesforce, Mock)
-        U->>OA: GET /api/oauth/{provider}/start?draftId
-        OA->>OA: resolveScopes() + issueState({kind:"draft"})
-        OA-->>U: 302 to provider consent screen
-        U->>P: grants consent
-        P-->>OA: GET /callback?code&state
-        OA->>OA: consumeState() - single-use, constant-time compare
-        OA->>P: exchange code for tokens
-        P-->>OA: access + refresh + granted scopes
-    else auth.kind === "apiKey" (Metrifox, Stripe, Chargebee, Stigg)
-        U->>AK: POST /api/integrations/connect {draftId, apiKey}
-        AK->>AK: validateKeyShape() - local, no network
-        AK->>P: probeCredential() - prove it works
-        P-->>AK: 200, or 401 and the key is never stored
-        Note over AK: on 401 the draft survives,<br/>so the user re-pastes rather than<br/>re-choosing provider and functions
-    end
+### What is available today
 
-    OA->>FIN: proven credential + draft
-    AK->>FIN: proven credential + draft
-    FIN->>FIN: createIntegration() - the row first exists here
-    FIN->>FIN: saveToken() then markAuthorized() + seedMappingsIfEmpty()
-    Note over FIN: any failure after the insert<br/>deletes the row again
-    FIN-->>U: status = active, ready to sync
-```
-
-The ordering above is the point: every credential is proven *before* an
-`Integration` row exists. A first connect that fails leaves nothing to clean up.
-Reconnecting an integration that already exists is the one path that keeps the
-old behaviour — it sets `status = error` and preserves the row, because by then
-it may carry edited mappings and synced records that a delete would destroy.
-
-**What differs, and what deliberately does not:**
-
-| | OAuth | API key |
+| Purpose | Status | Systems |
 |---|---|---|
-| Credential arrives | Redirect + consent | Paste box |
-| Configured per | Deployment (`.env` client id/secret) | Integration |
-| Expiry / refresh | Yes — proactive, 5 min leeway | Never; `isNonExpiring` keeps it off the refresh path |
-| 401 during sync | Refresh, retry once | Terminal — `refreshAccessToken` is *withheld* from the handler |
-| Encryption at rest | AES-256-GCM | The same code path |
-| Everything after the credential | — identical — | — identical — |
+| **Identity** | Ready | HubSpot, Salesforce, Metrifox, Stripe, Chargebee, Stigg, Mock CRM |
+| **Catalog** | Ready | Stripe, Chargebee, Stigg |
+| **Agreement** | Ready on three systems | Stripe, Chargebee, Stigg — listed but not yet syncing on HubSpot, Salesforce, Metrifox, Mock CRM |
+| **Billing** | Ready | Stripe, Chargebee |
+| **Support** | Declared only | HubSpot, Salesforce, Mock CRM can be chosen; nothing syncs yet |
+| **Usage** | Declared only | No system yet |
+| **Communication** | Declared only | No system yet |
 
-That last row is the payoff: pagination, mapping, writing, and the failure
-policy have no idea which kind of credential they are running on.
+"Declared only" is deliberate. It makes the picker show the real roadmap, and
+it makes "no system supports this yet" a message the software can honestly
+produce rather than a dead end the user discovers alone.
 
----
+## 4. Connecting a system
 
-## 4. Mapping — how a provider field becomes one of ours
-
-[`object-schema.ts`](../src/core/object-schema.ts) is a single composed registry
-read by four consumers that would otherwise drift apart: mapping validation, the
-target dropdown, sync-engine record validation, and identity survivorship.
-Target paths are **object-qualified** (`customer.name`, `contact.email`) so a
-contact field can never be mapped onto a customer record and still validate.
+There are two styles of connection, and everything after the credential is
+identical.
 
 ```mermaid
 flowchart LR
-    subgraph src["Source side - what the provider offers"]
-        DISCO["discovery-service<br/><i>reads provider schema API,<br/>caches 1h in DiscoveredField</i>"]
-        FREE["free-text entry<br/><i>escape hatch when the<br/>dropdown cannot express it</i>"]
-    end
-
-    subgraph rule["FieldMappingRule - one row per target field"]
-        R["sourceFieldPath<br/>+ targetObject<br/>+ targetFieldPath<br/>+ transform"]
-    end
-
-    subgraph tgt["Target side - the contract"]
-        IS["<b>object-schema.ts</b><br/><i>composes identity, catalog,<br/>agreement, billing</i>"]
-        C1["validateMappings()"]
-        C2["mapping editor dropdown"]
-        C3["sync-engine record validation"]
-        IS --> C1
-        IS --> C2
-        IS --> C3
-    end
-
-    T["<b>transforms</b><br/>none - trim - lowercase<br/>domainFromUrl - dateOnly"]
-
-    DISCO --> R
-    FREE --> R
-    R --> C1
-    R --> T
-    T --> OUT["<b>MappedRecord</b><br/>fields + customFields<br/><i>absent source yields null,<br/>never a missing key</i>"]
-
-    style IS fill:#eef7ee,stroke:#5a8a5a
+    A["1. Choose purposes"] --> B["2. Pick a system<br/>covering all of them"]
+    B --> C["3. Prove the permission<br/>approve sign-in, or paste a key"]
+    C --> D["4. Translation rules<br/>pre-filled and editable"]
+    D --> E["5. Ready to refresh"]
 ```
 
-Two details that surprise people:
+**Style A — approve a sign-in (OAuth).** HubSpot, Salesforce and Mock CRM. You
+are sent to the system's own approval screen, sign in there, and approve the
+requested access. The platform never sees your password. The system sends back
+a credential plus a list of what was actually granted.
 
-- **A mapped-but-absent source field writes `null`, not nothing.** The output
-  shape depends on the rule set, never on which fields a particular record
-  happened to carry.
-  ([`field-mapper.ts:178`](../src/core/field-mapper/field-mapper.ts#L178))
-- **`readPath` walks own properties only.** Source paths are user-editable, so
-  `constructor` or `__proto__` would otherwise reach up the prototype chain.
-  ([`field-mapper.ts:142`](../src/core/field-mapper/field-mapper.ts#L142))
+**Style B — paste an API key.** Metrifox, Stripe, Chargebee and Stigg. There is
+no approval screen; the system issued you a long-lived key. You paste it, and
+the platform checks it against the live service before saving.
 
-**Three kinds of target path, not one.** `resolveTargetField` returns a
-`FieldDefinition`, the sentinel `"customField"`, or the sentinel `"crossRef"` —
-a union rather than a boolean, so adding the third made the compiler point at
-every consumer that had to handle it.
-
-| Pattern | Means | Validated against |
+| | Approve a sign-in (OAuth) | Paste an API key |
 |---|---|---|
-| `name`, `email`, `domain` | A real column | `identity-schema.ts` |
-| `customFields.<key>` | A single-segment JSON key | the pattern only — the key is whatever the user wants |
-| `crossRef.<provider>` | "this company is *that* id over there" | **`providerRegistry`** — `crossRef.nonsense` cannot be saved |
+| Where it happens | Redirect to the provider's screen | A box in this app |
+| Configured | Once per deployment (app registration) | Once per connection |
+| Expires | Yes — refreshed automatically before it lapses | No — it lives until revoked |
+| When it fails mid-refresh | Renew and retry once | Stop and ask for a new key |
 
-The last one needed the only UI addition: the target dropdown is built from
-`mappableFields()`, which returns `FieldDefinition[]` and cannot express a
-cross-reference, so a "Same company in…" option is backed by a *provider*
-dropdown rather than the free-text box custom fields get. A custom-field key is
-arbitrary; a cross-reference segment must name a registered provider or it fails
-validation.
+Two rules apply to both styles:
 
----
+- **Nothing is saved until the credential is proven.** A canceled approval or
+  a mistyped key leaves no half-built connection behind. If a pasted key is
+  rejected, your chosen system and purposes are kept so you can simply retry.
+- **Reconnecting keeps your work.** If an existing connection loses access,
+  reconnecting updates the credential but preserves your translation rules,
+  synced data and combined company profiles.
 
-## 5. Sync — the pipeline, and the one ordering that matters
+## 5. Translation rules
 
-```mermaid
-flowchart TB
-    START["executeSync(integrationId)"] --> G1{"status === active?"}
-    G1 -->|no| FAIL1["failed - connect it first"]
-    G1 -->|yes| G2{"already in flight?"}
-    G2 -->|yes| DISC["<b>discarded</b><br/><i>the second caller is told,<br/>not silently ignored</i>"]
-    G2 -->|no| LOCK["claim lock, create SyncRun(running)"]
+Every system names and shapes its data differently. A **translation rule**
+(also called a **field mapping**) says how one outside field becomes one of
+ours:
 
-    LOCK --> TOK["getValidToken()<br/><i>refreshes if within 5 min of expiry</i>"]
-    TOK --> ORDER["functionsInWriteOrder(declared)<br/><i>identity, then catalog, then agreement, then billing</i>"]
-    ORDER --> LOOP["for each function, in that order:<br/>requireSyncHandler(fn, provider)<br/>+ findMappings(fn)"]
+> *Take `properties.domain` from HubSpot, run it through "keep only the
+> domain", and store it as `customer.domain`.*
 
-    LOOP --> FETCH["<b>handler.fetchPages()</b><br/><i>async iterable - pages are mapped<br/>as they arrive, never buffered whole</i>"]
-    FETCH --> MAP["applyMappings() per record"]
+Each rule has four parts:
 
-    MAP --> WC["<b>1. parent writer</b><br/>writeCustomers / writeProducts / writePrices / writeFeatureDefinitions<br/>writeAgreements / writeInvoices<br/>upsert on integrationId + externalSourceId,<br/>building the external-to-internal index"]
-    WC --> WK["<b>2. child writers</b><br/>writeContacts / writeOfferings / writeEntitlements<br/>writeSubscriptions / writeAgreementItems<br/>writeAgreementEntitlements / writeAgreementDiscounts<br/>writeInvoiceLines / writePayments<br/>resolve through the index,<br/>then fall back to a DB lookup"]
-    WK --> RELINK["<b>3. relinkOrphansForFunction()</b><br/><i>children stranded by earlier runs<br/>get linked once their parent arrives</i>"]
-
-    RELINK --> STATUS{"any rejected records?"}
-    STATUS -->|no| OK["<b>success</b>"]
-    STATUS -->|yes| PART["<b>partial</b><br/><i>wrote 19 of 20 - the reason for<br/>the 20th is stored and shown</i>"]
-
-    OK --> REL["release lock, markLastSync()"]
-    PART --> REL
-
-    style WC fill:#f7f1e8,stroke:#a5824a
-    style WK fill:#f7f1e8,stroke:#a5824a
-    style DISC fill:#f7eeee,stroke:#a55a5a
-```
-
-**Why parents are written before children.** Providers return their *own* id for
-the parent — HubSpot in an associations block, Salesforce as `AccountId`, Stripe
-as a product id on a price — never our internal UUID. Writing that into a
-foreign key produces a dangling reference. Parents go first to build the
-`external → internal` index; a child that still cannot be resolved is **kept
-with a null link and a warning**, the provider's id retained so a later run
-links it. That ordering is why
-[`record-writer.ts`](../src/core/sync/record-writer.ts) exists as its own module
-rather than living inline in the engine.
-
-The order itself is declared in
-[`object-schema.ts`](../src/core/object-schema.ts) rather than hardcoded per
-function — `identity: [customer, contact]`,
-`catalog: [product, offering, price, feature, entitlement]`,
-`agreement: [agreement, subscription, agreementItem, agreementEntitlement, agreementDiscount]`,
-`billing: [invoice, invoiceLine, payment]`. Adding a function is a change there
-and in the writer's switch, not another branch in this loop. `catalog` is the one
-with three children of the same parent — an offering from a product, a price
-from an offering, and an entitlement from *both* — and the entitlement resolves
-against the same index the other two built. `billing` is the one where the
-*first* entry is the parent both others attach to.
-
-**`Feature` is the one root record on the catalog side.** It hangs off nothing,
-so `externalRefsOf` returns `{}` for it and it is written wherever it appears in
-the handler's yield order. `Entitlement` is the opposite — it names two parents
-and neither is primary, so both resolve independently and a half-linked row says
-which half.
-
-**Why the *functions* are ordered too, which is newer.** Identity and catalog
-share nothing, so their order never mattered. An agreement does: it references a
-customer written by `identity` and an offering written by `catalog`, so running
-it first leaves both links dangling until the next sync. `functionsInWriteOrder`
-sorts them, which is why "connect four functions, sync once" produces fully
-linked agreements rather than rows that heal on the second run. Billing sorts
-last for the same reason one level up: an invoice resolves a customer from
-`identity`, an offering from `catalog` and an agreement from `agreement`.
-
-**An agreement and an entitlement are the records with two parents.**
-`SyncHandler.externalRefsOf` returns a *map* keyed by object — `{ customer }` for
-a contact, `{ product }` for an offering, `{ offering }` for a price,
-`{ offering, feature }` for an entitlement, `{ customer, offering }` for an
-agreement — because in none of those cases is either half the primary one. Each
-resolves and warns independently, so a half-linked row says which half.
-
-**One child whose parent id never appears in its payload.** A Stripe
-`ProductFeature` is read from `/v1/products/{id}/features` and the response
-names no product, so the handler injects the id from the URL it requested. Every
-other association here is read off the record, which means a wrong one shows up
-as a null or an unresolved warning; this one would link every row to the wrong
-product and report success. It is also why the catalog has no relink pass for
-entitlements: an attachment cannot arrive before a product it was fetched *from*,
-so an unresolved parent means that product was rejected rather than late.
-
-**And four exceptions to "keep the child".** An `AgreementItem`,
-`AgreementEntitlement`, `AgreementDiscount` or `InvoiceLine` whose parent was
-rejected is rejected too, because its foreign key is required: the row would be
-an amount, a period or a discount about nothing. All of them come off the same
-provider record in the same run, so a missing parent can only mean the parent was
-itself refused.
-
-**`agreementItem`, `agreementEntitlement`, `agreementDiscount` and
-`invoiceLine` are the four reconciling writers, and that is a real obligation
-rather than a tidy-up.** Each reconciles its rows against what the handler just
-yielded, so a removed add-on or a discounted line that came off does not linger.
-The deletion is closed behind two gates — the object being mapped, and the page
-declaring itself complete — because a collection truncated by a page bound looks
-exactly like a shorter one; see
-[`object-schema.ts`](../src/core/object-schema.ts) and the writer's
-`InvoiceLineReconcileContext`. `Entitlement` does **not** reconcile, which is why
-a feature detached in Stripe persists on re-sync; there is no equivalent of the
-`status=all` parameter that makes subscriptions work.
-
-**Per-record failures never abort a run.** A `RecordIssue` carries
-`severity: "warning" | "rejected"` — a malformed email rejects the contact
-(a broken primary identifier poisons later matching), an unrecognised customer
-type only warns. A malformed *account* email is the deliberate opposite: warned
-about and nulled rather than rejected, because a customer's identity is `name` +
-`externalSourceId` and discarding a whole company over one bad field is worse
-than an empty column.
-
-**Then identity resolution runs, outside all of this** — see §6. It is a
-separate per-user pass, wrapped so that it cannot fail the sync that triggered
-it.
-
----
-
-## 6. Identity — one company out of three rows
-
-Sync is **per integration**. Identity resolution is **per user**, and that
-difference is the whole reason it is a separate pass rather than a step inside
-`executeSync`: one real company appears as three `Customer` rows in three
-connections, so no single integration can see the group. `sync-engine.ts` gains
-no import from this; the two call sites go through
-[`resolve-after-sync.ts`](../src/core/identity/resolve-after-sync.ts), which
-holds the one policy that matters — **a sync is never reported failed because
-resolution hiccuped**.
-
-```mermaid
-flowchart TB
-    TRIG["after a sync · scheduler tick · POST /api/identity/resolve"] --> GUARD{"pass already<br/>running for this user?"}
-    GUARD -->|yes| DISC["<b>discarded</b><br/><i>runId null, no row written —<br/>a discard is contention,<br/>not an execution</i>"]
-    GUARD -->|no| REAP0["<b>0. reap</b> empty accounts<br/><i>a shell still holding a key claim<br/>permanently blocks the right<br/>account from forming</i>"]
-
-    REAP0 --> EV["<b>1. build evidence</b> — pure<br/>email · domain · contact emails ·<br/>self-reference · cross-refs"]
-    EV --> ASRT["<b>1.5 cluster by <code>same</code> assertions</b><br/><i>union-find over customers,<br/>before any key matching</i>"]
-
-    ASRT --> MATCH{"candidate accounts<br/>for this cluster's keys"}
-    MATCH -->|"0"| NEW["create one, link, insert keys"]
-    MATCH -->|"1"| LINK["link, insert only<br/>keys it lacks"]
-    MATCH -->|"≥2"| CONF["<b>conflict — never merge</b><br/>strongest key kind, then oldest,<br/>then smallest id wins the link;<br/>losing keys stay put, issue raised"]
-
-    NEW --> SURV
-    LINK --> SURV
-    CONF --> SURV["<b>2. survivorship</b> — pure<br/><i>per field, the highest-priority<br/>member that actually supplies a value</i>"]
-    SURV --> REAP1["<b>3. reap again</b><br/><i>shells this pass emptied would<br/>otherwise hold their claims<br/>until the next one</i>"]
-
-    VETO["<code>distinct</code> assertion"] -.->|"vetoes, per candidate account"| MATCH
-
-    style DISC fill:#f7eeee,stroke:#a55a5a
-    style SURV fill:#eef7ee,stroke:#5a8a5a
-    style CONF fill:#f7f1e8,stroke:#a5824a
-```
-
-### The two conflicts, and why only one of them is a hierarchy
-
-This is the distinction the whole design rests on, and conflating them is the
-easiest way to build something dangerous.
-
-| | The question | Resolved by `identityPriority`? |
-|---|---|---|
-| **Key conflict** | "Is this the same company?" — two accounts both claim `billing@acme.example` | **No.** Never auto-merged; the winner is deterministic, losing keys stay put, and a `key_claimed_elsewhere` issue asks a human. |
-| **Value conflict** | "What is this company called?" — HubSpot says `Acme Manufacturing Inc`, Stripe says `Acme Corp` | **Yes.** This is the only thing the rank is for. |
-
-**Priority changes what an account says, never who is in it.** If reordering
-sources could repartition accounts, then nudging a number to fix a displayed
-name would silently regroup someone's customer list — and nobody would connect
-the two events. `identity-surfacing.test.ts` asserts the placements and the key
-rows are *identical* across a priority change, not merely equivalent.
-
-**A null is not an opinion.** Stripe has no `industry`, `domain` or `type` field
-at all; HubSpot has no account-level `email`. So "the top-ranked source's row
-wins wholesale" would be destructive — putting Stripe at priority 1 would blank
-three columns on every account it touches. Each field is contested only among
-the members that actually carry it, which is what lets the hierarchy compose:
-Stripe wins `email`, HubSpot wins `industry`, neither erases the other.
-
-`createDate` is the one declared exception, taking the **earliest** value rather
-than the highest-priority one — if the CRM saw a company in 2019 it existed in
-2019. Declared rather than special-cased, as `conflictPolicy` on the field
-definition in `identity-schema.ts`, so the rule lives next to the field it
-governs.
-
-### Three ways a foreign id arrives
-
-The spec calls Metrifox's `payments_stripe_customers` the join that makes one
-customer account possible, and **no Metrifox endpoint exposes it**. So
-`external_ref` — the strongest key kind — needs supply routes that do not depend
-on a fetch.
-
-| Route | Shape | Where |
-|---|---|---|
-| **Self-reference** | Free. Every customer contributes `<provider>:<scope>:<externalSourceId>` from data already in hand | `evidence.ts` |
-| **Mapped field** | `crossRef.<provider>` target path, parallel to `customFields.<key>` — reuses the mapping editor, validation and transforms wholesale | `identity-schema.ts`, `Customer.crossRefs` |
-| **Imported crosswalk** | Pasted or uploaded `<local id>,<foreign id>` pairs — the honest answer for a table no API serves | `identity/crosswalk.ts`, `Customer.importedCrossRefs` |
-
-**The scope segment is not optional.** HubSpot object ids are portal-scoped, so
-a bare `hubspot:12345` self-key would merge company `12345` in two different
-portals into one company. Every provider declares
-`externalIdScope: "global" | "tenant"`; a tenant-scoped one takes its scope from
-the token's `providerMetadata`, and **if no scope value is available it emits no
-self-key at all**. Failing closed costs a join, which is visible and
-recoverable; guessing costs a false merge, which looks exactly like the matcher
-working well.
-
-That is not hypothetical: HubSpot's token response carries no `hub_id` (it is
-only readable from an endpoint `parseTokenResponse` cannot call), so HubSpot
-contributes no self-key today. Salesforce is scoped by `organizationId` rather
-than `instance_url`, because legacy pod hostnames like `na1.salesforce.com` were
-shared by thousands of unrelated orgs. Chargebee is scoped by its **site**, and
-that one *is* available: the site's API keys are created per site, so the probe
-that validates the credential returns the site it authenticated against and
-stores it as `providerMetadata.site`. Two Chargebee integrations against two
-sites therefore cannot merge on `chargebee:12345` alone — the exact failure the
-scope segment exists to prevent, and the first provider to be able to avoid it.
-
-### What the resolver will not do
-
-Three refusals, each deliberate, each tested:
-
-- **It never writes an assertion, only reads them.** That is what makes a human
-  verdict sticky across a pass that otherwise recomputes everything.
-- **It merges on evidence and never splits on the absence of it.** Withdrawing
-  an imported crosswalk stops the pair being supplied; it does not take apart
-  the account it already made. Only a `distinct` assertion separates records
-  that are already grouped.
-- **It never auto-merges two multi-member accounts.** A false merge is the worst
-  failure any matcher has and it has no user-facing undo, so two rival accounts
-  contest and raise an issue instead. The human routes — "same company" and "not
-  this company" on the Accounts tab — are how a merge actually happens.
-
----
-
-## 7. Failing well — two nested retry loops
-
-This is the part most worth understanding before debugging a flaky sync, because
-the two loops are easy to confuse. The inner one lives in
-[`providers/http.ts`](../src/core/providers/http.ts) and retries **one request**;
-the outer one lives in the sync engine and retries **the whole run**.
-
-```mermaid
-flowchart TB
-    REQ["provider request"] --> ST{"status"}
-
-    ST -->|"200"| OK["page returned"]
-
-    ST -->|"401"| R1{"refreshAccessToken<br/>available?"}
-    R1 -->|"no - API key"| REAUTH
-    R1 -->|yes| RF["refresh, retry once"]
-    RF --> SECOND{"401 again?"}
-    SECOND -->|yes| REAUTH["<b>ReauthorizationRequiredError</b><br/>status = requires_reauthorization<br/><i>not retryable: no amount of<br/>waiting fixes a dead grant</i>"]
-    SECOND -->|no| OK
-
-    ST -->|"429"| WAIT["wait Retry-After, or the fallback<br/>retry the <b>same</b> request<br/><i>so pagination resumes at the<br/>same cursor, not from page 1</i>"]
-    WAIT --> BOUND{"both waits used?"}
-    BOUND -->|no| REQ
-    BOUND -->|yes| RETRYABLE
-
-    ST -->|"5xx"| RETRYABLE["<b>RetryableSyncError</b><br/>bubbles to the run-level loop"]
-    ST -->|"other"| HARD["<b>fail the run</b><br/><i>everything already written stays written</i>"]
-
-    RETRYABLE --> OUTER["<b>outer loop</b> - sync-engine<br/>exponential backoff,<br/>bounded by SYNC_MAX_ATTEMPTS"]
-    OUTER -->|attempts left| REQ
-    OUTER -->|exhausted| FAILED["SyncRun = failed<br/><i>integration stays active -<br/>one bad run must not<br/>block the schedule</i>"]
-
-    style REAUTH fill:#f7eeee,stroke:#a55a5a
-    style OUTER fill:#e8eef7,stroke:#4a6fa5
-```
-
-All waiting goes through an injected `Clock`
-([`sync/clock.ts`](../src/core/sync/clock.ts)), so tests assert retry *schedules*
-instantly instead of sitting through them.
-
----
-
-## 8. Where do I look for X?
-
-| I want to change… | Open |
+| Part | Meaning |
 |---|---|
-| Which scopes a function asks a provider for | [`bootstrap.ts`](../src/core/bootstrap.ts) — every registration is in this one file |
-| The fields a mapping may write to | [`object-schema.ts`](../src/core/object-schema.ts) — the composed
-  registry the validator, UI and engine all read. The per-object definitions are in `identity-schema.ts`,
-  `catalog-schema.ts`, `agreement-schema.ts` and `billing-schema.ts` beside it |
-| Which objects a function writes, and in what order | `FUNCTION_OBJECTS` in [`object-schema.ts`](../src/core/object-schema.ts) — and `functionsInWriteOrder` for the order of the functions themselves |
-| How a provider paginates or shapes its query | `core/providers/<name>/<function>-handler.ts` and `api.ts` |
-| What the mapping editor offers as sources | `core/providers/<name>/discovery.ts` |
-| The pre-filled mapping a new integration starts with | `core/providers/<name>/defaults.ts` |
-| Retry / rate-limit behaviour | [`providers/http.ts`](../src/core/providers/http.ts) (per request) or [`sync-engine.ts`](../src/core/sync/sync-engine.ts) (per run) |
-| Anything touching the database | `core/repositories/` |
-| The status lifecycle | [`integration-repository.ts`](../src/core/repositories/integration-repository.ts); diagram in [data-model.md](./data-model.md#integrationstatus-lifecycle) |
-| What runs on a schedule | [`sync/scheduler.ts`](../src/core/sync/scheduler.ts), driven by `/api/cron/sync` |
-| What counts as evidence that two records are one company | [`identity/evidence.ts`](../src/core/identity/evidence.ts) — pure; every key the matcher will ever see is emitted here |
-| Which source wins a contested field | [`identity/survivorship.ts`](../src/core/identity/survivorship.ts), ranked by `Integration.identityPriority` |
-| How an email or domain is normalized before matching | [`identity/normalize.ts`](../src/core/identity/normalize.ts) — and `EMAIL_PATTERN` lives here, imported by the record writer, so validating and matching cannot drift |
-| Which domains are refused as match keys | [`identity/free-email-domains.ts`](../src/core/identity/free-email-domains.ts) |
-| Moving existing connections onto a changed default | [`identity/mapping-retarget.ts`](../src/core/identity/mapping-retarget.ts) + `npm run mappings:retarget` |
+| Which purpose it belongs to | Identity, Catalog, Agreement or Billing |
+| Which of our records it targets | A customer, a contact, an invoice line, and so on |
+| Where the value comes from | The provider's own field path |
+| Optional clean-up | Trim spaces, lowercase, extract a domain from a web address, or keep only the date |
 
-### The provider directory, as a template
+Things that make the rules safe to use:
 
-Every provider is the same five-to-nine files, one handler per function it
-serves. That uniformity is the point — adding one is filling in a known shape,
-not designing anything.
+- **Targets are fully named, never guessed.** A rule must say *which kind of
+  record* it writes to (`customer.domain`, not just `domain`). A contact field
+  can never accidentally be saved onto a company.
+- **Defaults are pre-filled.** Every connection starts with a sensible rule
+  set, so it can refresh immediately. You only adjust rules you care about.
+- **Suggestions come from the source.** The system asks the provider for its
+  current field list (cached for an hour) to populate the dropdown, and still
+  lets you type a field name by hand when the list cannot express it.
+- **A rule for a field the record does not have stores a blank,** not a
+  missing value. All records of a kind are shaped the same way, so nothing
+  silently changes shape from one refresh to the next.
+- **Anything extra is kept as a "custom field".** Provider fields that do not
+  deserve a column of their own can be stored as key–value extras, up to 50 per
+  record.
+- **Cross-references are special.** A rule can record "this company is *that*
+  account id in another system" (`crossRef.<provider>`), which the
+  company-matching step treats as strong evidence. Only real, registered
+  systems can be named this way.
 
-| File | Role | Required? |
-|---|---|---|
-| `provider.ts` | `ProviderDefinition` — name, label, `auth` union member, scope constants, `externalIdScope` | yes |
-| `<function>-handler.ts` | `fetchPages()`, `externalIdOf()`, `externalRefsOf()` | one per function served |
-| `api.ts` | Base URL, page size, endpoint paths — env-overridable so tests can retarget them | in practice |
-| `discovery.ts` | Reads the provider's schema API for the source dropdown. One instance serves every function it switches on internally; the registrations are per `(function, provider)` | optional — absent means free-text only |
-| `defaults.ts` | Suggested starting mappings | optional — absent means an empty editor |
-| `fixtures.ts` / `fake.ts` | Canned data, and/or the static field list discovery unions with | mock and Metrifox have both; Stripe has `fixtures.ts` and no fake, because its CLI seeds a real sandbox instead; Chargebee has `fixtures.ts` for the msw suites |
+## 6. What happens during a refresh
 
-The largest directories here are **Chargebee's and Stripe's, at nine files
-each**, and they are still exactly this template: four handlers (identity,
-catalog, agreement, billing), a `provider.ts`, an `api.ts`, a `discovery.ts`, a
-`defaults.ts`, a `fixtures.ts`.
-Which is the point the README makes about Stripe, repeated — a new function on
-an existing provider is a new file and a registration, not a redesign.
-
----
-
-## 9. Layering rules — and the two places reality bends
+A refresh is one complete pass: fetch, translate, save, report. Only
+**active** connections refresh, and a connection refreshes one at a time.
 
 ```mermaid
 flowchart TB
-    A["src/app/ - pages, route handlers"] --> B["src/core/ - orchestration"]
-    B --> C["src/core/repositories/"]
-    C --> D[("Prisma / Postgres")]
-    B --> E["src/core/providers/"]
-    E --> F["outbound HTTP"]
-
-    A -.->|"never"| D
-    E -.->|"never"| D
-    B -.->|"never"| A
-
-    style A fill:#e8eef7,stroke:#4a6fa5
-    style C fill:#f7f1e8,stroke:#a5824a
+    START["Refresh requested<br/>manually or by schedule"] --> G1{"Connection healthy?"}
+    G1 -- "No" --> FAIL1["Reported: connect it first"]
+    G1 -- "Yes" --> G2{"Already refreshing?"}
+    G2 -- "Yes" --> DISC["Reported: discarded<br/>(someone else is already doing it)"]
+    G2 -- "No" --> TOK["Make sure the credential is fresh"]
+    TOK --> ORDER["Run purposes in order:<br/>Identity → Catalog → Agreement → Billing"]
+    ORDER --> FETCH["Fetch data page by page"]
+    FETCH --> MAP["Translate each record"]
+    MAP --> SAVE["Save parents first, then children"]
+    SAVE --> RELINK["Link any earlier records that were waiting"]
+    RELINK --> REPORT["Report: what was written,<br/>plus a reason for anything skipped"]
 ```
 
-Enforced by convention, not by tooling. Two accurate caveats, since the point of
-this document is that you can trust it:
+### Why the order matters
 
-1. **`sync-engine.ts` and `record-writer.ts` import `prisma` directly**
-   ([sync-engine.ts:10](../src/core/sync/sync-engine.ts#L10),
-   [record-writer.ts:12](../src/core/sync/record-writer.ts#L12)) for `SyncRun`
-   bookkeeping and the record upserts. So "repositories are the *only* layer
-   importing the Prisma client" is the intent, with these two as the exception.
-2. **`app/integrations/[id]/page.tsx` imports `prisma`**
-   (`src/app/integrations/[id]/page.tsx:16`) for a read the repositories do not
-   expose. It is the only app-layer file that does.
+Later purposes refer to earlier ones: an agreement belongs to a customer
+(from Identity) and refers to an offering (from Catalog); an invoice refers to
+a customer, an offering *and* an agreement. Running them in order means a
+single refresh can fully connect everything, rather than producing records
+that heal on the next run.
 
-The identity pass is the counter-example that shows the rule is affordable:
-`identity-resolver.ts` orchestrates a whole multi-phase write and imports no
-Prisma client at all, going through
-[`identity-repository.ts`](../src/core/repositories/identity-repository.ts) for
-every query. That file exists so **every write and every match query is scoped
-by `userId` in one reviewable place** — a single missing `userId` merges two
-tenants' companies, which is the severe failure in this schema. Account *reads*
-for the Accounts tab deliberately live in `synced-data-repository.ts` instead: a
-read-only projection for a page is not part of the matcher, and putting it in
-the guarded file would only enlarge the surface being guarded.
+Inside each purpose, the same principle applies one level down. Systems hand
+back *their own* account ids, never ours, so:
 
-Everything else holds: no `src/core` file imports from `src/app`, and no
-provider file imports the database or the OAuth service — token refresh reaches
-providers as a **callback on `HandlerContext`**, which is precisely what lets
-`tests/integration/` exercise real pagination and 401-refresh-retry paths against
-msw with no Prisma client in the process.
+1. **Parents are saved first**, building a lookup from "provider id → our
+   record".
+2. **Children are then linked through that lookup** — a contact to its company,
+   a price to its offering, an invoice line to its invoice. If a child refers
+   to a parent written by an earlier refresh, the lookup falls back to the
+   database.
 
-### Two singletons on `globalThis`, and two tables that used to be singletons
+If a parent genuinely cannot be found, the child is **kept with a blank link
+and a warning**, and its provider id retained so a later refresh links it
+automatically. Four kinds of children are the exception — agreement lines,
+agreement entitlements, agreement discounts and invoice lines — because they
+arrive together with their parent and mean nothing without it; if the parent
+was refused, they are refused as a set. Payments are the opposite case: a
+refund may have no invoice at all, so a payment can exist unlinked forever and
+that is correct.
 
-The sync in-flight lock hangs off `globalThis`, and the Prisma client does too
-outside production. Next compiles route modules separately and re-evaluates them
-on hot reload, so a plain module-level `Set` would let two concurrent requests
-each believe they held the sync lock. For Prisma the failure mode is a leaked
-connection pool per reload, which is why production gets a plain instance
-instead.
+### Nothing is ever duplicated
 
-The OAuth state store and the connect draft store were on `globalThis` for the
-same reason and are now tables (`OAuthState`, `IntegrationDraft`). Hot reload was
-only half the problem: both are written by one request and read by another, so on
-a host that runs more than one instance the second request reaches an instance
-that never saw the write. Every callback fails state validation, and every draft
-is "expired" by the time its connect page renders. A table answers both, and the
-single-use property of state comes out stronger — `consumeState` deletes the row
-it reads, so two concurrent callbacks race on one row and exactly one wins.
+Every synced record is keyed by *(connection + the provider's own id for it)*.
+Re-running a refresh therefore **updates** the existing record instead of
+creating a second one. That is why the instructions in the walkthroughs always
+say "refresh again and confirm the counts do not move".
 
-What remains genuinely single-instance is the sync lock, which fails safe: the
-worst case is one integration synced twice at once, not a broken connect.
+### A few lists are cleaned up on every refresh
 
----
+Four kinds of child lists are **reconciled**: agreement lines, agreement
+entitlements, agreement discounts and invoice lines. If something was removed
+at the provider — an add-on taken off, a line deleted from a draft invoice —
+the stored copy is removed too, with two safety gates: the list must be mapped
+in the first place, and the provider must have signaled that it finished
+sending. That second gate matters because a list cut short by paging looks
+exactly like a genuinely shorter list.
+
+Everything else is update-only. If a record stops arriving, it stays until the
+connection is deleted. This is a known limitation (it is why a feature removed
+from a plan can linger in the catalog), not a bug.
+
+### One bad record never stops the job
+
+Problems are recorded per record with a reason and a severity:
+
+- **Skipped (rejected)** — the record cannot be stored meaningfully, for
+  example a contact with a malformed email address. Email is a person's main
+  identifier, and a broken one would poison later matching.
+- **Warning** — the record is stored but something is off, for example an
+  unrecognized company type, or a company link that could not be resolved.
+
+The refresh finishes and reports **partial** with a full list of reasons, which
+is far more useful than a single error that hides nineteen good records. A
+refresh that had no issues reports **success**; one that could not continue
+reports **failed**; one that found another refresh already running is
+**discarded**.
+
+### Company matching runs afterwards
+
+When the refresh finishes, the platform runs the company-matching pass
+(section 7). It is deliberately kept separate and its failure never marks the
+refresh as failed — the data that arrived is already safely stored.
+
+## 7. Bringing one company together
+
+A refresh is per connection; company matching is **per owner**, because no
+single connection can see that the same company exists in three of them.
+
+```mermaid
+flowchart LR
+    H["Customer record<br/>from HubSpot"] --> A["Combined company profile<br/>(Customer Account)"]
+    S["Customer record<br/>from Stripe"] --> A
+    M["Customer record<br/>from Metrifox"] --> A
+    A --- E["Evidence used to match:<br/>same email · same website ·<br/>same contact's email ·<br/>explicit cross-reference"]
+```
+
+### What counts as evidence
+
+| Evidence | Strength |
+|---|---|
+| An explicit cross-reference (this id over there is that id over here) | Strongest |
+| A shared company email address | Strong |
+| A shared website domain | Standard |
+| A shared contact's email address | Standard |
+
+The order matters when two different profiles could match: the stronger kind of
+evidence wins. Free email providers (gmail.com and the like) are refused as
+website evidence — otherwise every customer using a free mailbox would merge
+into one giant company.
+
+### What the matcher will not do
+
+- **It never merges two already-combined companies on a guess.** If two
+  profiles both claim the same email, the platform raises the clash for a
+  person to review instead of choosing. A wrongly merged company has no
+  automatic undo, so guessing is the one move that is never worth it.
+- **It never splits on the absence of evidence.** If a cross-reference stops
+  being supplied, the company it already formed is not taken apart.
+- **It never overrules a person.** Verdicts recorded on the Accounts screen —
+  "same company" or "not this company" — outrank every automatic signal and
+  survive every later pass.
+- **It never uses priority to change who is grouped.** Priority (a number per
+  connection, lower wins) only decides whose version of a *field* is shown
+  when systems disagree. Membership is decided by evidence alone.
+
+### Merging the details
+
+Once records are grouped, each field of the combined profile is decided
+separately:
+
+- **The highest-priority connection that actually has a value wins.** A system
+  that has nothing on file does not blank out another system's value, so
+  "missing" never beats "present".
+- **The Accounts screen shows which connection supplied each field** (a
+  provider chip), so the combined profile never looks like it came from
+  nowhere.
+- **Creation date is the one exception:** it takes the *earliest* date any
+  system reports. If a CRM saw the company in 2019, the company existed in 2019.
+- **Where equal-priority systems disagree on a value, the conflict is shown**
+  rather than an arbitrary pick dressed up as a decision.
+
+## 8. When things go wrong
+
+| Situation | What happens |
+|---|---|
+| A sign-in permission is close to expiring | Renewed quietly before it lapses. |
+| A sign-in permission cannot be renewed | The connection is marked **needs reconnect** and pauses. Reconnecting keeps all prior work. |
+| An API key stops working | Same: **needs reconnect**, preserved settings. |
+| The provider asks the platform to slow down | It waits as instructed and repeats the same request, so a long fetch resumes where it left off rather than starting over. |
+| A temporary provider outage | The whole refresh is retried with increasing waits, up to a limit. |
+| One record is malformed | That record is skipped or flagged, with a reason; everything else is saved; the refresh reports **partial**. |
+| Two refreshes are requested at once | One runs; the other is told it was **discarded**. Nothing is silently ignored. |
+| A refresh fails completely | Everything already saved stays saved; the next scheduled refresh tries again. |
+| A connection is deleted | Its synced records go with it. If the provider could not be reached to revoke access, the deletion still completes and the failed revocation is recorded in the server log, so the provider key can be revoked by hand. |
+
+The guiding rule is **fail small**. A problem with one record, one page, or one
+purpose fails only that scope, and reports exactly what happened — the
+alternative, losing an entire refresh over one bad row, is what makes
+integration tools untrustworthy.
+
+## 9. Keeping data safe
+
+- **Credentials are encrypted** with AES-256-GCM before storage, using a key
+  that must be supplied at deployment. There is deliberately no built-in
+  default key: a key that ships with the code is not protection. Credentials
+  are never shown in the interface and never written to logs.
+- **Sign-in passwords are hashed** with scrypt; sessions are signed, and every
+  page sits behind the sign-in gate.
+- **Everything is scoped to its owner.** Connections, records, combined
+  profiles and translation rules all belong to one owner account, and every
+  read and write carries that owner in its conditions. This is the most
+  important safety property in the system: the failure to prevent is not a
+  missed match (visible, fixable) but one owner's customers appearing under
+  another owner's company.
+- **Approval redirects are protected** against tampering with a single-use,
+  expiring code: a callback that does not present a code the platform issued is
+  refused, and two simultaneous callbacks bearing the same code cannot both
+  succeed.
+- **The scheduled refresh endpoint requires a secret** in production, so it
+  cannot be used by strangers to make the platform call providers on demand.
+- **Practice systems are off by default.** Mock CRM and the built-in Metrifox
+  stand-in only run when a deployment deliberately enables them.
 
 ## 10. What runs where
 
-```mermaid
-flowchart LR
-    subgraph browser["Browser"]
-        CC["8 client components<br/><i>new/form - mapping/editor -<br/>sync-panel - key-form - delete-button -<br/>accounts-panel - identity-panel -<br/>data-table</i>"]
-    end
+| Piece | Role |
+|---|---|
+| **Pages** | Read stored data and render it (integrations, synced data, catalog, agreements, billing). |
+| **API routes** | The only things that change data: create a connection, save rules, start a refresh, record a verdict, import a crosswalk. |
+| **Scheduled refresh** | A worker pings the platform's refresh endpoint about once a minute; the platform runs whichever connections are due. A platform scheduler can do the same job in deployment. |
+| **Provider plugs** | Talk to the outside systems. They contain no direct database access — the core hands them everything they need — which is what lets them be tested against a simulated provider. |
+| **Practice mode** | An internal stand-in for Metrifox and the full Mock CRM, served over real web requests, so the real provider code runs unchanged with no credentials. |
 
-    subgraph server["Next.js server"]
-        RSC["Server components<br/><i>render from the DB directly</i>"]
-        RH["Route handlers<br/><i>the only mutation surface</i>"]
-        FAKE["/api/fake/metrifox/*<br/>/api/oauth/mock/*<br/><i>in-app fakes over real HTTP</i>"]
-    end
+## 11. Adding a new system or purpose
 
-    subgraph outside["Outside the app"]
-        W["scripts/worker.ts<br/><i>polls every 60s</i>"]
-        EXT["HubSpot - Salesforce -<br/>Metrifox - Stripe -<br/>Chargebee - Stigg"]
-    end
+The design goal is that **adding is extending, not rebuilding**:
 
-    CC -->|fetch| RH
-    RSC -->|direct read| DB[("Postgres")]
-    RH --> DB
-    RH --> EXT
-    W -->|"POST /api/cron/sync<br/>bearer CRON_SECRET"| RH
-    RH -.->|"when the fakes<br/>are enabled"| FAKE
+- **A new system that connects like an existing one** is a folder of plug files
+  plus registration lines: how to authenticate, how to page through each kind
+  of data it offers, which fields exist, and what sensible default rules look
+  like. The engine, the screens and the database do not change.
+- **A new purpose** is registered once, and appears in the picker immediately —
+  correctly reporting "no system supports this yet" until a system plug is
+  added for it. If it stores new kinds of records, those get their own storage
+  definitions and translation targets.
+- **A genuinely new *kind* of connection** (for example, the first key-based
+  system after only sign-in systems existed) is the expensive case, because the
+  connection flow itself must learn the new style. Once taught, every later
+  system of that kind is cheap again — which is exactly how Stripe, Chargebee
+  and Stigg were added after Metrifox pioneered key-based connections.
 
-    style FAKE fill:#eef7ee,stroke:#5a8a5a
-```
+## 12. For engineers: where this lives
 
-Pages read state; route handlers change it. The mock provider and the Metrifox
-fake are served **over real HTTP from routes inside this app**, so the real
-clients run completely unchanged — real headers, real pagination, real status
-codes, real failure policy. That is why the whole flow is walkable with no
-credentials at all.
+The repository's [`README.md`](../README.md) has the full engineering guide.
+The short version:
 
----
+| To change | Look at |
+|---|---|
+| Which purposes and systems exist, and their permissions | `src/core/bootstrap.ts` — every registration is in this one file |
+| Which fields translation rules may target | `src/core/object-schema.ts` and the per-purpose schemas beside it |
+| Which records a purpose writes, and in what order | `src/core/object-schema.ts` (`FUNCTION_OBJECTS`, `FUNCTION_WRITE_ORDER`) |
+| How a system is paged or queried | `src/core/providers/<system>/<purpose>-handler.ts` and `api.ts` |
+| The field dropdown and default rules | `src/core/providers/<system>/discovery.ts`, `defaults.ts` |
+| Retry and rate-limit behavior | `src/core/providers/http.ts` (one request) and `src/core/sync/sync-engine.ts` (one refresh) |
+| Database access | `src/core/repositories/` |
+| Connection status rules | `src/core/repositories/integration-repository.ts` |
+| The schedule | `src/core/sync/scheduler.ts` |
+| What counts as matching evidence | `src/core/identity/evidence.ts`; winner rules in `survivorship.ts`; address normalization in `normalize.ts` |
+| The database schema | `prisma/schema.prisma` — described in [`data-model.md`](./data-model.md) |
 
-## 11. Adding things — the two recipes
-
-**A new provider** that shares an existing credential kind:
-
-1. `mkdir src/core/providers/<name>/` and fill in the template from §8.
-2. Add scope constants and export a `ProviderDefinition`.
-3. In [`bootstrap.ts`](../src/core/bootstrap.ts): `registerProvider`, add the
-   provider to the relevant function's `scopesByProvider`, then
-   `registerSyncHandler` and `registerFieldDiscovery`.
-4. Register defaults in
-   [`defaults-registry.ts`](../src/core/providers/defaults-registry.ts).
-
-No orchestration code changes. Introducing the *first* provider of a new
-credential kind is a different matter — Metrifox required splitting
-`ProviderDefinition.auth` into a union and teaching the connect flow, the session
-client and the refresh path about a credential that never expires. Every
-API-key provider after that has been a directory and registration calls again.
-Stripe was the first test, despite a differently shaped credential
-(`Authorization: Bearer` plus a pinned API version, absorbed by `authHeaders` on
-the session options) and cursor rather than page-number pagination. Chargebee was
-the second, and a harder one: HTTP Basic with the site name as the username,
-from a pasted `site:api_key` pair, a `tenant`-scoped external id keyed on that
-site, **four** handlers at once — and still no orchestration, route or UI
-change. Stigg was the third, and a fifth credential shape again: a custom
-`X-API-KEY` header, opaque server-issued cursors, a synthesized billing contact,
-and a `tenant`-scoped id whose scope is not knowable from the list API at all —
-so it emits no identity key, the same honest fail-closed state Metrifox and
-HubSpot are in. Registering it was a directory and registration calls, exactly
-as this list predicts. Its catalog handler followed the same way: features and
-entitlements are first-class in Stigg, so it is the first provider whose catalog
-maps both natively, and adding it was a second handler file plus a scope set —
-no orchestration change. Its agreement handler was the third file, and the first
-agreement handler that needed no fan-out at all: Stigg's subscription list
-carries the plan, the addons, the price overrides and the coupons inline, so a
-single endpoint and a single scope cover the whole function. It is also the
-first agreement handler to *decline* an object on purpose — `agreementEntitlement`
-is unbuilt because Stigg states effective entitlement values only at the
-customer level, where they fold every subscription together.
-
-**A new function:** `registerFunction` with its `scopesByProvider`, and it
-appears in the picker immediately — with no handler it correctly reports that no
-provider supports it yet. Add a handler per provider to make it real, plus a
-target schema alongside the existing four if it writes new record types.
-
-Concretely, for a function that writes new objects, in the order the compiler
-will ask for them:
-
-1. Add the objects to `TARGET_OBJECTS` in
-   [`types/common.ts`](../src/core/types/common.ts), plus any enum union they
-   need. `OBJECT_SCHEMAS` is exhaustive over that union, so this step breaks the
-   build until step 2 is done — which is the intended pressure.
-2. Write `<function>-schema.ts` and register it in `object-schema.ts`, in
-   `FUNCTION_OBJECTS` (parents first) and in `FUNCTION_WRITE_ORDER`.
-3. Add the models to [`schema.prisma`](../prisma/schema.prisma) and
-   `npm run db:push`.
-4. Add the writers and a branch to `writeRecordsForFunction` /
-   `relinkOrphansForFunction` in
-   [`record-writer.ts`](../src/core/sync/record-writer.ts).
-5. Provider side: a handler, a branch in that provider's `discovery.ts`
-   (exhaustive on Stripe, so the compiler asks), field lists in `fixtures.ts`,
-   defaults in `defaults.ts`, and registrations in `bootstrap.ts` and
-   `defaults-registry.ts`.
-6. The seams with no compiler and no test behind them, which is where a new
-   object actually gets forgotten: the nav in `app/layout.tsx`, the
-   delete-confirmation total in `app/integrations/[id]/page.tsx`,
-   `OBJECT_LABELS` in `sync-panel.tsx`, and the unresolved-association report in
-   `scripts/db-maintenance.mts`.
-
-`billing` is the worked example of what that list looks like end to end: three
-objects, one new page (`/billing`), four writers, one of which reconciles, and
-five providers that changed nothing.
-
----
-
-## 12. How the tests are layered
-
-The three suites map onto the layers above, which is the fastest way to know
-where a new test belongs.
-
-| Suite | Exercises | Needs |
-|---|---|---|
-| `tests/unit/` | Pure logic — mapper, crypto, SOQL, clock, scheduler policy, the four object schemas, each provider's status/amount maps, identity normalization, survivorship, assertions, crosswalk parsing, the mapping migration | nothing |
-| `tests/property/` | The invariants that carry weight: scope isolation, provider filtering, mapping round-trip, target validation, absent-source-yields-null, upsert identity, pagination completeness, and identity's own set below | fast-check |
-| `tests/integration/` | Handlers against mocked provider APIs — pagination, 429 with and without `Retry-After`, 401 then refresh then retry, field discovery, one file per function per provider for catalog/agreement/billing — plus the resolution pass and the writers against a real database | msw, plus a throwaway Postgres schema built by `tests/global-setup.ts` |
-
-`identity-resolution.property.test.ts` carries the properties that would be
-tedious to argue by example: **totality** (every customer ends with an account),
-**idempotence** (a second pass changes no partition *and* no account id),
-**order-independence** (shuffling input rows yields the same partition), and
-that **precedence never repartitions**.
-
-Two things about the suite's shape are deliberate and easy to undo by accident:
-
-- **Vitest runs test files in parallel forks against one shared Postgres
-  schema.** An unscoped `findFirst` in a test is therefore a cross-test hazard,
-  not a style preference. `tests/integration/identity-helpers.ts` builds an
-  isolated tenant per test for exactly this reason.
-- **The scheduler tick is not driven end to end.** `runScheduledSyncs` sweeps
-  every integration in the database by design, so a test tick would sync and
-  resolve tenants another file is mid-assertion on. `distinctOwners` is exported
-  and unit-tested instead, and `resolveAfterSync` is covered against a real
-  database.
-
-`npm test` runs `tsc --noEmit` **first, as a gate**: Vitest transpiles without
-typechecking, so a suite can otherwise pass green over a build that does not
-compile.
+Tests are arranged in three layers: pure logic (`tests/unit`), the invariants
+that must always hold (`tests/property`), and provider plugs exercised against
+simulated provider APIs plus the matching pass against a real database
+(`tests/integration`).

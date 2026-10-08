@@ -32,6 +32,7 @@
   <nav class="pageswitch" aria-label="Pages">
     <a href="index.html">Architecture</a>
     <a href="data-model.html" aria-current="page">Data model</a>
+    <a href="revenue-graph.html">Revenue graph</a>
   </nav>
   <div class="spacer"></div>
   <button class="btn" id="themeBtn" type="button">Dark mode</button>
@@ -45,15 +46,21 @@
 
     <div class="lede">
       <h1>Data model</h1>
-      <p>Fifteen tables in three groups. <b>The sync spine</b> — seven tables hanging off
-         <code>Integration</code>, plus the two scratch tables holding a connect that has not
-         finished — is §1. <b>The identity layer</b> is §2: four tables scoped to
-         <code>User</code> instead, because resolving one company across three connections is by
-         definition not something any one <code>Integration</code> owns. Transcribed from
-         <code>prisma/schema.prisma</code> and the const-union types in
-         <code>src/core/types/common.ts</code>.</p>
-      <p>The HTML companion to <code>docs/data-model.md</code>. Hover any table to isolate its
-         relationships, and use the control in §1 to watch a delete propagate.</p>
+      <p>Twenty-eight tables in six groups. <b>The sync spine</b> (§1) is the connection
+         machinery — seven tables hanging off <code>Integration</code>, plus the two scratch
+         tables holding a connect that has not finished — together with the identity records it
+         writes. <b>The commercial records</b> (§2) are what the catalog, agreement and billing
+         functions write: products and prices, subscriptions with their lines, entitlements and
+         discounts, invoices and payments. <b>The identity layer</b> (§3) is four tables scoped
+         to <code>User</code> instead, because resolving one company across three connections is
+         by definition not something any one <code>Integration</code> owns. §4–§6 cover
+         uniqueness, the string-typed unions and JSON columns, and the connection status
+         lifecycle.</p>
+      <p>Transcribed from <code>prisma/schema.prisma</code> and the const-union types in
+         <code>src/core/types/common.ts</code>. Hover any table to isolate its relationships, and
+         use the control in §1 to watch a delete propagate — the explorer's canvas is §1; the
+         tables drawn in §2 and §3 have their delete behaviour stated in prose. The
+         plain-language companion is <a href="../data-model.md">docs/data-model.md</a>.</p>
       <div class="legend">
         <span class="legend-item"><span class="badge pk" style="width:26px">PK</span>Primary key</span>
         <span class="legend-item"><span class="badge fk" style="width:26px">FK</span>Foreign key</span>
@@ -67,7 +74,7 @@
       columns are modelled as <code>String</code> and constrained in application code — a shape
       inherited from when the tests ran on SQLite, which has neither <code>enum</code> nor
       <code>Json</code> through Prisma. Everything now runs Postgres, so promoting them to native
-      <code>enum</code> / <code>jsonb</code> is available but not yet done. See §4.
+      <code>enum</code> / <code>jsonb</code> is available but not yet done. See §5.
     </div>
 
 
@@ -78,7 +85,8 @@
         <p><code>Integration</code> is the tenancy boundary. Every synced record, mapping rule,
            discovered field and run carries <code>integrationId</code> — which is why deleting one
            integration is a clean sweep, and why no query leaks another integration's data by
-           omission. The four identity tables are the exception, and they are in §2.</p>
+           omission. The four identity tables are the exception, and they are in §3. The
+           commercial records written by the catalog, agreement and billing functions are §2.</p>
         <p>The two marked <i>scratch</i> sit outside that spine. Both expire in 30 minutes and hold
            a connect in progress rather than anything the user would miss. They are tables at all
            because each is written by one request and read by a later one — put them in memory and
@@ -214,10 +222,10 @@
                 <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
                 <li><span class="badge fk">FK</span><span class="fname">userId</span><span class="ftype">String</span></li>
                 <li><span class="badge none"></span><span class="fname">providerName</span><span class="ftype">String</span></li>
-                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §5</span></li>
+                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §6</span></li>
                 <li><span class="badge none"></span><span class="fname">instanceLabel</span><span class="ftype">String</span></li>
                 <li><span class="badge none"></span><span class="fname">syncIntervalHours</span><span class="ftype">Int = 24</span></li>
-                <li><span class="badge none"></span><span class="fname">identityPriority</span><span class="ftype">Int = 100 · §2</span></li>
+                <li><span class="badge none"></span><span class="fname">identityPriority</span><span class="ftype">Int = 100 · §3</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">authorizationTimestamp</span><span class="ftype">DateTime</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">lastSyncTimestamp</span><span class="ftype">DateTime</span></li>
                 <li><span class="badge none"></span><span class="fname">pendingTokenRevocation</span><span class="ftype">Bool = false</span></li>
@@ -236,14 +244,14 @@
                 <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
                 <li><span class="badge none"></span><span class="fname">name</span><span class="ftype">String</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">domain</span><span class="ftype">String</span></li>
-                <li class="opt"><span class="badge none"></span><span class="fname">email</span><span class="ftype">String · §2</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">email</span><span class="ftype">String · §3</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">industry</span><span class="ftype">String</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">createDate</span><span class="ftype">DateTime</span></li>
-                <li class="opt"><span class="badge none"></span><span class="fname">type</span><span class="ftype">String · §4</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">type</span><span class="ftype">String · §5</span></li>
                 <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
-                <li><span class="badge none"></span><span class="fname">crossRefs</span><span class="ftype">JSON = {} · §4</span></li>
-                <li><span class="badge none"></span><span class="fname">importedCrossRefs</span><span class="ftype">JSON = {} · §4</span></li>
-                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">customerAccountId</span><span class="ftype">SetNull · §2</span></li>
+                <li><span class="badge none"></span><span class="fname">crossRefs</span><span class="ftype">JSON = {} · §5</span></li>
+                <li><span class="badge none"></span><span class="fname">importedCrossRefs</span><span class="ftype">JSON = {} · §5</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">customerAccountId</span><span class="ftype">SetNull · §3</span></li>
                 <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
               </ul>
             </div>
@@ -270,12 +278,11 @@
               <ul class="ent-f">
                 <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
                 <li><span class="badge fk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
-                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §5</span></li>
                 <li><span class="badge none"></span><span class="fname">trigger</span><span class="ftype">String = manual</span></li>
                 <li><span class="badge none"></span><span class="fname">startedAt</span><span class="ftype">DateTime</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">completedAt</span><span class="ftype">DateTime</span></li>
-                <li><span class="badge none"></span><span class="fname">customerCount</span><span class="ftype">Int = 0</span></li>
-                <li><span class="badge none"></span><span class="fname">contactCount</span><span class="ftype">Int = 0</span></li>
+                <li><span class="badge none"></span><span class="fname">recordCountsJson</span><span class="ftype">JSON = {}</span></li>
                 <li><span class="badge none"></span><span class="fname">attempt</span><span class="ftype">Int = 1</span></li>
                 <li><span class="badge none"></span><span class="fname">errorsJson</span><span class="ftype">JSON = []</span></li>
               </ul>
@@ -298,10 +305,378 @@
     </figure>
 
 
-    <!-- =============================================== 2 · IDENTITY LAYER == -->
+    <!-- ============================================== 2 · COMMERCIAL ====== -->
+    <figure class="fig" id="fig-commercial">
+      <div class="fig-head">
+        <h2><span class="n">2</span>The commercial records</h2>
+        <p>What the catalog, agreement and billing functions write — written today by Stripe,
+           Chargebee and Stigg (catalog and agreement) and Stripe and Chargebee (billing), and
+           shaped for the CRMs' product, contract and order objects too. Three families hang off
+           <code>Integration</code> exactly as <code>Customer</code> does (§1), keyed
+           <code>(integrationId, externalSourceId)</code> and cascading with the connection that
+           owns them.</p>
+        <p>Catalog is independent — a product exists whether or not anyone bought it. Agreement
+           references a customer (identity, §1) and an offering (catalog). Billing references a
+           customer, an offering and an agreement. That dependency chain is why a sync runs
+           identity → catalog → agreement → billing, and why every link that can point outside
+           the run is nullable with the provider's own id kept beside it: the row stays readable
+           — and repairable by a later pass — even when the other function is not connected.</p>
+      </div>
+
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+
+      <div class="viewport">
+        <div class="canvas dg-er" id="c-comm" style="grid-template-columns:minmax(205px,1fr) minmax(225px,1.05fr) minmax(215px,1fr) minmax(205px,1fr);min-width:1180px" data-edges='[
+          {"from":"c-product","to":"c-offering","fs":"bottom","ts":"top","label":"offered as · 0..n"},
+          {"from":"c-offering","to":"c-price","fs":"bottom","ts":"top","label":"priced at · 0..n"},
+          {"from":"c-offering","to":"c-entl","fs":"right","ts":"left","label":"includes · 0..n"},
+          {"from":"c-feature","to":"c-entl","fs":"right","ts":"left","label":"attached · 0..n"},
+          {"from":"c-agreement","to":"c-subscription","fs":"bottom","ts":"top","label":"details · 0..1"},
+          {"from":"c-agreement","to":"c-invoice","fs":"right","ts":"left","label":"billed under · 0..n"},
+          {"from":"c-agreement","to":"c-agitem","fs":"right","ts":"left","label":"lists · 0..n"},
+          {"from":"c-agreement","to":"c-agentl","fs":"right","ts":"left","label":"grants · 0..n"},
+          {"from":"c-agreement","to":"c-agdisc","fs":"right","ts":"left","label":"discounts · 0..n"},
+          {"from":"c-invoice","to":"c-invline","fs":"right","ts":"left","label":"itemized · 0..n"},
+          {"from":"c-invoice","to":"c-payment","fs":"right","ts":"left","label":"settled · 0..n"}
+        ]'>
+
+          <div class="col">
+            <div class="node ent" id="c-product">
+              <div class="ent-h">Product <span class="rel">what is sold</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String · upsert key</span></li>
+                <li><span class="badge none"></span><span class="fname">name</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">description</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">active</span><span class="ftype">Bool · three-state</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="c-offering">
+              <div class="ent-h">Offering <span class="rel">plan or item</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">name</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">description</span><span class="ftype">String</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">productId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalProductId</span><span class="ftype">String · kept for relink</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">active</span><span class="ftype">Bool · three-state</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="c-price">
+              <div class="ent-h">Price <span class="rel">the money</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">name</span><span class="ftype">String</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">offeringId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalOfferingId</span><span class="ftype">String · kept for relink</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">amountMinor</span><span class="ftype">Int · minor units</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">currency</span><span class="ftype">String · as cased</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">billingModel</span><span class="ftype">String · §5</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">blockSize</span><span class="ftype">Int · Stigg blocks</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">interval</span><span class="ftype">String · §5</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">intervalCount</span><span class="ftype">Int</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">active</span><span class="ftype">Bool · three-state</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="c-feature">
+              <div class="ent-h">Feature <span class="rel">the definition</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">name</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">lookupKey</span><span class="ftype">String · app gates on it</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">isMetered</span><span class="ftype">Bool · null = not told</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">unit</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="node ent" id="c-entl">
+              <div class="ent-h">Entitlement <span class="rel">offering × feature</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">featureId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalFeatureId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge fk">FK</span><span class="fname">offeringId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalOfferingId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">value</span><span class="ftype">String · provider verbatim</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">valueName</span><span class="ftype">String · level label</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">limitValue</span><span class="ftype">Int · null = no stated limit</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent spine" id="c-agreement">
+              <div class="ent-h">Agreement <span class="rel">the shared node</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">name</span><span class="ftype">String · often synthesized</span></li>
+                <li><span class="badge none"></span><span class="fname">agreementType</span><span class="ftype">String · required · §5</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §5</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">customerId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalCustomerId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge fk">FK</span><span class="fname">offeringId</span><span class="ftype">SetNull · nominated line</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalOfferingId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">effectiveDate</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">endDate</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">currency</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">providerMetadata</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="c-subscription">
+              <div class="ent-h">Subscription <span class="rel">subscription detail</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">agreementId</span><span class="ftype">Cascade · required</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">currentPeriodStart</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">currentPeriodEnd</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">trialStartsAt</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">trialEndsAt</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">canceledAt</span><span class="ftype">DateTime · requested</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">cancelAtPeriodEnd</span><span class="ftype">Bool</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">cancelAt</span><span class="ftype">DateTime · actually stops</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">nextBillingAt</span><span class="ftype">DateTime · renews next</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">billingPeriod</span><span class="ftype">String · §5</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">billingPeriodCount</span><span class="ftype">Int</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">collectionMethod</span><span class="ftype">String · §5</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">quantity</span><span class="ftype">Int</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">itemCount</span><span class="ftype">Int · provider's count</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">providerMetadata</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="node ent" id="c-invoice">
+              <div class="ent-h">Invoice <span class="rel">the document</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">number</span><span class="ftype">String · null while draft</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §5</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">customerId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalCustomerId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge fk">FK</span><span class="fname">agreementId</span><span class="ftype">SetNull · null for mixed invoices</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalAgreementId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">currency</span><span class="ftype">String</span></li>
+                <li class="opt sep"><span class="badge none"></span><span class="fname">subtotalMinor</span><span class="ftype">Int · stated</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">discountMinor</span><span class="ftype">Int · stated</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">taxMinor</span><span class="ftype">Int · stated</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">totalMinor</span><span class="ftype">Int · stated, never computed</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">amountDueMinor</span><span class="ftype">Int · stated</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">amountPaidMinor</span><span class="ftype">Int · stated, never summed</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">issuedAt</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">dueAt</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">periodStart</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">periodEnd</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">paidAt</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">hostedUrl</span><span class="ftype">String · Stripe only</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">providerMetadata</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="c-agitem">
+              <div class="ent-h">AgreementItem <span class="rel">a priced line · reconciled</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String · upsert + reconcile key</span></li>
+                <li><span class="badge fk">FK</span><span class="fname">agreementId</span><span class="ftype">Cascade · required</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">priceId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalPriceId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge fk">FK</span><span class="fname">offeringId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalOfferingId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">quantity</span><span class="ftype">Int</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">position</span><span class="ftype">Int · provider's order</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">itemType</span><span class="ftype">String · §5</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">billingModel</span><span class="ftype">String · §5</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">unitPriceMinor</span><span class="ftype">Int · stated per this subscription</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">freeQuantity</span><span class="ftype">Int</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">billingCycles</span><span class="ftype">Int · null = recurs</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">providerMetadata</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="c-agentl">
+              <div class="ent-h">AgreementEntitlement <span class="rel">effective, not catalog</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String · synthesized when needed</span></li>
+                <li><span class="badge fk">FK</span><span class="fname">agreementId</span><span class="ftype">Cascade · required</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">featureId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalFeatureId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">value</span><span class="ftype">String · provider verbatim</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">valueName</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">limitValue</span><span class="ftype">Int · null = no stated limit</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">isOverride</span><span class="ftype">Bool · null = not told</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">isEnabled</span><span class="ftype">Bool · granted at all</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">providerMetadata</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="c-agdisc">
+              <div class="ent-h">AgreementDiscount <span class="rel">as stated</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
+                <li><span class="badge fk">FK</span><span class="fname">agreementId</span><span class="ftype">Cascade · required</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalCouponId</span><span class="ftype">String · no coupon table</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">label</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">kind</span><span class="ftype">String · §5</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">percentOff</span><span class="ftype">Int · whole percent</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">amountOffMinor</span><span class="ftype">Int · minor units</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §5</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">startsAt</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">endsAt</span><span class="ftype">DateTime</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">providerMetadata</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="node ent" id="c-invline">
+              <div class="ent-h">InvoiceLine <span class="rel">the money · reconciled</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String · upsert + reconcile key</span></li>
+                <li><span class="badge fk">FK</span><span class="fname">invoiceId</span><span class="ftype">Cascade · required</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">description</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">quantity</span><span class="ftype">Int</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">unitAmountMinor</span><span class="ftype">Int · can be null on decimals</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">amountMinor</span><span class="ftype">Int · the line total</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">periodStart</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">periodEnd</span><span class="ftype">DateTime</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">isProration</span><span class="ftype">Bool</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">itemType</span><span class="ftype">String · §5</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">priceId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalPriceId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge fk">FK</span><span class="fname">offeringId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalOfferingId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">providerMetadata</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+
+            <div class="node ent" id="c-payment">
+              <div class="ent-h">Payment <span class="rel">movement, not allocation</span><span class="ent-state"></span></div>
+              <ul class="ent-f">
+                <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
+                <li><span class="badge fk uk">FK</span><span class="fname">integrationId</span><span class="ftype">String</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">externalSourceId</span><span class="ftype">String</span></li>
+                <li class="opt sep"><span class="badge fk">FK</span><span class="fname">invoiceId</span><span class="ftype">SetNull · refunds name none</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalInvoiceId</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge fk">FK</span><span class="fname">customerId</span><span class="ftype">SetNull</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">externalCustomerId</span><span class="ftype">String</span></li>
+                <li><span class="badge none"></span><span class="fname">kind</span><span class="ftype">String · required · §5</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">status</span><span class="ftype">String · §5</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">amountMinor</span><span class="ftype">Int</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">currency</span><span class="ftype">String</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">processedAt</span><span class="ftype">DateTime · charge or refund</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">method</span><span class="ftype">String · free text, ~90 Stripe values</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">failureReason</span><span class="ftype">String · bounded</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">isDisputed</span><span class="ftype">Bool</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">providerReference</span><span class="ftype">String · gateway id</span></li>
+                <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">providerMetadata</span><span class="ftype">JSON = {}</span></li>
+                <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <p class="fig-note"><strong>Where each record's links may dangle.</strong> Every
+        association that can name a row from another function is nullable and <code>SetNull</code>,
+        with the provider's own id kept beside it (<code>externalCustomerId</code>,
+        <code>externalPriceId</code>, <code>externalAgreementId</code>…). If the other function is
+        not connected, the row still arrives — readable and wired up by a later run once the
+        missing function is connected. The pass that links what was waiting is the same relink
+        step the identity records use.</p>
+
+      <p class="fig-note"><strong>Two kinds of entitlement, never added together.</strong>
+        <code>Entitlement</code> is the catalog question — "the Pro offering includes 50 seats".
+        <code>AgreementEntitlement</code> is the subscriber question — what this customer actually
+        gets, inherited values and per-subscription overrides folded into one list, with
+        <code>isOverride</code> saying which. The two overlap by construction, so an aggregate that
+        adds them double-counts; a reader picks one.</p>
+
+      <p class="fig-note"><strong>Money is stated, never computed.</strong>
+        <code>AgreementItem</code> deliberately has no amount — the price lives on
+        <code>Price</code>, and an agreement's true total is the provider's to state.
+        <code>AgreementDiscount</code> carries an amount (<code>amountOffMinor</code>) because a
+        discount's value <em>is</em> its amount. <code>Invoice</code> totals go in verbatim and
+        nothing is summed into them; <code>InvoiceLine</code> is the one place line amounts are
+        stored, because an invoice line <em>is</em> the money. <code>Payment</code> rows are
+        settled movements only — authorizations are not written — so their count will not match a
+        provider's transaction list. Correct and intended.</p>
+
+      <p class="fig-note"><strong>The four reconciled lists.</strong>
+        <code>AgreementItem</code>, <code>AgreementEntitlement</code>,
+        <code>AgreementDiscount</code> and <code>InvoiceLine</code> are the only synced rows that
+        get <em>deleted</em> on refresh when the provider no longer lists them — guarded by two
+        conditions: the list must be mapped, and the handler must have declared the list complete.
+        Everything else is update-only: a record that stops arriving stays until its connection is
+        deleted.</p>
+    </figure>
+
+
+    <!-- =============================================== 3 · IDENTITY LAYER == -->
     <figure class="fig" id="fig-accounts">
       <div class="fig-head">
-        <h2><span class="n">2</span>The identity layer</h2>
+        <h2><span class="n">3</span>The identity layer</h2>
         <p>Everything in §1 is scoped by <code>Integration</code>. These four are not, and that is
            the whole point of them: one real company appears as three <code>Customer</code> rows in
            three connections, so the thing that says <em>these are one company</em> cannot belong to
@@ -369,9 +744,9 @@
                 <li class="opt"><span class="badge none"></span><span class="fname">email</span><span class="ftype">String</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">industry</span><span class="ftype">String</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">createDate</span><span class="ftype">earliest wins</span></li>
-                <li class="opt"><span class="badge none"></span><span class="fname">type</span><span class="ftype">String · §4</span></li>
+                <li class="opt"><span class="badge none"></span><span class="fname">type</span><span class="ftype">String · §5</span></li>
                 <li><span class="badge none"></span><span class="fname">customFields</span><span class="ftype">JSON = {}</span></li>
-                <li><span class="badge none"></span><span class="fname">fieldProvenance</span><span class="ftype">JSON = {} · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">fieldProvenance</span><span class="ftype">JSON = {} · §5</span></li>
                 <li><span class="badge none"></span><span class="fname">createdAt</span><span class="ftype">DateTime</span></li>
                 <li><span class="badge none"></span><span class="fname">updatedAt</span><span class="ftype">DateTime</span></li>
               </ul>
@@ -382,8 +757,8 @@
               <ul class="ent-f">
                 <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
                 <li><span class="badge fk">FK</span><span class="fname">userId</span><span class="ftype">Cascade</span></li>
-                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">SyncRunStatus · §4</span></li>
-                <li><span class="badge none"></span><span class="fname">trigger</span><span class="ftype">String = sync · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">status</span><span class="ftype">SyncRunStatus · §5</span></li>
+                <li><span class="badge none"></span><span class="fname">trigger</span><span class="ftype">String = sync · §5</span></li>
                 <li><span class="badge none"></span><span class="fname">startedAt</span><span class="ftype">DateTime</span></li>
                 <li class="opt"><span class="badge none"></span><span class="fname">completedAt</span><span class="ftype">DateTime</span></li>
                 <li><span class="badge none"></span><span class="fname">accountsCreated</span><span class="ftype">Int = 0</span></li>
@@ -391,7 +766,7 @@
                 <li><span class="badge none"></span><span class="fname">accountsReaped</span><span class="ftype">Int = 0</span></li>
                 <li><span class="badge none"></span><span class="fname">customersLinked</span><span class="ftype">Int = 0</span></li>
                 <li><span class="badge none"></span><span class="fname">keysIndexed</span><span class="ftype">Int = 0</span></li>
-                <li><span class="badge none"></span><span class="fname">issuesJson</span><span class="ftype">JSON = [] · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">issuesJson</span><span class="ftype">JSON = [] · §5</span></li>
               </ul>
             </div>
           </div>
@@ -403,11 +778,11 @@
                 <li><span class="badge pk">PK</span><span class="fname">id</span><span class="ftype">String</span></li>
                 <li><span class="badge uk">UK</span><span class="fname">userId</span><span class="ftype">denormalized</span></li>
                 <li><span class="badge fk">FK</span><span class="fname">customerAccountId</span><span class="ftype">Cascade</span></li>
-                <li><span class="badge uk">UK</span><span class="fname">kind</span><span class="ftype">ranked · §4</span></li>
+                <li><span class="badge uk">UK</span><span class="fname">kind</span><span class="ftype">ranked · §5</span></li>
                 <li><span class="badge uk">UK</span><span class="fname">value</span><span class="ftype">normalized</span></li>
                 <li><span class="badge none"></span><span class="fname">rawValue</span><span class="ftype">as given</span></li>
-                <li><span class="badge none"></span><span class="fname">emailClass</span><span class="ftype">String · §4</span></li>
-                <li><span class="badge none"></span><span class="fname">source</span><span class="ftype">String · §4</span></li>
+                <li><span class="badge none"></span><span class="fname">emailClass</span><span class="ftype">String · §5</span></li>
+                <li><span class="badge none"></span><span class="fname">source</span><span class="ftype">String · §5</span></li>
                 <li><span class="badge none"></span><span class="fname">sourceIntegrationId</span><span class="ftype">String</span></li>
                 <li><span class="badge none"></span><span class="fname">firstSeenAt</span><span class="ftype">DateTime</span></li>
                 <li><span class="badge none"></span><span class="fname">lastSeenAt</span><span class="ftype">DateTime</span></li>
@@ -450,10 +825,10 @@
     </figure>
 
 
-    <!-- ================================================= 3 · UNIQUENESS ==== -->
+    <!-- ================================================= 4 · UNIQUENESS ==== -->
     <figure class="fig" id="fig-identity">
       <div class="fig-head">
-        <h2><span class="n">3</span>Where identity actually lives</h2>
+        <h2><span class="n">4</span>Where identity actually lives</h2>
         <p>The constraints that decide whether a re-run updates a row or duplicates it.</p>
       </div>
       <div class="viewport">
@@ -465,6 +840,8 @@
             <tr><th scope="row">User</th><td><span class="chip">email</span></td><td>The stable handle the demo looks the user up by.</td></tr>
             <tr><th scope="row">Customer</th><td><span class="chip">integrationId</span><span class="chip">externalSourceId</span></td><td><b>The upsert key.</b> Re-running a sync updates rather than duplicates.</td></tr>
             <tr><th scope="row">Contact</th><td><span class="chip">integrationId</span><span class="chip">externalSourceId</span></td><td>Same. This is why a <em>stable</em> synthesized id matters for Metrifox, whose contacts are flattened out of nested <code>contact_people[]</code> — an unstable id would not error, it would quietly duplicate every contact on every run.</td></tr>
+            <tr><th scope="row">Product · Offering · Price · Feature · Entitlement<br><span class="ftype">Agreement · Subscription · AgreementItem · AgreementEntitlement · AgreementDiscount · Invoice · InvoiceLine · Payment</span></th><td><span class="chip">integrationId</span><span class="chip">externalSourceId</span></td><td><b>The same upsert key as Customer and Contact</b>, so re-running a sync updates catalog, agreement and billing rows rather than duplicating them. <code>externalSourceId</code> is also the reconcile key for the four lists (see §2): "no longer listed" is decided by comparing its ids. <code>AgreementEntitlement</code> synthesizes the id (<code>&lt;subscriptionId&gt;:&lt;featureId&gt;</code>) where Chargebee gives none, because an unstable one would duplicate every grant on every run.</td></tr>
+            <tr><th scope="row">Subscription</th><td><span class="chip">integrationId</span><span class="chip">externalSourceId</span> + <span class="chip">agreementId</span> <span class="ftype">@unique</span></td><td>Both rows come off one provider record in one run, so this detail row cannot arrive before its agreement — structurally at most one subscription detail per agreement, deleted with it.</td></tr>
             <tr><th scope="row">IntegrationFunction</th><td><span class="chip">integrationId</span><span class="chip">functionName</span></td><td>A function is declared once per integration.</td></tr>
             <tr><th scope="row">FieldMapping</th><td><span class="chip">integrationId</span><span class="chip">functionName</span><span class="chip">targetObject</span><span class="chip">targetFieldPath</span></td><td>One rule per target field. Function and target object are part of the identity, because two functions on one integration can write to the same object.</td></tr>
             <tr><th scope="row">DiscoveredField</th><td><span class="chip">integrationId</span><span class="chip">functionName</span><span class="chip">targetObject</span><span class="chip">path</span></td><td>The cache key.</td></tr>
@@ -482,6 +859,22 @@
         <code>Customer(integrationId)</code> and <code>Customer(customerAccountId)</code>;
         <code>Contact(integrationId)</code> and <code>Contact(customerId)</code>;
         <code>SyncRun(integrationId, startedAt)</code> for run-history ordering;
+        <code>Offering(productId)</code> and <code>Price(offeringId)</code> for the catalog walk;
+        <code>Feature(integrationId, lookupKey)</code>;
+        <code>Entitlement(offeringId)</code> and <code>(featureId)</code>;
+        <code>Agreement(customerId)</code>, <code>Agreement(offeringId)</code> and
+        <code>Agreement(integrationId, agreementType)</code>;
+        <code>Subscription(integrationId, currentPeriodEnd)</code> for renewal ordering;
+        <code>AgreementItem(agreementId)</code> — the join and reconcile predicate — plus its
+        <code>(offeringId)</code> and <code>(priceId)</code>;
+        <code>AgreementEntitlement(agreementId)</code> and <code>(featureId)</code>;
+        <code>AgreementDiscount(agreementId)</code>;
+        <code>Invoice(customerId)</code>, <code>Invoice(agreementId)</code> and
+        <code>Invoice(integrationId, status)</code>;
+        <code>InvoiceLine(invoiceId)</code> plus its <code>(offeringId)</code> and
+        <code>(priceId)</code>;
+        <code>Payment(invoiceId)</code>, <code>Payment(customerId)</code> and
+        <code>Payment(integrationId, processedAt)</code>;
         <code>CustomerAccount(userId)</code> and <code>(userId, name)</code> for the Accounts tab's
         <code>name asc, id asc</code> ordering;
         <code>CustomerAccountKey(customerAccountId)</code>;
@@ -490,10 +883,10 @@
     </figure>
 
 
-    <!-- ==================================================== 4 · STRINGS ==== -->
+    <!-- ==================================================== 5 · STRINGS ==== -->
     <figure class="fig" id="fig-strings">
       <div class="fig-head">
-        <h2><span class="n">4</span>Columns that are strings but are not really strings</h2>
+        <h2><span class="n">5</span>Columns that are strings but are not really strings</h2>
         <p>Each union lives beside its runtime guard in
            <code>src/core/types/common.ts</code>, so the type and its check cannot drift.</p>
       </div>
@@ -514,9 +907,74 @@
               <td><code>isCustomerType</code></td>
             </tr>
             <tr>
+              <th scope="row">Agreement.agreementType</th>
+              <td><span class="chip">subscription</span><span class="chip">order_form</span><span class="chip">contract</span><span class="chip">deal</span></td>
+              <td><code>isAgreementType</code> — required; a row that cannot say what kind of agreement it is cannot be joined to its detail table</td>
+            </tr>
+            <tr>
+              <th scope="row">Agreement.status</th>
+              <td><span class="chip">draft</span><span class="chip">trialing</span><span class="chip">active</span><span class="chip">past_due</span><span class="chip">paused</span><span class="chip">canceled</span><span class="chip">expired</span><span class="chip">scheduled</span></td>
+              <td><code>isAgreementStatus</code> — our vocabulary, not any provider's; <code>expired</code> (ran its term) is not <code>canceled</code> (left), and <code>scheduled</code> (agreed, not started) is not <code>draft</code> (never agreed)</td>
+            </tr>
+            <tr>
+              <th scope="row">Subscription.billingPeriod</th>
+              <td><span class="chip">day</span><span class="chip">week</span><span class="chip">month</span><span class="chip">year</span></td>
+              <td><code>isSubscriptionBillingPeriod</code> — deliberately narrower than <code>BILLING_INTERVALS</code>: a subscription's cadence is never <code>one_time</code></td>
+            </tr>
+            <tr>
+              <th scope="row">Subscription.collectionMethod</th>
+              <td><span class="chip">automatic</span><span class="chip">manual</span><span class="chip">none</span></td>
+              <td><code>isCollectionMethod</code> — <code>none</code> is a fact (no collection happens), not a missing value</td>
+            </tr>
+            <tr>
+              <th scope="row">AgreementItem.itemType</th>
+              <td><span class="chip">plan</span><span class="chip">add_on</span><span class="chip">usage</span><span class="chip">charge</span></td>
+              <td><code>isAgreementItemType</code> — null means "not told", never "plan" (Stripe's items are undifferentiated)</td>
+            </tr>
+            <tr>
+              <th scope="row">Price.billingModel<br><span class="ftype">AgreementItem.billingModel</span></th>
+              <td><span class="chip">flat_fee</span><span class="chip">per_unit</span><span class="chip">tiered</span><span class="chip">usage_based</span><span class="chip">one_time</span><span class="chip">minimum_spend</span><span class="chip">credit_based</span></td>
+              <td><code>isBillingModel</code> — Stigg is the only provider that says <code>minimum_spend</code> or <code>credit_based</code></td>
+            </tr>
+            <tr>
+              <th scope="row">Price.interval</th>
+              <td><span class="chip">day</span><span class="chip">week</span><span class="chip">month</span><span class="chip">year</span><span class="chip">one_time</span></td>
+              <td><code>isBillingInterval</code> — <code>one_time</code> is a member because "does not recur" is a fact, not an absence</td>
+            </tr>
+            <tr>
+              <th scope="row">AgreementDiscount.kind</th>
+              <td><span class="chip">percentage</span><span class="chip">fixed_amount</span><span class="chip">free_items</span></td>
+              <td><code>isDiscountKind</code> — <code>free_items</code> is not monetary but occupies the same slot in provider vocabularies</td>
+            </tr>
+            <tr>
+              <th scope="row">AgreementDiscount.status</th>
+              <td><span class="chip">active</span><span class="chip">expired</span><span class="chip">removed</span><span class="chip">scheduled</span></td>
+              <td><code>isDiscountStatus</code> — <code>removed</code> is a lifecycle fact (applied, then taken off), not an absence</td>
+            </tr>
+            <tr>
+              <th scope="row">Invoice.status</th>
+              <td><span class="chip">draft</span><span class="chip">open</span><span class="chip">paid</span><span class="chip">past_due</span><span class="chip">void</span><span class="chip">uncollectible</span></td>
+              <td><code>isInvoiceStatus</code> — Stripe has no <code>past_due</code> invoice status and Chargebee no <code>uncollectible</code>; the members exist for the other provider's words</td>
+            </tr>
+            <tr>
+              <th scope="row">InvoiceLine.itemType</th>
+              <td><span class="chip">plan</span><span class="chip">add_on</span><span class="chip">usage</span><span class="chip">charge</span><span class="chip">proration</span><span class="chip">discount</span><span class="chip">credit</span><span class="chip">adjustment</span></td>
+              <td><code>isInvoiceLineType</code> — a union of its own: an invoice line answers "what kind of line is this on the bill", which adds <code>discount</code>, <code>credit</code> and <code>adjustment</code></td>
+            </tr>
+            <tr>
+              <th scope="row">Payment.kind</th>
+              <td><span class="chip">payment</span><span class="chip">refund</span></td>
+              <td><code>isPaymentKind</code> — <b>required, unlike every other billing enum</b>: there is no third possibility and the direction is the first thing a reader needs</td>
+            </tr>
+            <tr>
+              <th scope="row">Payment.status</th>
+              <td><span class="chip">pending</span><span class="chip">succeeded</span><span class="chip">failed</span><span class="chip">refunded</span><span class="chip">reversed</span></td>
+              <td><code>isPaymentStatus</code> — <code>reversed</code> (movement voided) is distinct from <code>refunded</code> (money deliberately sent back)</td>
+            </tr>
+            <tr>
               <th scope="row">FieldMapping.targetObject</th>
-              <td><span class="chip">customer</span><span class="chip">contact</span></td>
-              <td><code>isTargetObject</code></td>
+              <td><span class="chip">customer</span><span class="chip">contact</span><span class="chip">product</span><span class="chip">offering</span><span class="chip">price</span><span class="chip">feature</span><span class="chip">entitlement</span><span class="chip">agreement</span><span class="chip">subscription</span><span class="chip">agreementItem</span><span class="chip">agreementEntitlement</span><span class="chip">agreementDiscount</span><span class="chip">invoice</span><span class="chip">invoiceLine</span><span class="chip">payment</span></td>
+              <td><code>isTargetObject</code> — a flat, global list; <em>which</em> objects a given function may write lives in <code>object-schema.ts</code> per function</td>
             </tr>
             <tr>
               <th scope="row">SyncRun.status<br><span class="ftype">IdentityResolutionRun.status</span></th>
@@ -568,12 +1026,21 @@
         <code>OAuthToken.providerMetadata</code> holds provider extras from the token response —
         Salesforce's <code>instance_url</code> and <code>organizationId</code>, and
         <code>authKind</code>/<code>keyPrefix</code> for an API key;
+        <code>SyncRun.recordCountsJson</code> holds a
+        <code>{ targetObject: rowsWritten }</code> map — an absent key says "this run did not
+        write that object", the honest answer for a catalog-only run;
         <code>SyncRun.errorsJson</code> holds <code>RecordIssue[]</code>, each
         <code>{ sourceRecordId, targetObject, reason, fieldName?, severity }</code>.</p>
+      <p class="fig-note">The commercial tables carry <code>customFields</code> like every other
+        synced table, and the agreement and billing tables add a <code>providerMetadata</code>
+        bag — the provider's own key/values with no column of their own (Chargebee's
+        <code>meta_data</code>, Stripe's <code>metadata</code>). Same serialization and same
+        50-key bound, with over-long values dropped silently, so a missing provider fact is a
+        place to look here rather than a guarantee it was kept.</p>
       <p class="fig-note">The identity layer adds five more.
         <code>Customer.crossRefs</code> and <code>Customer.importedCrossRefs</code> are both
         <code>Record&lt;provider, foreignId&gt;</code>, separate because the first is overwritten
-        wholesale on every upsert (see §2). <code>CustomerAccount.customFields</code> unions across
+        wholesale on every upsert (see §3). <code>CustomerAccount.customFields</code> unions across
         members with higher priority winning a shared key;
         <code>CustomerAccount.fieldProvenance</code> is
         <code>Record&lt;fieldName, integrationId&gt;</code>.
@@ -588,10 +1055,10 @@
     </figure>
 
 
-    <!-- ================================================== 5 · LIFECYCLE ==== -->
+    <!-- ================================================== 6 · LIFECYCLE ==== -->
     <figure class="fig" id="fig-lifecycle">
       <div class="fig-head">
-        <h2><span class="n">5</span>The <code>Integration.status</code> lifecycle</h2>
+        <h2><span class="n">6</span>The <code>Integration.status</code> lifecycle</h2>
         <p>The one column with real behaviour behind it. Every write goes through
            <code>updateStatus</code> or <code>markAuthorized</code> in
            <code>integration-repository.ts</code>.</p>

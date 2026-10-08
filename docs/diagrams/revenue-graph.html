@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integration Platform — Revenue Graph</title>
+<meta name="description" content="The revenue-graph framework mapped onto what this integration platform actually builds, with the gaps named.">
+<link rel="stylesheet" href="styles.css">
+<script>
+  /* Applied before first paint so the stored theme and panel state do not
+     flash the wrong layout. diagrams.js re-reads both and is idempotent. */
+  try {
+    var d = document.documentElement, s = window.localStorage;
+    var t = s.getItem("arch-theme");
+    if (t === "light" || t === "dark") d.setAttribute("data-theme", t);
+    if (s.getItem("arch-nav") === "off") d.setAttribute("data-nav", "off");
+  } catch (e) {}
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="btn icon-btn" id="navBtn" type="button" aria-expanded="true" aria-controls="sidebar" title="Hide contents  [">
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+      <rect x="1.6" y="2.6" width="12.8" height="10.8" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <line x1="6.2" y1="2.6" x2="6.2" y2="13.4" stroke="currentColor" stroke-width="1.4"/>
+      <rect class="ico-fill" x="2.3" y="3.3" width="3.2" height="9.4" rx="1" fill="currentColor"/>
+    </svg>
+    <span class="nav-txt">Hide contents</span>
+  </button>
+  <div class="brand">Integration Platform</div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="index.html">Architecture</a>
+    <a href="data-model.html">Data model</a>
+    <a href="revenue-graph.html" aria-current="page">Revenue graph</a>
+  </nav>
+  <div class="spacer"></div>
+  <button class="btn" id="themeBtn" type="button">Dark mode</button>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar" id="sidebar"><nav id="toc" aria-label="Sections"></nav></aside>
+
+  <main id="main">
+
+    <div class="lede">
+      <h1>The revenue graph</h1>
+      <p>Seven diagrams mapping the <a href="../Revenue%20Graph%20Framework.md">Revenue Graph
+         Framework</a> onto what this repository actually builds — which parts of the graph are
+         real, which are partial, and which are the honest gaps. The plain-language companion is
+         <a href="../revenue-graph.md">docs/revenue-graph.md</a>; the row-level detail behind every
+         node here is on the <a href="data-model.html">data model</a> page.</p>
+      <p>Every coverage mark is a word first — <b>built</b>, <b>partial</b>, <b>not built</b> —
+         with colour as a second channel only.</p>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-sw k-good"></span>Built</span>
+        <span class="legend-item"><span class="legend-sw k-warn"></span>Partial</span>
+        <span class="legend-item"><span class="legend-sw k-off"></span>Not built</span>
+        <span class="legend-item"><span class="legend-sw k-n"></span>Structure exists, nothing derived</span>
+      </div>
+    </div>
+
+    <div class="callout">
+      <b>Three layers, one repository.</b> The framework's loop is graph → agents → actions.
+      This codebase is the data half of the graph layer: it connects to outside systems, reads
+      their records, and keeps one matched copy per customer. Layers 02 and 03 do not exist here
+      at all — the pages below say so in every box where it applies.
+    </div>
+
+
+    <!-- ============================================ 1 · THE FRAMEWORK ==== -->
+    <figure class="fig" id="fig-framework">
+      <div class="fig-head">
+        <h2><span class="n">1</span>The framework, and the one layer this codebase builds</h2>
+        <p>The framework describes a closed loop: the graph is scouted by agents, their
+           recommendations become actions, and every action writes new facts back into the graph.
+           Only the first box exists here — and only its data half. The two upper layers are
+           specified upstream, not built in this repository.</p>
+      </div>
+
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+
+      <div class="viewport">
+        <div class="canvas" id="c-fwloop" style="display:grid;grid-template-columns:repeat(3,minmax(240px,1fr));column-gap:120px;row-gap:130px;min-width:1020px;padding-bottom:140px" data-edges='[
+          {"from":"r-graph","to":"r-agents","fs":"right","ts":"left","label":"DETECT"},
+          {"from":"r-agents","to":"r-actions","fs":"bottom","ts":"top","label":"RECOMMEND"},
+          {"from":"r-actions","to":"r-graph","fs":"bottom","ts":"bottom","bow":115,"label":"WRITES BACK"}
+        ]'>
+
+          <div class="node" id="r-graph" style="grid-row:1;grid-column:1"><span class="t">01 · Revenue Graph</span><span class="s">the living model</span><span class="n">Identity, commercial terms, entitlements, usage, cost and reliability per account, updated as changes happen. This codebase builds its data half — identity, catalog, agreements and billing. <span class="chip st-warn">◐ partly built</span></span></div>
+
+          <div class="node" id="r-agents" style="grid-row:1;grid-column:3"><span class="t">02 · Revenue Agents</span><span class="s">scout &amp; explain</span><span class="n">Read the graph, detect patterns, explain in graph facts — never a bare score — and recommend. No such code exists in this repository. <span class="chip st-off">— not built</span></span></div>
+
+          <div class="node" id="r-actions" style="grid-row:2;grid-column:3"><span class="t">03 · Revenue Actions</span><span class="s">execute &amp; write back</span><span class="n">Autonomous or human-approved actions that change the world and write the outcome back. Nothing here writes to a source system. <span class="chip st-off">— not built</span></span></div>
+
+        </div>
+      </div>
+
+      <p class="fig-note"><strong>Boundary one — read-only.</strong> The platform reads from the
+        systems it connects; apart from a best-effort request to revoke access when a connection is
+        deleted, nothing is ever written back to a provider. That is a deliberate line, and it is
+        exactly the line Layer 03 would have to cross: an action needs write access this codebase
+        does not take.</p>
+      <p class="fig-note"><strong>Boundary two — records, not events.</strong> Refreshes update
+        records in place, and refresh history exists (<code>SyncRun</code>), but there is no stream
+        of individual change events. The framework's canonical event envelope
+        (<code>occurred_at</code> / <code>effective_at</code> / <code>ingested_at</code>, an
+        idempotency key) has no implementation here; the upsert key — connection plus the
+        provider's own id — is this system's idempotency equivalent.</p>
+    </figure>
+
+
+    <!-- ================================================= 2 · THE LOOP ==== -->
+    <figure class="fig" id="fig-loop">
+      <div class="fig-head">
+        <h2><span class="n">2</span>The loop this codebase actually runs</h2>
+        <p>Connect, refresh, reconcile, match, schedule — repeatedly. "Sync now" is the same path
+           with the clock skipped. An agent layer would attach after <em>Match companies</em>,
+           reading the tables in §3; nothing in the loop writes back to a source system.</p>
+      </div>
+
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+
+      <div class="viewport">
+        <div class="canvas" id="c-ploop" style="display:grid;grid-template-columns:repeat(5,minmax(185px,1fr));column-gap:64px;min-width:1215px;padding-bottom:130px" data-edges='[
+          {"from":"r-connect","to":"r-refresh","fs":"right","ts":"left","label":"sync now"},
+          {"from":"r-refresh","to":"r-recon","fs":"right","ts":"left","label":"run output"},
+          {"from":"r-recon","to":"r-match","fs":"right","ts":"left","label":"link fixes"},
+          {"from":"r-match","to":"r-sched","fs":"right","ts":"left","label":"accounts rebuilt"},
+          {"from":"r-sched","to":"r-refresh","fs":"bottom","ts":"bottom","bow":105,"label":"triggers the next refresh"}
+        ]'>
+
+          <div class="node" id="r-connect"><span class="t">Connect</span><span class="s">graph · input</span><span class="n">Choose purposes, then a system that covers them, then permissions. The one step that decides scopes.</span></div>
+
+          <div class="node" id="r-refresh"><span class="t">Refresh</span><span class="s">graph · writer</span><span class="n">Fetch, translate, write. Purposes run in dependency order — identity → catalog → agreement → billing — parents before children.</span></div>
+
+          <div class="node" id="r-recon"><span class="t">Reconcile</span><span class="s">graph · cleanup</span><span class="n">The four lists — agreement items, entitlements, discounts, invoice lines — compared against the provider. Everything else updates in place.</span></div>
+
+          <div class="node" id="r-match"><span class="t">Match companies</span><span class="s">graph · identity</span><span class="n">One combined Account per real business, rebuilt from evidence after every refresh. Human verdicts outrank every automatic match.</span></div>
+
+          <div class="node" id="r-sched"><span class="t">Schedule</span><span class="s">graph · clock</span><span class="n">The next run — daily by default, adjustable from one hour to one week.</span></div>
+
+        </div>
+      </div>
+
+      <p class="fig-note"><strong>Where an agent layer would join.</strong> Every fact an explanation
+        would cite is already stored per record, with the connection that supplied it recorded
+        beside it — statuses, dates, amounts, entitlements. What the framework's own loop adds is
+        the part drawn in §1's top boxes: detect, explain, recommend, execute, write back. None of
+        that exists here yet.</p>
+    </figure>
+
+
+    <!-- ================================================ 3 · THE GRAPH ==== -->
+    <figure class="fig" id="fig-graph">
+      <div class="fig-head">
+        <h2><span class="n">3</span>The graph this platform materializes</h2>
+        <p>The framework's causal order — who they are, what they agreed to, what that grants them,
+           what it earned — as this repository's actual tables. Every box is filled by the refresh
+           loop above; dashes mark an account-level grouping rather than a row-to-row pointer (the
+           framework's own convention). Field-by-field detail is on the
+           <a href="data-model.html">data model</a> page.</p>
+      </div>
+
+      <div class="fig-tools">
+        <span class="lbl">Zoom</span>
+        <button class="btn" type="button" data-act="out" aria-label="Zoom out">−</button>
+        <span class="zoom-val">100%</span>
+        <button class="btn" type="button" data-act="in" aria-label="Zoom in">+</button>
+        <button class="btn" type="button" data-act="fit">Fit</button>
+        <button class="btn" type="button" data-act="reset">Reset</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-act="full">Full screen</button>
+      </div>
+
+      <div class="viewport">
+        <div class="canvas dg-er" id="c-graph" style="grid-template-columns:minmax(205px,1fr) minmax(215px,1.02fr) minmax(220px,1.05fr) minmax(205px,1fr);min-width:1220px" data-edges='[
+          {"from":"r-acct","to":"r-cust","fs":"bottom","ts":"top","kind":"dashed","label":"groups"},
+          {"from":"r-cust","to":"r-con","fs":"bottom","ts":"top","label":"has"},
+          {"from":"r-prod","to":"r-off","fs":"bottom","ts":"top","label":"offered as"},
+          {"from":"r-off","to":"r-price","fs":"bottom","ts":"top","label":"priced at"},
+          {"from":"r-feat","to":"r-entl","fs":"bottom","ts":"top","label":"defines"},
+          {"from":"r-off","to":"r-entl","fs":"right","ts":"right","bow":60,"label":"includes"},
+          {"from":"r-cust","to":"r-agr","fs":"right","ts":"left","label":"party to"},
+          {"from":"r-off","to":"r-agr","fs":"right","ts":"left","label":"nominated as"},
+          {"from":"r-agr","to":"r-sub","fs":"bottom","ts":"top","label":"details"},
+          {"from":"r-agr","to":"r-inv","fs":"left","ts":"left","bow":62,"label":"billed under"},
+          {"from":"r-agr","to":"r-item","fs":"right","ts":"left","label":"lists"},
+          {"from":"r-agr","to":"r-aentl","fs":"right","ts":"left","label":"grants"},
+          {"from":"r-agr","to":"r-disc","fs":"right","ts":"left","label":"discounts"},
+          {"from":"r-inv","to":"r-line","fs":"right","ts":"left","label":"itemized"},
+          {"from":"r-inv","to":"r-pay","fs":"right","ts":"left","label":"settled"}
+        ]'>
+
+          <div class="col">
+            <div class="node" id="r-acct"><span class="t">Account</span><span class="s">identity · combined</span><span class="n">One real company. Rebuilt after every refresh; each displayed field traced to the connection that won it.</span></div>
+            <div class="node" id="r-cust"><span class="t">Customer</span><span class="s">identity · per system</span><span class="n">One system's record of a company. Several of these become one Account.</span></div>
+            <div class="node" id="r-con"><span class="t">Contact</span><span class="s">identity · person</span><span class="n">A person at the company; may arrive before its company and link on a later refresh.</span></div>
+          </div>
+
+          <div class="col">
+            <div class="node" id="r-prod"><span class="t">Product</span><span class="s">catalog</span><span class="n">Something the business sells.</span></div>
+            <div class="node" id="r-off"><span class="t">Offering</span><span class="s">catalog</span><span class="n">A purchasable version — a plan or an item.</span></div>
+            <div class="node" id="r-price"><span class="t">Price</span><span class="s">catalog</span><span class="n">Amount, currency and billing rhythm, exactly as the provider states it.</span></div>
+            <div class="node" id="r-feat"><span class="t">Feature</span><span class="s">catalog</span><span class="n">A reusable capability definition.</span></div>
+            <div class="node" id="r-entl"><span class="t">Entitlement</span><span class="s">catalog · standard terms</span><span class="n">An offering includes a feature, at a stated limit — the catalog's baseline, not anyone's actual access.</span></div>
+          </div>
+
+          <div class="col">
+            <div class="node" id="r-agr"><span class="t">Agreement</span><span class="s">agreement · hub</span><span class="n">Subscription, order form, contract or deal — the shared commercial node, one row per commitment.</span></div>
+            <div class="node" id="r-sub"><span class="t">Subscription</span><span class="s">agreement · detail</span><span class="n">Periods, trial dates, cancellation requested vs effective, next renewal.</span></div>
+            <div class="node" id="r-inv"><span class="t">Invoice</span><span class="s">billing</span><span class="n">The bill. Totals are copied verbatim from the provider, never computed here.</span></div>
+          </div>
+
+          <div class="col">
+            <div class="node" id="r-item"><span class="t">Agreement item</span><span class="s">agreement · reconciled</span><span class="n">A priced line: quantity and references, deliberately no amount.</span></div>
+            <div class="node" id="r-aentl"><span class="t">Agreement entitlement</span><span class="s">agreement · reconciled</span><span class="n">What this subscriber actually gets — plan defaults and overrides folded in.</span></div>
+            <div class="node" id="r-disc"><span class="t">Agreement discount</span><span class="s">agreement · reconciled</span><span class="n">Percentage, fixed amount or free items — as stated, never re-derived.</span></div>
+            <div class="node" id="r-line"><span class="t">Invoice line</span><span class="s">billing · reconciled</span><span class="n">One itemized row — the one place line amounts live.</span></div>
+            <div class="node" id="r-pay"><span class="t">Payment</span><span class="s">billing</span><span class="n">A payment or a refund. Authorizations are deliberately not stored, so counts may not match a provider's transaction list — correctly.</span></div>
+          </div>
+
+        </div>
+      </div>
+
+      <p class="fig-note"><strong>Which systems fill which slice.</strong> Identity is written by all
+        seven connected systems; catalog and agreement by Stripe, Chargebee and Stigg; billing by
+        Stripe and Chargebee. Support, Usage and Communication write nothing — the purposes are
+        declared so the roadmap is visible, and the software can genuinely report "no provider
+        serves this yet".</p>
+      <p class="fig-note"><strong>CHARGE is absent on purpose.</strong> The framework lists it, and
+        the word means three incompatible things across systems (a line on an invoice, a one-off
+        item type, one provider's own charge object). The schema refuses it; <code>Invoice line</code>
+        takes its role, because an invoice line <em>is</em> the billed amount.</p>
+      <p class="fig-note"><strong>ENTITLEMENT splits in two.</strong> The framework's one entity is
+        two facts here: what an offering includes (catalog, standard terms) and what one subscriber
+        actually gets (agreement, overrides folded in). Collapsing them would double-count — the
+        same discipline the framework's parallel-states rule demands.</p>
+    </figure>
+
+
+    <!-- ============================================== 4 · COVERAGE ====== -->
+    <figure class="fig" id="fig-coverage">
+      <div class="fig-head">
+        <h2><span class="n">4</span>Entity by entity against the framework</h2>
+        <p>The framework's sixteen entities, in its own grouping, against what exists here. A row
+           that says "not built" is a scope statement, not an oversight note.</p>
+      </div>
+      <div class="viewport">
+        <div class="matrix-wrap">
+
+          <table class="matrix">
+            <thead>
+              <tr>
+                <th scope="col">Framework entity</th>
+                <th scope="col">In this platform</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">COMPANY · CUSTOMER_ACCOUNT</th>
+                <td><code>Customer</code> (one system's record) plus <code>CustomerAccount</code> (the combined profile built by matching)</td>
+                <td><span class="chip st-good">✓ built</span></td>
+              </tr>
+              <tr>
+                <th scope="row">WORKSPACE · USER · MEMBERSHIP</th>
+                <td>— (<code>Contact</code> is a person at the customer's company; <code>User</code> is this platform's own sign-in owner)</td>
+                <td><span class="chip st-off">— not modeled</span></td>
+              </tr>
+              <tr>
+                <th scope="row">PRODUCT</th>
+                <td><code>Product</code></td>
+                <td><span class="chip st-good">✓ built</span></td>
+              </tr>
+              <tr>
+                <th scope="row">OFFERING</th>
+                <td><code>Offering</code> plus <code>Price</code> — the price is its own table</td>
+                <td><span class="chip st-good">✓ built</span></td>
+              </tr>
+              <tr>
+                <th scope="row">AGREEMENT</th>
+                <td><code>Agreement</code> plus <code>Subscription</code>, <code>AgreementItem</code>, <code>AgreementEntitlement</code>, <code>AgreementDiscount</code></td>
+                <td><span class="chip st-good">✓ built</span> <span class="chip">subscription type live</span></td>
+              </tr>
+              <tr>
+                <th scope="row">ENTITLEMENT</th>
+                <td><code>Entitlement</code> (catalog) plus <code>AgreementEntitlement</code> (effective) — two levels, never summed</td>
+                <td><span class="chip st-good">✓ built</span></td>
+              </tr>
+              <tr>
+                <th scope="row">USAGE_EVENT</th>
+                <td>—</td>
+                <td><span class="chip st-off">— not built</span> <span class="chip">purpose declared, no system serves it</span></td>
+              </tr>
+              <tr>
+                <th scope="row">CHARGE</th>
+                <td>— deliberately none; <code>InvoiceLine</code> is where billed amounts live</td>
+                <td><span class="chip st-off">— by design</span></td>
+              </tr>
+              <tr>
+                <th scope="row">INVOICE</th>
+                <td><code>Invoice</code></td>
+                <td><span class="chip st-good">✓ built</span></td>
+              </tr>
+              <tr>
+                <th scope="row">COST_EVENT</th>
+                <td>—</td>
+                <td><span class="chip st-off">— not built</span></td>
+              </tr>
+              <tr>
+                <th scope="row">PAYMENT</th>
+                <td><code>Payment</code></td>
+                <td><span class="chip st-good">✓ built</span></td>
+              </tr>
+              <tr>
+                <th scope="row">SIGNAL · RECOMMENDATION</th>
+                <td>—</td>
+                <td><span class="chip st-off">— not built</span> <span class="chip">agent layer</span></td>
+              </tr>
+              <tr>
+                <th scope="row">Reliability / incidents</th>
+                <td>—</td>
+                <td><span class="chip st-off">— not built</span></td>
+              </tr>
+            </tbody>
+          </table>
+
+        </div>
+      </div>
+      <p class="fig-note">Read together with §3, the shape is: identity, catalog, agreements so far
+        as subscriptions go, invoices, payments and the company-matching spine are the built half —
+        activity, cost and reliability are the missing half of the graph layer.</p>
+    </figure>
+
+
+    <!-- ============================================= 5 · AGREEMENT ======= -->
+    <figure class="fig" id="fig-agreement">
+      <div class="fig-head">
+        <h2><span class="n">5</span>Inside the agreement</h2>
+        <p>The framework treats AGREEMENT as the hub that touches identity, catalog, access,
+           activity and money at once. Here it touches four of the five — activity is the missing
+           axis — and it is a family of five tables rather than one box. This is what the
+           framework's object list and its ten questions map to today.</p>
+      </div>
+      <div class="viewport">
+        <div class="matrix-wrap">
+
+          <table class="matrix">
+            <thead>
+              <tr>
+                <th scope="col">Framework object</th>
+                <th scope="col">Here</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">Agreement</th><td><code>Agreement</code></td><td>Shared node; four types — subscription, order form, contract, deal</td></tr>
+              <tr><th scope="row">Subscription</th><td><code>Subscription</code></td><td>Periods, trial, cancellation, next renewal</td></tr>
+              <tr><th scope="row">Order Form</th><td>agreement <em>type</em> only</td><td>Declared from day one, but no system writes one yet</td></tr>
+              <tr><th scope="row">Agreement Item</th><td><code>AgreementItem</code></td><td>One priced line</td></tr>
+              <tr><th scope="row">Term</th><td><span class="chip st-warn">◐ partial</span></td><td>Dates and billing rhythm live on <code>Agreement</code> / <code>Subscription</code>; there is no term record</td></tr>
+              <tr><th scope="row">Trial / Pilot</th><td><span class="chip st-warn">◐ partial</span></td><td>Trial start and end dates only</td></tr>
+              <tr><th scope="row">Proposal / Quote</th><td><span class="chip st-off">— not modeled</span></td><td>—</td></tr>
+              <tr><th scope="row">Acceptance</th><td><span class="chip st-off">— not modeled</span></td><td>—</td></tr>
+              <tr><th scope="row">Amendment</th><td><span class="chip st-off">— not modeled</span></td><td>No per-agreement change history; refreshes update in place</td></tr>
+              <tr><th scope="row">Renewal</th><td><span class="chip st-warn">◐ partial</span></td><td>Renewal dates, not renewal terms</td></tr>
+              <tr><th scope="row">Cancellation</th><td><span class="chip st-warn">◐ partial</span></td><td>Requested date, effective date, period-end flag; no reason record</td></tr>
+              <tr><th scope="row">Discount / Concession</th><td><code>AgreementDiscount</code></td><td>Stated values only — percentage, fixed amount, or free items</td></tr>
+            </tbody>
+          </table>
+
+          <table class="matrix">
+            <thead>
+              <tr>
+                <th scope="col">The framework asks</th>
+                <th scope="col">This platform answers</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">What did the customer agree to?</th><td><span class="chip st-good">✓</span> agreement, items, entitlements, discounts</td></tr>
+              <tr><th scope="row">Which version was accepted or signed?</th><td><span class="chip st-off">—</span> no acceptance or version records; refreshes update in place</td></tr>
+              <tr><th scope="row">How was it approved?</th><td><span class="chip st-off">—</span></td></tr>
+              <tr><th scope="row">When did it become effective?</th><td><span class="chip st-good">✓</span> <code>effectiveDate</code>, <code>endDate</code></td></tr>
+              <tr><th scope="row">What products, services, entitlements are included?</th><td><span class="chip st-good">✓</span> items and effective entitlements</td></tr>
+              <tr><th scope="row">What commercial commitments exist?</th><td><span class="chip st-warn">◐</span> quantities and lines stored; commitment balances are not</td></tr>
+              <tr><th scope="row">When can it change?</th><td><span class="chip st-warn">◐</span> end and renewal dates, but not the terms governing change</td></tr>
+              <tr><th scope="row">What happens at renewal?</th><td><span class="chip st-warn">◐</span> the date, not the terms</td></tr>
+              <tr><th scope="row">What happens when payment fails?</th><td><span class="chip st-warn">◐</span> invoice <code>past_due</code> and failed payment with a reason; no dunning schedule</td></tr>
+              <tr><th scope="row">What happens when the customer cancels?</th><td><span class="chip st-warn">◐</span> cancellation dates and flags; no reason or outcome</td></tr>
+            </tbody>
+          </table>
+
+        </div>
+      </div>
+      <p class="fig-note"><strong>Only Stripe, Chargebee and Stigg write agreements today.</strong>
+        HubSpot, Salesforce, Metrifox and the Mock CRM appear in the picker for Agreement but sync
+        nothing — the type discriminator exists precisely so their future order forms and contracts
+        are a new provider plug, not a migration against stored rows.</p>
+      <p class="fig-note"><strong>The hub claim, tested against the schema.</strong> Identity — the
+        customer link. Catalog — the offering link. Money — invoices hang off the agreement.
+        Access — agreement entitlements are the effective permissions. Activity — absent, exactly
+        as the framework's worked example (Vertex Analytics) needs usage and reliability this
+        platform does not ingest.</p>
+    </figure>
+
+
+    <!-- ============================================== 6 · STATES ========= -->
+    <figure class="fig" id="fig-states">
+      <div class="fig-head">
+        <h2><span class="n">6</span>Parallel states: structure yes, derivation not yet</h2>
+        <p>The framework's most important rule is that an account never has one status. This
+           schema was built with that rule structural — every record carries the status vocabulary
+           of its own function, and nothing merges them — but no account-level views are derived
+           from the axes yet.</p>
+      </div>
+      <div class="viewport">
+        <div class="gb c3">
+          <div class="node" data-k="good" id="rg-ax-commercial"><span class="t">Commercial</span><span class="n"><code>Agreement.status</code> — eight shared states, from draft to expired — plus the <code>Subscription</code> dates. <span class="chip st-good">✓ built</span></span></div>
+          <div class="node" data-k="good" id="rg-ax-payment"><span class="t">Payment</span><span class="n"><code>Invoice.status</code> and <code>Payment.status</code>, with failure reasons kept. <span class="chip st-good">✓ built</span></span></div>
+          <div class="node" id="rg-ax-usage"><span class="t">Usage</span><span class="n">No usage events anywhere in the schema. <span class="chip st-off">— not built</span></span></div>
+          <div class="node" id="rg-ax-cost"><span class="t">Cost</span><span class="n">No cost-to-serve data. <span class="chip st-off">— not built</span></span></div>
+          <div class="node" id="rg-ax-reliab"><span class="t">Reliability</span><span class="n">No incidents or error rates. <span class="chip st-off">— not built</span></span></div>
+          <div class="node" id="rg-ax-relation"><span class="t">Relationship</span><span class="n">Nothing derives churn risk or similar states — that is agent-layer work. <span class="chip st-off">— not built</span></span></div>
+        </div>
+      </div>
+      <p class="fig-note"><strong>Why this matters — the Vertex Analytics example.</strong> The same
+        usage curve means "voluntary disengagement" for one account and "our outage hurt them" for
+        another, and only the other axes tell them apart. This platform has the payment and
+        commercial axes and neither usage nor reliability, so that example cannot run on this data
+        yet. What it does have is the property that makes the logic possible later: no single
+        status field anywhere would have to be un-collapsed to get there.</p>
+    </figure>
+
+
+    <!-- ============================================== 7 · BUILD ========== -->
+    <figure class="fig" id="fig-build">
+      <div class="fig-head">
+        <h2><span class="n">7</span>Where this stands against the framework's build order</h2>
+        <p>The framework's "where engineers start" list, step by step, against this repository.</p>
+      </div>
+      <div class="viewport">
+        <div class="matrix-wrap">
+
+          <table class="matrix">
+            <thead>
+              <tr>
+                <th scope="col">Framework step</th>
+                <th scope="col">Here</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">0 · Identity resolution &amp; the event envelope</th>
+                <td>Identity resolution is built — evidence keys in strength order (cross-reference over email over domain), freemail refused as a domain key, human verdicts that outrank every automatic match. The event envelope is not; records are the unit, not events.</td>
+                <td><span class="chip st-warn">◐ partial</span></td>
+              </tr>
+              <tr>
+                <th scope="row">1 · Materialize the graph</th>
+                <td>Identity, catalog, agreement (subscription live) and billing are queryable; usage, cost and reliability are absent. Agreement was built generically from day one, exactly as the framework demands.</td>
+                <td><span class="chip st-warn">◐ partial</span></td>
+              </tr>
+              <tr>
+                <th scope="row">2 · Parallel state dimensions</th>
+                <td>The per-record statuses exist and are never collapsed; no account-level derived views are computed.</td>
+                <td><span class="chip st-warn">◐ partial</span></td>
+              </tr>
+              <tr>
+                <th scope="row">3–5 · Agents, recommendations, selective autonomy</th>
+                <td>Not in this codebase.</td>
+                <td><span class="chip st-off">— not built</span></td>
+              </tr>
+            </tbody>
+          </table>
+
+        </div>
+      </div>
+      <p class="fig-note"><strong>The honest summary.</strong> This repository is the framework's
+        Layer 01, and within it the commercial and billing slices — identity, catalog, agreements
+        so far as subscriptions go, invoices, payments, and the company-matching spine — are built.
+        The activity, cost and reliability slices, and all of Layers 02 and 03, are ahead.</p>
+    </figure>
+
+
+    <div class="callout">
+      <b>For engineers.</b> What a function may write, in what order:
+      <code>src/core/object-schema.ts</code> (<code>FUNCTION_OBJECTS</code>,
+      <code>FUNCTION_WRITE_ORDER</code>). Registration and permissions:
+      <code>src/core/bootstrap.ts</code> plus each provider's scope declaration. Identity
+      resolution: <code>src/core/identity/</code> and
+      <code>src/core/repositories/identity-repository.ts</code>. Adding a missing slice — a new
+      purpose costs a registry entry, scope declarations, a handler, an object schema and a
+      table — is walked through in <a href="../architecture.md">docs/architecture.md</a>.
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../revenue-graph.md">docs/revenue-graph.md</a> ·
+     framework notes in <a href="../Revenue%20Graph%20Framework.md">Revenue Graph Framework.md</a> ·
+     <a href="data-model.html">data model</a> · <a href="index.html">architecture diagrams</a>.
+     Hover a box to isolate its connections; <span class="kbd">[</span> hides the contents panel.</p>
+</footer>
+
+<script src="diagrams.js" defer></script>
+</body>
+</html>

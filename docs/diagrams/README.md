@@ -1,27 +1,32 @@
 # Interactive diagrams
 
-HTML versions of the diagrams in [`../architecture.md`](../architecture.md) and
-[`../data-model.md`](../data-model.md), because Mermaid renders them small and
-cramped in a Markdown preview.
+Interactive HTML versions of the documentation's diagrams, kept because Mermaid
+renders diagrams small and cramped in a Markdown preview, and these are
+zoomable. They track the current system: the data-model page draws all 28
+tables, the scope matrix covers all seven providers, and the revenue-graph page
+maps the framework document onto the platform's actual coverage. The
+plain-language descriptions remain in [`../README.md`](../README.md),
+[`../architecture.md`](../architecture.md) and
+[`../data-model.md`](../data-model.md).
 
 **Open [`index.html`](./index.html) in a browser.** No server, no build step, no
-network — static files that work straight off disk over `file://`. The two pages
+network — static files that work straight off disk over `file://`. The pages
 share one stylesheet and one script, and cross-link from the header.
 
 ```
-index.html        9 architecture diagrams
-data-model.html   sync spine, identity layer, cascade explorer, status lifecycle
-styles.css        tokens, components, light + dark themes
-diagrams.js       connector engine, viewport controls, both interactive widgets
+index.html         9 architecture diagrams
+data-model.html    sync spine, commercial records, identity layer, cascade explorer, status lifecycle
+revenue-graph.html framework loop, platform loop, graph shape, coverage, parallel states
+styles.css         tokens, components, light + dark themes
+diagrams.js        connector engine, viewport controls, both interactive widgets
 ```
 
-> **The Markdown is the source of truth; these pages lag it.** They were last
-> rebuilt when the schema was fifteen tables, so the entity diagram and cascade
-> explorer cover the identity-era spine only — no catalog, agreement or billing
-> tables, and no Chargebee. Everything they *do* draw is still accurate. The
-> exception is the §2 scope matrix, which reads `SCOPES` from `diagrams.js` and
-> **is** current. When you update the Markdown diagrams, these pages want
-> rebuilding to match.
+> **The entity canvases are transcribed from the schema; the cascade explorer
+> marks the §1 canvas only.** The commercial tables (§2) and the identity
+> tables (§3) are drawn on their own canvases, so they have no node in the
+> explorer to mark — their `onDelete` behaviour is stated in its prose instead.
+> When the schema changes, update the canvases, the `CASCADE` table and the
+> scope `SCOPES` in `diagrams.js` together.
 
 ## What it adds over the Markdown
 
@@ -51,12 +56,18 @@ nullability, defaults, unique constraints and `onDelete` behaviour. The cascade
 explorer's `CASCADE` table in `diagrams.js` encodes those same clauses; keep both
 in step with the schema.
 
-The cascade explorer covers **§1 only**. The four identity tables are drawn in
-§2, so they have no node there to mark, and their `onDelete` behaviour is stated
-in the explorer's prose instead of shown. That is a deliberate limit rather than
-an omission — putting twenty-eight tables in one canvas made the spine
-unreadable, and a cascade control that silently ignored a third of the schema
-would be worse than one that says which third.
+The revenue-graph page is a status map rather than a transcription: its
+coverage marks follow [`../revenue-graph.md`](../revenue-graph.md) and change
+meaning only when a purpose or slice moves from "declared" to "syncing" — for
+example when Usage gains its first provider, §4, §6 and §7 all move with it.
+
+The cascade explorer covers **§1 only**. The commercial tables are drawn in §2
+and the four identity tables in §3, so they have no node in the explorer's
+canvas to mark, and their `onDelete` behaviour is stated in the explorer's prose
+instead of shown. That is a deliberate limit rather than an omission — putting
+the whole schema in one canvas makes the spine unreadable, and a cascade control
+that silently ignored part of the schema would be worse than one that says which
+part.
 
 ## How a diagram is built
 

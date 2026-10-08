@@ -31,6 +31,9 @@ hubspot-app/**/node_modules/
 scripts/users*.json
 scripts/stripe-sandbox-fixtures.json
 README.md
+# ...except the documentation index, which is the intended entry point
+# for docs/ and must be committed with the other documents.
+!docs/README.md
 
 #kilo
 .kilo*
