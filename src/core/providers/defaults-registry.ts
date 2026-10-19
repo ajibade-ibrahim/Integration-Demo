@@ -8,7 +8,7 @@
  */
 
 import type { FieldMappingRule } from "../types/mapping";
-import { hubspotIdentityDefaults } from "./hubspot/defaults";
+import { hubspotIdentityDefaults, hubspotAgreementDefaults } from "./hubspot/defaults";
 import { salesforceIdentityDefaults } from "./salesforce/defaults";
 import { mockIdentityDefaults } from "./mock/defaults";
 import { metrifoxIdentityDefaults } from "./metrifox/defaults";
@@ -51,6 +51,7 @@ const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
   [`agreement:${STRIPE_PROVIDER_NAME}`]: stripeAgreementDefaults,
   [`agreement:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeAgreementDefaults,
   [`agreement:${STIGG_PROVIDER_NAME}`]: stiggAgreementDefaults,
+  [`agreement:${HUBSPOT_PROVIDER_NAME}`]: hubspotAgreementDefaults,
   [`billing:${STRIPE_PROVIDER_NAME}`]: stripeBillingDefaults,
   [`billing:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeBillingDefaults,
 };

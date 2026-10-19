@@ -67,7 +67,7 @@ Entity by entity against the framework's sixteen:
 | WORKSPACE, USER, MEMBERSHIP | — (`Contact` is a person at the customer's company; `User` is this platform's own sign-in owner) | Not modeled |
 | PRODUCT | `Product` | Built |
 | OFFERING | `Offering` plus `Price` (the price is split into its own table) | Built |
-| AGREEMENT | `Agreement` plus `Subscription`, `AgreementItem`, `AgreementEntitlement`, `AgreementDiscount` | Built — subscription type live today |
+| AGREEMENT | `Agreement` plus `Subscription`, `AgreementItem`, `AgreementEntitlement`, `AgreementDiscount` | Built — subscription and deal types live today |
 | ENTITLEMENT | `Entitlement` (catalog) plus `AgreementEntitlement` (effective) — two levels, never summed | Built |
 | USAGE_EVENT | — | Not built; the Usage purpose is declared, no system serves it |
 | CHARGE | — deliberately none; `InvoiceLine` is where billed amounts live | Deliberate absence |
@@ -130,10 +130,11 @@ The agreement's own question list, answered by this schema today:
 | What happens when payment fails? | Partial — invoice `past_due` and failed payment with a reason; no dunning schedule |
 | What happens when the customer cancels? | Partial — cancellation dates and flags; no reason or outcome |
 
-Only Stripe, Chargebee and Stigg write agreements today. HubSpot, Salesforce,
-Metrifox and the Mock CRM appear in the picker for Agreement but sync nothing —
-the type discriminator exists precisely so their future order forms and
-contracts are a new provider plug, not a migration against stored rows.
+Stripe, Chargebee, Stigg and HubSpot write agreements today — the first three
+as subscriptions, HubSpot as deals with their line items. Salesforce, Metrifox
+and the Mock CRM appear in the picker for Agreement but sync nothing — the type
+discriminator exists precisely so their future order forms and contracts are a
+new provider plug, not a migration against stored rows.
 
 ## Parallel states: structure yes, derivation not yet
 

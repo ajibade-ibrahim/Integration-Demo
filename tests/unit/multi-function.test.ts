@@ -172,8 +172,17 @@ describe("the agreement function", () => {
     const required = resolveScopes(["identity", "agreement"], "hubspot");
 
     expect(scopesAreCovered(granted, required)).toBe(false);
+
+    // Companies is shared with identity, so the widening is every agreement
+    // scope identity did not already grant — deals, line items and their
+    // schemas.
+    expect(HUBSPOT_AGREEMENT_SCOPES).toContain("crm.objects.line_items.read");
+    expect(HUBSPOT_AGREEMENT_SCOPES).toContain("crm.schemas.line_items.read");
+    const alreadyGranted = new Set<string>(HUBSPOT_IDENTITY_SCOPES);
     expect(missingScopes(granted, required).sort()).toEqual(
-      [...HUBSPOT_AGREEMENT_SCOPES].sort()
+      HUBSPOT_AGREEMENT_SCOPES.filter(
+        (scope) => !alreadyGranted.has(scope)
+      ).sort()
     );
   });
 
@@ -190,11 +199,12 @@ describe("the agreement function", () => {
     expect(scopes).toContain("crm.objects.deals.read");
   });
 
-  it("does not leak deal access into an identity-only integration", () => {
+  it("does not leak deal or line-item access into an identity-only integration", () => {
     const scopes = resolveScopes(["identity"], "hubspot");
-    for (const scope of HUBSPOT_AGREEMENT_SCOPES) {
-      expect(scopes).not.toContain(scope);
-    }
+    expect(scopes).not.toContain("crm.objects.deals.read");
+    expect(scopes).not.toContain("crm.schemas.deals.read");
+    expect(scopes).not.toContain("crm.objects.line_items.read");
+    expect(scopes).not.toContain("crm.schemas.line_items.read");
   });
 
   // A subscription is a specialization of agreement, not a sibling of invoice.
@@ -222,23 +232,23 @@ describe("the agreement function", () => {
     );
   });
 
-  // Built on Stripe, Chargebee and Stigg; declared on the rest. The picker reads
-  // the handler registry separately and offers a function as visibly unavailable
-  // per provider, so this pins the boundary: three providers real, four still
-  // not.
+  // Built on Stripe, Chargebee, Stigg and HubSpot; declared on the rest. The
+  // picker reads the handler registry separately and offers a function as
+  // visibly unavailable per provider, so this pins the boundary: four providers
+  // real, three still not.
   //
   // It is a list rather than a loop over every agreement provider, which is
   // what it used to be. A loop asserting "no handler anywhere" stops being a
   // statement about the unbuilt providers the moment one is built — it just
   // fails, and the fix looks like deleting the test. Naming them keeps the
   // assertion meaningful and makes the next provider a one-line change.
-  it("is built on Stripe, Chargebee and Stigg, and on no other provider yet", () => {
+  it("is built on Stripe, Chargebee, Stigg and HubSpot, and on no other provider yet", () => {
     expect(getSyncHandler("agreement", STRIPE_PROVIDER_NAME)).toBeDefined();
     expect(getSyncHandler("agreement", CHARGEBEE_PROVIDER_NAME)).toBeDefined();
     expect(getSyncHandler("agreement", STIGG_PROVIDER_NAME)).toBeDefined();
+    expect(getSyncHandler("agreement", HUBSPOT_PROVIDER_NAME)).toBeDefined();
 
     for (const provider of [
-      HUBSPOT_PROVIDER_NAME,
       SALESFORCE_PROVIDER_NAME,
       METRIFOX_PROVIDER_NAME,
       MOCK_PROVIDER_NAME,

@@ -4,7 +4,12 @@
  * Reads the properties API so the mapping editor's source dropdown shows what
  * this account actually has, custom properties included, rather than a
  * hardcoded guess at HubSpot's standard schema. The `crm.schemas.*.read` scopes
- * requested for the identity function exist precisely to make this call work.
+ * requested for each function exist precisely to make these calls work.
+ *
+ * The `agreement` function declares five objects but HubSpot serves only two of
+ * them — deals and line items. The rest return an empty field list rather than
+ * throwing: the discovery service asks for every object the function owns, and
+ * one unsupported object must not take the whole editor down.
  */
 
 import type { TargetObject } from "../../types/common";
@@ -14,21 +19,85 @@ import type {
   HandlerContext,
 } from "../../types/registry";
 import { asArray, asRecord, asString, createProviderSession } from "../http";
-import { hubspotApiBase, hubspotObjectPath } from "./api";
+import { hubspotApiBase, hubspotObjectPathIfSupported } from "./api";
+
+const AGREEMENT_FIELDS: readonly DiscoveredFieldDef[] = [
+  {
+    path: "agreement_name",
+    label: "Name (synthesized from Deal name, with an id fallback)",
+    type: "string",
+  },
+  {
+    path: "agreement_type",
+    label: "Agreement type (synthesized; always deal here)",
+    type: "string",
+  },
+  {
+    path: "agreement_status",
+    label:
+      "Status (synthesized; open → draft, won → active, lost → canceled)",
+    type: "string",
+  },
+  {
+    path: "effective_date",
+    label: "Effective date (ISO 8601, synthesized from Create date)",
+    type: "datetime",
+  },
+  {
+    path: "end_date",
+    label: "End date (ISO 8601, synthesized only when the deal is closed)",
+    type: "datetime",
+  },
+  {
+    path: "currency",
+    label: "Currency (synthesized from Deal currency)",
+    type: "string",
+  },
+  {
+    path: "provider_metadata",
+    label: "Provider metadata (JSON: stage, pipeline, amount and other raw facts)",
+    type: "string",
+  },
+];
+
+const AGREEMENT_ITEM_FIELDS: readonly DiscoveredFieldDef[] = [
+  {
+    path: "position",
+    label: "Position (synthesized order within the deal)",
+    type: "number",
+  },
+  {
+    path: "provider_metadata",
+    label: "Provider metadata (JSON: price, amount, discount and other raw facts)",
+    type: "string",
+  },
+];
+
+function syntheticFieldsFor(
+  object: TargetObject
+): readonly DiscoveredFieldDef[] {
+  if (object === "agreement") return AGREEMENT_FIELDS;
+  if (object === "agreementItem") return AGREEMENT_ITEM_FIELDS;
+  return [];
+}
 
 export const hubspotFieldDiscovery: FieldDiscovery = {
   async discover(
     ctx: Omit<HandlerContext, "requestedSourcePaths">,
     object: TargetObject
   ): Promise<readonly DiscoveredFieldDef[]> {
+    const objectPath = hubspotObjectPathIfSupported(object);
+    if (objectPath === undefined) return [];
+
     const session = createProviderSession(ctx, "HubSpot");
     const url = new URL(
-      `/crm/v3/properties/${hubspotObjectPath(object)}`,
+      `/crm/v3/properties/${objectPath}`,
       hubspotApiBase()
     );
 
     const body = asRecord(await session.getJson(url.toString()));
-    const fields: DiscoveredFieldDef[] = [];
+    const synthetic = syntheticFieldsFor(object);
+    const fields: DiscoveredFieldDef[] = [...synthetic];
 
     for (const entry of asArray(body?.["results"])) {
       const field = asRecord(entry);
@@ -48,7 +117,9 @@ export const hubspotFieldDiscovery: FieldDiscovery = {
       });
     }
 
-    fields.sort((a, b) => a.label.localeCompare(b.label));
-    return fields;
+    const sorted = fields
+      .slice(synthetic.length)
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return [...synthetic, ...sorted];
   },
 };

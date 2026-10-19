@@ -17,10 +17,11 @@ Currently implemented: the **identity** function on **HubSpot**, **Salesforce**,
 **Metrifox**, **Stripe**, **Chargebee**, **Stigg**, and a built-in **mock
 provider** so the whole thing runs with no credentials — plus **catalog**
 (products, the offerings that price them, prices, and the features each
-offering carries) and **agreement** (subscriptions, their lines, the
-entitlements they confer and the discounts on them) on **Stripe**, **Chargebee**
-and **Stigg**, and **billing** (invoices, their lines and the payments against
-them) on **Stripe** and **Chargebee**.
+offering carries), **agreement** (subscriptions, their lines, the entitlements
+they confer and the discounts on them on **Stripe**, **Chargebee** and
+**Stigg**; deals and their line items on **HubSpot**), and **billing**
+(invoices, their lines and the payments against them) on **Stripe** and
+**Chargebee**.
 
 The four functions are independent by design, and that independence is
 observable: catalog needs no customer, identity needs no price, and an agreement
@@ -679,8 +680,8 @@ mocked provider APIs plus the resolution pass against a real database.
 - **Integration tests** (msw) cover pagination, 429 with and without
   `Retry-After`, 401 → refresh → retry, SOQL construction, and field discovery
   against mocked HubSpot and Salesforce APIs, plus one file per commercial
-  function per provider: catalog, agreement and billing for both Stripe and
-  Chargebee, and the writers behind them.
+  function per provider — catalog, agreement and billing for Stripe and
+  Chargebee, agreement for Stigg and HubSpot deals — and the writers behind them.
 - Tests that need a database run inside a dedicated Postgres schema built by
   `tests/global-setup.ts` and named by `TEST_DATABASE_URL`; the dev database
   is never touched. That schema is dropped and recreated on every run, so the
@@ -913,9 +914,11 @@ either, and a reader must not "fix" the redundancy by summing lines.
   provider supports this yet" is a reachable state. `agreement` and `billing` are
   no longer on this list: Stripe and Chargebee both ship handlers for all three
   commercial functions.
-- **HubSpot and Salesforce declare `agreement` scopes but ship no agreement
-  handler.** The scopes are there because the canonical model insists one
-  agreement covers a sales-led order form and a self-serve subscription alike,
-  and declaring a pair is what makes that claim checkable before the handler
-  exists. Selecting Agreement on either CRM today offers the function and then
-  says plainly that no provider supports it yet.
+- **Salesforce declares `agreement` scopes but ships no agreement handler.**
+  The scopes are there because the canonical model insists one agreement covers
+  a sales-led order form and a self-serve subscription alike, and declaring a
+  pair is what makes that claim checkable before the handler exists. Selecting
+  Agreement on Salesforce today offers the function and then says plainly that
+  no provider supports it yet. HubSpot was in the same state and now syncs deals
+  and their line items; its product catalog remains unbuilt, so deal lines keep
+  their provider product id without resolving to an offering.

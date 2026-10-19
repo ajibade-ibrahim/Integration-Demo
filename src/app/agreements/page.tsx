@@ -22,8 +22,8 @@ export default async function AgreementsPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Agreements</h1>
         <p className="mt-1 text-slate-600">
-          What your customers agreed to — subscriptions today, order forms and
-          contracts when a provider supplies them.
+          What your customers agreed to — subscriptions and deals today, order
+          forms and contracts when a provider supplies them.
         </p>
       </div>
 
