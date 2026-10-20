@@ -89,7 +89,7 @@ Three consequences worth remembering:
 |---|---|---|
 | **Identity** | Ready | HubSpot, Salesforce, Metrifox, Stripe, Chargebee, Stigg, Mock CRM |
 | **Catalog** | Ready | Stripe, Chargebee, Stigg |
-| **Agreement** | Ready on three systems | Stripe, Chargebee, Stigg — listed but not yet syncing on HubSpot, Salesforce, Metrifox, Mock CRM |
+| **Agreement** | Ready on four systems | Stripe, Chargebee, Stigg, HubSpot (deals and line items) — listed but not yet syncing on Salesforce, Metrifox, Mock CRM |
 | **Billing** | Ready | Stripe, Chargebee |
 | **Support** | Declared only | HubSpot, Salesforce, Mock CRM can be chosen; nothing syncs yet |
 | **Usage** | Declared only | No system yet |

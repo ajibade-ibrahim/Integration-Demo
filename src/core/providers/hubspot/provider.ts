@@ -39,9 +39,13 @@ export const HUBSPOT_SUPPORT_SCOPES = [
 
 /**
  * Scopes for the agreement function. HubSpot models a commercial agreement as
- * a deal, so this is the deals object plus its schema — the same pairing
- * identity needs, and for the same reason: without the schema scope the
- * mapping editor has nothing to offer as a source field.
+ * a deal, and what a deal sold lives on line items, so this is the deals object
+ * plus its schema, the line-items object plus its schema, and companies for the
+ * deal→company association that becomes the customer link.
+ *
+ * `crm.objects.companies.read` duplicates an identity scope on purpose: an
+ * agreement-only integration still needs to read the company a deal names, and
+ * scope resolution deduplicates the union when identity is selected too.
  *
  * Granular like support, so adding agreement to a live HubSpot integration
  * genuinely widens the request and triggers re-consent.
@@ -49,12 +53,15 @@ export const HUBSPOT_SUPPORT_SCOPES = [
 export const HUBSPOT_AGREEMENT_SCOPES = [
   "crm.objects.deals.read",
   "crm.schemas.deals.read",
+  "crm.objects.companies.read",
+  "crm.objects.line_items.read",
+  "crm.schemas.line_items.read",
 ] as const;
 
 export const hubspotProvider: ProviderDefinition = {
   name: HUBSPOT_PROVIDER_NAME,
   label: "HubSpot",
-  description: "Sync companies and contacts from a HubSpot CRM account.",
+  description: "Sync companies, contacts, deals and deal line items from a HubSpot CRM account.",
 
   auth: {
     kind: "oauth",

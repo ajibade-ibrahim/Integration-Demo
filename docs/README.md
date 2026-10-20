@@ -62,7 +62,7 @@ system.
 
 | System | Type | How you connect it | What it brings in today |
 |---|---|---|---|
-| **HubSpot** | CRM | Sign in and approve access | Companies and contacts |
+| **HubSpot** | CRM | Sign in and approve access | Companies, contacts, deals and their line items |
 | **Salesforce** | CRM | Sign in and approve access | Accounts and contacts |
 | **Metrifox** | Billing / usage | Paste an API key from your dashboard | Customers and their people |
 | **Stripe** | Billing | Paste a secret or restricted API key | Customers, catalog, subscriptions, invoices, payments |
@@ -85,7 +85,7 @@ system is connected to them yet.
 |---|---|---|
 | **Identity** | Companies and the people who work at them: names, websites, emails, industries, job titles | HubSpot, Salesforce, Metrifox, Stripe, Chargebee, Stigg, Mock |
 | **Catalog** | What you sell: products, their offerings, prices, the features each offering includes | Stripe, Chargebee, Stigg |
-| **Agreement** | What customers signed up for: subscriptions, their priced lines, the features they receive, discounts | Stripe, Chargebee, Stigg |
+| **Agreement** | What customers signed up for: subscriptions, their priced lines, the features they receive, discounts — and HubSpot deals with their line items | Stripe, Chargebee, Stigg, HubSpot |
 | **Billing** | Invoices, the lines on each invoice, and payments and refunds | Stripe, Chargebee |
 | **Support** | Tickets, conversations, satisfaction scores | *Planned — shown but not syncing* |
 | **Usage** | Usage events and metering data | *Planned — shown but not syncing* |
@@ -93,9 +93,9 @@ system is connected to them yet.
 
 A few honest details behind that table:
 
-- **Agreement is partly planned.** HubSpot, Salesforce, Metrifox and the Mock
-  CRM appear when you choose Agreement, but only Stripe, Chargebee and Stigg
-  actually sync it. The platform says so plainly instead of hiding them.
+- **Agreement is partly planned.** Salesforce, Metrifox and the Mock CRM
+  appear when you choose Agreement, but only Stripe, Chargebee, Stigg and
+  HubSpot actually sync it. The platform says so plainly instead of hiding them.
 - **Support, Usage and Communication have no system behind them at all.** They
   are in the picker so the roadmap is visible, and so "no provider supports
   this yet" is a state the software can genuinely report.
@@ -194,7 +194,7 @@ knowing:
   screen yet; every connection belongs to the single account created when the
   database is first prepared.
 - **Support, Usage and Communication sync nothing yet**, and Agreement is only
-  live for Stripe, Chargebee and Stigg.
+  live for Stripe, Chargebee, Stigg and HubSpot (deals and line items).
 - **Stripe has no separate people records.** Its contacts are assembled from the
   customer's own name, email and phone — one per customer — which is the best
   that system offers, not a full contact list.

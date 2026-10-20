@@ -98,6 +98,7 @@ import { stiggFieldDiscovery } from "./providers/stigg/discovery";
 import { mockIdentityHandler } from "./providers/mock/identity-handler";
 import { mockFieldDiscovery } from "./providers/mock/discovery";
 import { hubspotIdentityHandler } from "./providers/hubspot/identity-handler";
+import { hubspotAgreementHandler } from "./providers/hubspot/agreement-handler";
 import { hubspotFieldDiscovery } from "./providers/hubspot/discovery";
 import { salesforceIdentityHandler } from "./providers/salesforce/identity-handler";
 import { salesforceFieldDiscovery } from "./providers/salesforce/discovery";
@@ -476,6 +477,20 @@ export function bootstrap(): void {
     AGREEMENT_FUNCTION,
     STIGG_PROVIDER_NAME,
     stiggFieldDiscovery
+  );
+
+  // HubSpot's agreement function is deals, with their line items read from a
+  // second paginated list. The scopes were declared long before this handler,
+  // so the picker already offered it; only the sync becomes real here.
+  registerSyncHandler(
+    AGREEMENT_FUNCTION,
+    HUBSPOT_PROVIDER_NAME,
+    hubspotAgreementHandler
+  );
+  registerFieldDiscovery(
+    AGREEMENT_FUNCTION,
+    HUBSPOT_PROVIDER_NAME,
+    hubspotFieldDiscovery
   );
 
   // Billing, on the same two providers. The discoverer switches on the target
