@@ -7,6 +7,7 @@
  * validation, token persistence, and proactive refresh.
  */
 
+import { unsupportedFunctionsFor } from "../capabilities";
 import {
   functionRegistry,
   missingScopes,
@@ -174,6 +175,17 @@ async function completeDraftCallback(
     };
   }
 
+  const unsupported = unsupportedFunctionsFor(
+    draft.functionNames,
+    draft.providerName
+  );
+  if (unsupported.length > 0) {
+    return {
+      ok: false,
+      error: `${provider.label} cannot sync ${unsupported.join(", ")}; no handler is available.`,
+    };
+  }
+
   const requestedScopes = resolveScopes(draft.functionNames, provider.name);
 
   let parsed: ExchangeResult;
@@ -265,6 +277,18 @@ async function completeReconnectCallback(
       ok: false,
       integrationId,
       error: `${provider.label} connects with an API key, not OAuth.`,
+    };
+  }
+
+  const unsupported = unsupportedFunctionsFor(
+    integration.functionNames,
+    integration.providerName
+  );
+  if (unsupported.length > 0) {
+    return {
+      ok: false,
+      integrationId,
+      error: `${provider.label} cannot sync ${unsupported.join(", ")}; no handler is available.`,
     };
   }
 

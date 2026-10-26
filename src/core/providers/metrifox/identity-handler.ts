@@ -45,6 +45,7 @@ export const METRIFOX_SESSION_OPTIONS = {
 } as const;
 
 export const metrifoxIdentityHandler: SyncHandler = {
+  objects: ["customer", "contact"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(
       ctx,

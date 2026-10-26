@@ -233,9 +233,9 @@ describe("the agreement function", () => {
   });
 
   // Built on Stripe, Chargebee, Stigg and HubSpot; declared on the rest. The
-  // picker reads the handler registry separately and offers a function as
-  // visibly unavailable per provider, so this pins the boundary: four providers
-  // real, three still not.
+  // capability layer reads the handler registry and removes the unbuilt pairs
+  // from the picker, so this pins the boundary: four providers real, three
+  // still not.
   //
   // It is a list rather than a loop over every agreement provider, which is
   // what it used to be. A loop asserting "no handler anywhere" stops being a
@@ -259,11 +259,12 @@ describe("the agreement function", () => {
       ).toBeUndefined();
     }
 
-    // And every one of them is still offered in the picker, which is the point
-    // of declaring scopes ahead of handlers.
+    // The scope registry still lists every declared provider, including the
+    // unbuilt ones; the capability layer is what removes them from the picker.
     expect(providerNamesForFunction("agreement")).toContain(
       HUBSPOT_PROVIDER_NAME
     );
+    expect(getSyncHandler("agreement", HUBSPOT_PROVIDER_NAME)).toBeDefined();
   });
 });
 
@@ -316,8 +317,8 @@ describe("the billing function", () => {
       ).toBeUndefined();
     }
 
-    // The mock is still offered, because declaring scopes ahead of handlers is
-    // the point — it simply cannot sync.
+    // The mock's scopes remain declared for scope-isolation tests, but it has
+    // no billing handler and the capability layer filters it from the picker.
     expect(providerNamesForFunction("billing")).toContain(MOCK_PROVIDER_NAME);
   });
 

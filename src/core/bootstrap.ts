@@ -2,10 +2,10 @@
  * Registry bootstrap — the one place functions, providers, and handlers are
  * declared.
  *
- * All five functions are registered although only `identity` has a working
- * handler. That is deliberate: it makes the function picker honest, and it
- * keeps "no providers support this function yet" a reachable state rather than
- * something only tests ever see.
+ * All seven functions are registered, but a handler exists only for the
+ * provider/function pairs that are actually built. That is deliberate: scope
+ * declarations keep the roadmap and the consent rules honest, while the
+ * capability layer filters unbuilt pairs out of the picker and connect API.
  *
  * An integration serves a *set* of functions, so scope sets compose. HubSpot
  * declaring both identity and support is the motivating case — one connection,
@@ -140,8 +140,8 @@ export function bootstrap(): void {
   // --- functions ---------------------------------------------------------
   // Declaring scopes for a (function, provider) pair claims that the provider
   // can serve that function and that these are the scopes it would need. It
-  // does not claim we have built the handler — the picker reads the handler
-  // registry separately and marks a function visibly unavailable.
+  // does not claim we have built the handler — the capability layer requires
+  // both a handler and its declared target objects before offering the pair.
   //
   // Billing is now real on Stripe and Chargebee, and stays declared on the mock
   // so scope isolation ("authorizing for identity must never request
@@ -348,9 +348,10 @@ export function bootstrap(): void {
   }
 
   // --- handlers ----------------------------------------------------------
-  // Only identity has handlers. A function declared with scopes but no handler
-  // is a reachable, honest state — the user can select it and see it listed,
-  // and the sync engine says so plainly rather than failing obscurely.
+  // A function declared with scopes but no handler remains a reachable, honest
+  // state for the scope registry, but the picker and connect API filter it out.
+  // Each handler also declares the objects it writes, so capability can describe
+  // a provider's actual coverage instead of repeating the function's roadmap.
   registerSyncHandler(IDENTITY_FUNCTION, HUBSPOT_PROVIDER_NAME, hubspotIdentityHandler);
   registerFieldDiscovery(IDENTITY_FUNCTION, HUBSPOT_PROVIDER_NAME, hubspotFieldDiscovery);
 

@@ -150,6 +150,7 @@ function packagesFrom(records: readonly RawRecord[], kind: "plan" | "addon"): St
 }
 
 export const stiggCatalogHandler: SyncHandler = {
+  objects: ["product", "offering", "price", "feature", "entitlement"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(ctx, "Stigg", STIGG_SESSION_OPTIONS);
     const perPage = stiggPageSize();

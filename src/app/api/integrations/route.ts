@@ -10,15 +10,13 @@
 
 import { NextResponse } from "next/server";
 import { bootstrap } from "@/core/bootstrap";
+import { unsupportedFunctionsFor } from "@/core/capabilities";
 import { listIntegrations } from "@/core/repositories/integration-repository";
 import { createDraft } from "@/core/integrations/draft-store";
 import { currentUserId } from "@/lib/current-user";
 import { providerRegistry } from "@/core/registries/provider-registry";
 import { draftConnectHrefFor } from "@/core/providers/connect-url";
-import {
-  functionRegistry,
-  providerNamesForFunctions,
-} from "@/core/registries/function-registry";
+import { functionRegistry } from "@/core/registries/function-registry";
 
 export async function GET(): Promise<NextResponse> {
   bootstrap();
@@ -67,12 +65,14 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  // The provider must cover every selected function — one integration is a
-  // single grant, so a provider serving only part of the set is not valid here.
-  if (!providerNamesForFunctions(functionNames).includes(providerName)) {
+  // Scope declarations alone are not enough. The provider must have a handler
+  // for every selected function, or the connection would authorize successfully
+  // and then have nothing to sync.
+  const unsupported = unsupportedFunctionsFor(functionNames, providerName);
+  if (unsupported.length > 0) {
     return NextResponse.json(
       {
-        error: `${provider.label} does not support all of: ${functionNames.join(", ")}`,
+        error: `${provider.label} does not sync ${unsupported.join(", ")} yet`,
       },
       { status: 400 }
     );

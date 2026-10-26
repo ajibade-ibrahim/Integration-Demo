@@ -295,6 +295,7 @@ async function* pagePayments(
 }
 
 export const stripeBillingHandler: SyncHandler = {
+  objects: ["invoice", "invoiceLine", "payment"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(ctx, "Stripe", STRIPE_SESSION_OPTIONS);
 

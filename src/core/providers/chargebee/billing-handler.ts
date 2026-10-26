@@ -53,6 +53,7 @@ import {
 import { CHARGEBEE_SESSION_OPTIONS } from "./catalog-handler";
 
 export const chargebeeBillingHandler: SyncHandler = {
+  objects: ["invoice", "invoiceLine", "payment"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(
       ctx,

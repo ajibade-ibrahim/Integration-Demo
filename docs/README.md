@@ -87,18 +87,19 @@ system is connected to them yet.
 | **Catalog** | What you sell: products, their offerings, prices, the features each offering includes | Stripe, Chargebee, Stigg |
 | **Agreement** | What customers signed up for: subscriptions, their priced lines, the features they receive, discounts — and HubSpot deals with their line items | Stripe, Chargebee, Stigg, HubSpot |
 | **Billing** | Invoices, the lines on each invoice, and payments and refunds | Stripe, Chargebee |
-| **Support** | Tickets, conversations, satisfaction scores | *Planned — shown but not syncing* |
-| **Usage** | Usage events and metering data | *Planned — shown but not syncing* |
-| **Communication** | Email, calls, and messaging history | *Planned — shown but not syncing* |
+| **Support** | Tickets, conversations, satisfaction scores | *Planned — not selectable yet* |
+| **Usage** | Usage events and metering data | *Planned — not selectable yet* |
+| **Communication** | Email, calls, and messaging history | *Planned — not selectable yet* |
 
 A few honest details behind that table:
 
 - **Agreement is partly planned.** Salesforce, Metrifox and the Mock CRM
-  appear when you choose Agreement, but only Stripe, Chargebee, Stigg and
-  HubSpot actually sync it. The platform says so plainly instead of hiding them.
+  declare agreement scopes, but they have no handler, so they are not offered
+  for Agreement. Only Stripe, Chargebee, Stigg and HubSpot actually sync it.
 - **Support, Usage and Communication have no system behind them at all.** They
-  are in the picker so the roadmap is visible, and so "no provider supports
-  this yet" is a state the software can genuinely report.
+  remain visible but disabled on the New integration page, so the roadmap is
+  visible and "no provider supports this yet" is a state the software can
+  genuinely report.
 - **The same data can arrive from several systems.** Customers from Stripe,
   Metrifox and a CRM are separate records until the company-matching step
   combines them (see below).

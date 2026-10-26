@@ -217,6 +217,7 @@ async function accountUsesEntitlements(
 }
 
 export const stripeCatalogHandler: SyncHandler = {
+  objects: ["product", "offering", "price", "feature", "entitlement"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(ctx, "Stripe", STRIPE_SESSION_OPTIONS);
 

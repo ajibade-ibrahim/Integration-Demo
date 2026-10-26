@@ -6,10 +6,11 @@ export interface FunctionOption {
   name: string;
   label: string;
   description: string;
-  dataModels: string[];
+  /** Providers whose registered handler and scopes can serve this function. */
   providers: string[];
   scopesByProvider: Record<string, string[]>;
-  hasHandler: boolean;
+  /** Target objects the selected provider can actually write. */
+  objectsByProvider: Record<string, string[]>;
 }
 
 export interface ProviderOption {
@@ -56,6 +57,19 @@ export function NewIntegrationForm({
       const definition = functions.find((f) => f.name === fn);
       for (const scope of definition?.scopesByProvider[selectedProvider] ?? []) {
         union.add(scope);
+      }
+    }
+    return [...union].sort();
+  }, [selectedFunctions, selectedProvider, functions]);
+
+  /** What the connected provider will actually write, not the roadmap. */
+  const writtenObjects = useMemo(() => {
+    if (selectedProvider === null) return [];
+    const union = new Set<string>();
+    for (const fn of selectedFunctions) {
+      const definition = functions.find((f) => f.name === fn);
+      for (const object of definition?.objectsByProvider[selectedProvider] ?? []) {
+        union.add(object);
       }
     }
     return [...union].sort();
@@ -127,13 +141,16 @@ export function NewIntegrationForm({
         <div className="grid gap-3 sm:grid-cols-2">
           {functions.map((fn) => {
             const checked = selectedFunctions.includes(fn.name);
+            const available = fn.providers.length > 0;
             return (
               <label
                 key={fn.name}
-                className={`cursor-pointer rounded-xl border p-4 transition ${
-                  checked
-                    ? "border-slate-900 bg-white ring-1 ring-slate-900"
-                    : "border-slate-200 bg-white hover:border-slate-300"
+                className={`rounded-xl border p-4 transition ${
+                  !available
+                    ? "cursor-not-allowed border-slate-200 bg-slate-50 opacity-70"
+                    : checked
+                      ? "cursor-pointer border-slate-900 bg-white ring-1 ring-slate-900"
+                      : "cursor-pointer border-slate-200 bg-white hover:border-slate-300"
                 }`}
               >
                 <div className="flex items-start gap-3">
@@ -141,12 +158,13 @@ export function NewIntegrationForm({
                     type="checkbox"
                     className="mt-1"
                     checked={checked}
+                    disabled={!available}
                     onChange={() => toggleFunction(fn.name)}
                   />
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{fn.label}</span>
-                      {!fn.hasHandler && (
+                      {!available && (
                         <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">
                           no sync yet
                         </span>
@@ -155,7 +173,7 @@ export function NewIntegrationForm({
                     <p className="mt-1 text-sm text-slate-600">{fn.description}</p>
                     <p className="mt-1.5 text-xs text-slate-400">
                       {fn.providers.length === 0
-                        ? "No providers available"
+                        ? "No system can sync this yet"
                         : `${fn.providers.length} provider${fn.providers.length === 1 ? "" : "s"}`}
                     </p>
                   </div>
@@ -175,10 +193,10 @@ export function NewIntegrationForm({
 
           {noProviders ? (
             <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              No provider supports every function you selected. One integration
+              No provider can sync every function you selected. One integration
               is a single connection to a single account, so it needs a provider
-              that covers the whole set — try selecting fewer functions, or set
-              up a second integration.
+              with a handler for the whole set — try selecting fewer functions,
+              or set up a second integration.
             </p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
@@ -244,14 +262,22 @@ export function NewIntegrationForm({
                 </li>
               ))}
             </ul>
-            <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
-              {isApiKeyProvider
-                ? // An API key has no consent step to narrow, so this list
-                  // describes what the integration reads rather than what it
-                  // is granted. Saying "requested" here would overclaim.
-                  "Determined by the functions selected above. An API key grants whatever the key itself can reach, so this is what the integration reads, not a limit imposed at connect time."
-                : "Determined entirely by the functions selected above. Choosing different functions changes this list."}
-            </p>
+            <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+              <p className="text-xs text-slate-500">
+                Writes:{" "}
+                <span className="font-mono text-slate-700">
+                  {writtenObjects.length > 0 ? writtenObjects.join(", ") : "—"}
+                </span>
+              </p>
+              <p className="text-xs text-slate-500">
+                {isApiKeyProvider
+                  ? // An API key has no consent step to narrow, so this list
+                    // describes what the integration reads rather than what it
+                    // is granted. Saying "requested" here would overclaim.
+                    "Determined by the functions selected above. An API key grants whatever the key itself can reach, so this is what the integration reads, not a limit imposed at connect time."
+                  : "Determined entirely by the functions selected above. Choosing different functions changes this list."}
+              </p>
+            </div>
           </div>
 
           <label className="block">

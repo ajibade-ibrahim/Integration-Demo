@@ -25,6 +25,7 @@ function* paginate<T>(items: readonly T[], size: number): Generator<T[]> {
 }
 
 export const mockIdentityHandler: SyncHandler = {
+  objects: ["customer", "contact"],
   async *fetchPages(_ctx: HandlerContext): AsyncIterable<SourcePage> {
     // Companies first — the sync engine depends on that ordering to resolve
     // contact associations without a second pass.

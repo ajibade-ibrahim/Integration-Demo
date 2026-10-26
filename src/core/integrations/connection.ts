@@ -13,6 +13,7 @@
  * removes the need for that explanation.
  */
 
+import { unsupportedFunctionsFor } from "../capabilities";
 import {
   createIntegration,
   deleteIntegration,
@@ -34,6 +35,16 @@ export async function finalizeConnection(
   integration: Pick<IntegrationRecord, "id" | "providerName" | "functionNames">,
   at: Date
 ): Promise<void> {
+  const unsupported = unsupportedFunctionsFor(
+    integration.functionNames,
+    integration.providerName
+  );
+  if (unsupported.length > 0) {
+    throw new Error(
+      `${integration.providerName} cannot sync ${unsupported.join(", ")}; no handler is available`
+    );
+  }
+
   await markAuthorized(integration.id, at);
 
   // Only fills an empty rule set, so reconnecting never disturbs a user's edits.
@@ -71,6 +82,20 @@ export async function createIntegrationFromDraft(args: {
   at: Date;
 }): Promise<IntegrationRecord> {
   const { draft } = args;
+
+  // The API validates this before writing a draft, but a draft can outlive a
+  // handler removal or arrive from a caller that skipped the route. Refuse
+  // before the row exists rather than creating an integration whose first sync
+  // is guaranteed to fail.
+  const unsupported = unsupportedFunctionsFor(
+    draft.functionNames,
+    draft.providerName
+  );
+  if (unsupported.length > 0) {
+    throw new Error(
+      `${draft.providerName} cannot sync ${unsupported.join(", ")}; no handler is available`
+    );
+  }
 
   const integration = await createIntegration({
     userId: draft.userId,

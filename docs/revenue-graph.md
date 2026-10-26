@@ -132,9 +132,10 @@ The agreement's own question list, answered by this schema today:
 
 Stripe, Chargebee, Stigg and HubSpot write agreements today — the first three
 as subscriptions, HubSpot as deals with their line items. Salesforce, Metrifox
-and the Mock CRM appear in the picker for Agreement but sync nothing — the type
-discriminator exists precisely so their future order forms and contracts are a
-new provider plug, not a migration against stored rows.
+and the Mock CRM declare agreement scopes but have no handler, so the picker
+does not offer them; the type discriminator exists precisely so their future
+order forms and contracts are a new provider plug, not a migration against
+stored rows.
 
 ## Parallel states: structure yes, derivation not yet
 

@@ -50,6 +50,7 @@ export const CHARGEBEE_SESSION_OPTIONS = {
 } as const;
 
 export const chargebeeCatalogHandler: SyncHandler = {
+  objects: ["product", "offering", "price", "feature", "entitlement"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(
       ctx,

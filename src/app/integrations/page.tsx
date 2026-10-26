@@ -1,10 +1,14 @@
 import Link from "next/link";
 import { bootstrap } from "@/core/bootstrap";
+import { unsupportedFunctionsFor } from "@/core/capabilities";
 import { listIntegrations } from "@/core/repositories/integration-repository";
 import { currentUserId } from "@/lib/current-user";
 import { functionRegistry } from "@/core/registries/function-registry";
 import { providerRegistry } from "@/core/registries/provider-registry";
-import { StatusBadge } from "@/app/integrations/status-badge";
+import {
+  StatusBadge,
+  SyncabilityBadge,
+} from "@/app/integrations/status-badge";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +69,11 @@ export default async function IntegrationsPage({
         <ul className="space-y-3">
           {integrations.map((integration) => {
             const provider = providerRegistry.get(integration.providerName);
+            const syncable =
+              unsupportedFunctionsFor(
+                integration.functionNames,
+                integration.providerName
+              ).length === 0;
             return (
               <li key={integration.id}>
                 <Link
@@ -98,6 +107,7 @@ export default async function IntegrationsPage({
                           ? "Never synced"
                           : `Synced ${integration.lastSyncTimestamp.toLocaleDateString()}`}
                       </span>
+                      <SyncabilityBadge syncable={syncable} />
                       <StatusBadge status={integration.status} />
                     </div>
                   </div>

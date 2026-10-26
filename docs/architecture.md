@@ -89,15 +89,18 @@ Three consequences worth remembering:
 |---|---|---|
 | **Identity** | Ready | HubSpot, Salesforce, Metrifox, Stripe, Chargebee, Stigg, Mock CRM |
 | **Catalog** | Ready | Stripe, Chargebee, Stigg |
-| **Agreement** | Ready on four systems | Stripe, Chargebee, Stigg, HubSpot (deals and line items) — listed but not yet syncing on Salesforce, Metrifox, Mock CRM |
+| **Agreement** | Ready on four systems | Stripe, Chargebee, Stigg, HubSpot (deals and line items) |
 | **Billing** | Ready | Stripe, Chargebee |
-| **Support** | Declared only | HubSpot, Salesforce, Mock CRM can be chosen; nothing syncs yet |
-| **Usage** | Declared only | No system yet |
-| **Communication** | Declared only | No system yet |
+| **Support** | Not selectable yet | No handler; scope declarations remain for the roadmap |
+| **Usage** | Not selectable yet | No handler; scope declarations remain for the roadmap |
+| **Communication** | Not selectable yet | No handler; scope declarations remain for the roadmap |
 
-"Declared only" is deliberate. It makes the picker show the real roadmap, and
-it makes "no system supports this yet" a message the software can honestly
-produce rather than a dead end the user discovers alone.
+Unbuilt functions are deliberately still visible on the New integration page,
+marked "no sync yet" and disabled. The scope declarations keep the roadmap and
+the consent rules honest; the capability layer requires a registered handler
+before a function/provider pair can be selected or connected. That makes "no
+system supports this yet" a state the software reports up front, rather than a
+connection that authorizes and then syncs nothing.
 
 ## 4. Connecting a system
 

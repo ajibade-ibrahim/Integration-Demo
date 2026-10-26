@@ -1,13 +1,20 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { bootstrap } from "@/core/bootstrap";
+import {
+  supportedObjectsFor,
+  unsupportedFunctionsFor,
+} from "@/core/capabilities";
 import { findIntegrationForUser } from "@/core/repositories/integration-repository";
 import { currentUserId } from "@/lib/current-user";
 import { functionRegistry, resolveScopes } from "@/core/registries/function-registry";
 import { providerRegistry } from "@/core/registries/provider-registry";
 import { checkReauthorization } from "@/core/oauth/oauth-service";
 import { connectHrefFor } from "@/core/providers/connect-url";
-import { StatusBadge } from "@/app/integrations/status-badge";
+import {
+  StatusBadge,
+  SyncabilityBadge,
+} from "@/app/integrations/status-badge";
 import { listRecentRuns } from "@/core/repositories/sync-run-repository";
 import { countMappings } from "@/core/repositories/mapping-repository";
 import { SyncPanel } from "./sync-panel";
@@ -34,6 +41,11 @@ export default async function IntegrationDetailPage({
 
   const provider = providerRegistry.get(integration.providerName);
   const isApiKey = provider?.auth.kind === "apiKey";
+  const unsupportedFunctions = unsupportedFunctionsFor(
+    integration.functionNames,
+    integration.providerName
+  );
+  const syncable = unsupportedFunctions.length === 0;
   const reauth = await checkReauthorization(integration);
   const runs = await listRecentRuns(integration.id);
 
@@ -45,7 +57,10 @@ export default async function IntegrationDetailPage({
       count: await countMappings(integration.id, name),
     }))
   );
-  const unmapped = ruleCounts.filter((entry) => entry.count === 0);
+  const unmapped = ruleCounts.filter(
+    (entry) =>
+      entry.count === 0 && !unsupportedFunctions.includes(entry.name)
+  );
 
   // Counted so the delete confirmation can say what is actually at stake
   // rather than a vague "and all its data". Every table that cascades off the
@@ -102,8 +117,28 @@ export default async function IntegrationDetailPage({
             {provider?.label ?? integration.providerName}
           </p>
         </div>
-        <StatusBadge status={integration.status} />
+        <div className="flex items-center gap-2">
+          <SyncabilityBadge syncable={syncable} />
+          <StatusBadge status={integration.status} />
+        </div>
       </div>
+
+      {unsupportedFunctions.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm font-medium text-amber-900">
+            This integration cannot sync
+          </p>
+          <p className="mt-1 text-sm text-amber-800">
+            No sync handler is available for{" "}
+            {unsupportedFunctions.join(", ")} on{" "}
+            {provider?.label ?? integration.providerName}. This connection
+            cannot pull records while{" "}
+            {unsupportedFunctions.length === 1 ? "that function is" : "those functions are"}{" "}
+            included. Delete it and create a new integration without{" "}
+            {unsupportedFunctions.length === 1 ? "it" : "them"}.
+          </p>
+        </div>
+      )}
 
       {/* Re-consent prompt: the stored grant no longer covers the function set. */}
       {reauth.needed && integration.status === "active" && (
@@ -143,11 +178,16 @@ export default async function IntegrationDetailPage({
 
       <section className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Functions served
+          Functions
         </h2>
         <div className="grid gap-3 sm:grid-cols-2">
           {integration.functionNames.map((name) => {
             const definition = functionRegistry.get(name);
+            const objects = supportedObjectsFor(name, integration.providerName);
+            const unserved =
+              definition?.dataModels.filter(
+                (declared) => !objects.some((object) => object === declared)
+              ) ?? [];
             return (
               <div
                 key={name}
@@ -157,20 +197,40 @@ export default async function IntegrationDetailPage({
                 <p className="mt-1 text-sm text-slate-600">
                   {definition?.description ?? ""}
                 </p>
-                <p className="mt-2 text-xs text-slate-400">
-                  Writes: {definition?.dataModels.join(", ") ?? "—"}
+                <p
+                  className={`mt-2 text-xs ${
+                    objects.length === 0 ? "text-amber-700" : "text-slate-400"
+                  }`}
+                >
+                  Writes:{" "}
+                  {objects.length > 0
+                    ? objects.join(", ")
+                    : "nothing — no sync handler"}
                 </p>
+                {unserved.length > 0 && (
+                  <p className="mt-1 text-xs text-slate-400">
+                    Not served by this provider: {unserved.join(", ")}
+                  </p>
+                )}
                 <p className="mt-3 text-sm">
-                  <Link
-                    href={`/integrations/${integration.id}/mapping?function=${name}`}
-                    className="text-slate-700 underline underline-offset-2 hover:text-slate-900"
-                  >
-                    Edit field mapping
-                  </Link>
-                  <span className="ml-2 text-xs text-slate-400">
-                    {ruleCounts.find((entry) => entry.name === name)?.count ?? 0}{" "}
-                    rules
-                  </span>
+                  {objects.length > 0 ? (
+                    <>
+                      <Link
+                        href={`/integrations/${integration.id}/mapping?function=${name}`}
+                        className="text-slate-700 underline underline-offset-2 hover:text-slate-900"
+                      >
+                        Edit field mapping
+                      </Link>
+                      <span className="ml-2 text-xs text-slate-400">
+                        {ruleCounts.find((entry) => entry.name === name)?.count ?? 0}{" "}
+                        rules
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-xs text-amber-700">
+                      No mapping until a handler exists
+                    </span>
+                  )}
                 </p>
               </div>
             );
@@ -178,7 +238,7 @@ export default async function IntegrationDetailPage({
         </div>
       </section>
 
-      {unmapped.length > 0 && integration.status === "active" && (
+      {unmapped.length > 0 && integration.status === "active" && syncable && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           No field mapping is configured for{" "}
           {unmapped.map((entry) => entry.name).join(", ")}. A sync would have
@@ -189,7 +249,7 @@ export default async function IntegrationDetailPage({
 
       <SyncPanel
         integrationId={integration.id}
-        canSync={integration.status === "active"}
+        canSync={integration.status === "active" && syncable}
         initialRuns={runs.map((run) => ({
           ...run,
           startedAt: run.startedAt.toISOString(),

@@ -9,6 +9,7 @@
  * Nothing here logs the key, and the route above it returns only a verdict.
  */
 
+import { unsupportedFunctionsFor } from "../capabilities";
 import {
   functionNamesForProvider,
   resolveScopes,
@@ -170,6 +171,17 @@ export async function connectDraftWithApiKey(args: {
     };
   }
 
+  const unsupported = unsupportedFunctionsFor(
+    draft.functionNames,
+    draft.providerName
+  );
+  if (unsupported.length > 0) {
+    return {
+      ok: false,
+      error: `${provider.label} cannot sync ${unsupported.join(", ")} yet.`,
+    };
+  }
+
   const { proven, failure } = await proveKey(
     provider,
     provider.auth,
@@ -216,6 +228,17 @@ export async function connectWithApiKey(args: {
     return {
       ok: false,
       error: `${provider.label} connects with OAuth, not an API key.`,
+    };
+  }
+
+  const unsupported = unsupportedFunctionsFor(
+    integration.functionNames,
+    integration.providerName
+  );
+  if (unsupported.length > 0) {
+    return {
+      ok: false,
+      error: `${provider.label} cannot sync ${unsupported.join(", ")}; no handler is available.`,
     };
   }
 

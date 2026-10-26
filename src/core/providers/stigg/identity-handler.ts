@@ -40,6 +40,7 @@ export const STIGG_SESSION_OPTIONS = {
 } as const;
 
 export const stiggIdentityHandler: SyncHandler = {
+  objects: ["customer", "contact"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(
       ctx,

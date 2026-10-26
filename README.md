@@ -910,15 +910,15 @@ either, and a reader must not "fix" the redundancy by summing lines.
   `providerMetadata` — the honest record of why, rather than linking the whole
   invoice to whichever subscription happened to come first.
 - **`support`, `usage`, and `communication` have no handlers.** They
-  are registered so the function picker shows the real roadmap and so "no
-  provider supports this yet" is a reachable state. `agreement` and `billing` are
-  no longer on this list: Stripe and Chargebee both ship handlers for all three
-  commercial functions.
+  are registered so the New integration page can show the real roadmap, but the
+  capability layer disables them and no provider is offered for them.
+  `agreement` and `billing` are no longer on this list: Stripe and Chargebee
+  both ship handlers for all three commercial functions.
 - **Salesforce declares `agreement` scopes but ships no agreement handler.**
   The scopes are there because the canonical model insists one agreement covers
   a sales-led order form and a self-serve subscription alike, and declaring a
-  pair is what makes that claim checkable before the handler exists. Selecting
-  Agreement on Salesforce today offers the function and then says plainly that
-  no provider supports it yet. HubSpot was in the same state and now syncs deals
-  and their line items; its product catalog remains unbuilt, so deal lines keep
-  their provider product id without resolving to an offering.
+  pair is what makes that claim checkable before the handler exists. Salesforce
+  is therefore not offered when Agreement is selected. HubSpot was in the same
+  state and now syncs deals and their line items; its product catalog remains
+  unbuilt, so deal lines keep their provider product id without resolving to an
+  offering.

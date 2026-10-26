@@ -90,6 +90,7 @@ async function* fetchObjectPages(
 }
 
 export const hubspotAgreementHandler: SyncHandler = {
+  objects: ["agreement", "agreementItem"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(ctx, "HubSpot");
 

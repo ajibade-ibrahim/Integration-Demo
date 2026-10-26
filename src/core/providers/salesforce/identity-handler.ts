@@ -82,6 +82,7 @@ async function* fetchObject(
 }
 
 export const salesforceIdentityHandler: SyncHandler = {
+  objects: ["customer", "contact"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(ctx, "Salesforce");
 

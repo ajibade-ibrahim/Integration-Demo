@@ -49,6 +49,7 @@ import {
 import { STIGG_SESSION_OPTIONS } from "./identity-handler";
 
 export const stiggAgreementHandler: SyncHandler = {
+  objects: ["agreement", "subscription", "agreementItem", "agreementDiscount"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(
       ctx,

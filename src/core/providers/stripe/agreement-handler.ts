@@ -220,6 +220,7 @@ async function* pageSubscriptions(
 }
 
 export const stripeAgreementHandler: SyncHandler = {
+  objects: ["agreement", "subscription", "agreementItem"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(ctx, "Stripe", STRIPE_SESSION_OPTIONS);
 

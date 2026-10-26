@@ -2,6 +2,7 @@
  * Sync handler and field discovery registries, keyed by (function, provider).
  */
 
+import { objectsForFunction } from "../object-schema";
 import type { FieldDiscovery, SyncHandler } from "../types/registry";
 
 const handlers = new Map<string, SyncHandler>();
@@ -20,6 +21,20 @@ export function registerSyncHandler(
   if (handlers.has(k)) {
     throw new Error(`HandlerRegistry: '${k}' is already registered`);
   }
+
+  const owned = objectsForFunction(functionName);
+  if (handler.objects.length === 0) {
+    throw new Error(
+      `HandlerRegistry: '${k}' must declare at least one target object`
+    );
+  }
+  const foreign = handler.objects.filter((object) => !owned.includes(object));
+  if (foreign.length > 0) {
+    throw new Error(
+      `HandlerRegistry: '${k}' claims objects the function does not write: ${foreign.join(", ")}`
+    );
+  }
+
   handlers.set(k, handler);
 }
 

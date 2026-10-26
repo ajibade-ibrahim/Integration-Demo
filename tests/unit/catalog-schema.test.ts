@@ -56,8 +56,9 @@ describe("the catalog schema", () => {
   });
 
   it("agrees with what the function declares it syncs", () => {
-    // `dataModels` drives the picker's "Writes: …" line, `objectsForFunction`
-    // drives the sync. A divergence would advertise one thing and do another.
+    // `dataModels` is the function's declared roadmap; `objectsForFunction`
+    // drives the sync. The picker and detail page narrow this to the handler's
+    // actual objects, but the function declaration itself must stay aligned.
     expect([...functionRegistry.require(CATALOG_FUNCTION).dataModels].sort()).toEqual(
       [...objectsForFunction(CATALOG_FUNCTION)].sort()
     );

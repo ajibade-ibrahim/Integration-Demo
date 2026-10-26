@@ -23,6 +23,10 @@ import {
   findDraft,
 } from "@/core/integrations/draft-store";
 import {
+  createIntegrationFromDraft,
+  finalizeConnection,
+} from "@/core/integrations/connection";
+import {
   connectDraftWithApiKey,
   connectWithApiKey,
 } from "@/core/credentials/api-key-service";
@@ -247,6 +251,70 @@ describe("connecting a draft", () => {
     // Just past the 30-minute window.
     expect(await draftCount(now + 30 * 60 * 1000 + 1, userId)).toBe(0);
     expect(await integrationCount()).toBe(0);
+  });
+
+  it("refuses to create a pair with no sync handler", async () => {
+    // Salesforce declares agreement scopes but has no agreement handler. The
+    // route rejects this before a draft exists; this pins the shared connection
+    // guard as the second line of defence.
+    const draft = await createDraft({
+      userId,
+      providerName: "salesforce",
+      functionNames: ["agreement"],
+      instanceLabel: "Salesforce — unsupported",
+    });
+
+    let storedCredential = false;
+    await expect(
+      createIntegrationFromDraft({
+        draft,
+        at: new Date(),
+        storeCredential: async () => {
+          storedCredential = true;
+        },
+      })
+    ).rejects.toThrow(/cannot sync agreement/i);
+
+    expect(storedCredential).toBe(false);
+    expect(await integrationCount()).toBe(0);
+  });
+
+  it("rejects an unsupported draft before probing the key", async () => {
+    // No msw handler here: the guard must return before any network call, and
+    // `onUnhandledRequest: "error"` would surface one.
+    const draft = await createDraft({
+      userId,
+      providerName: "stigg",
+      functionNames: ["support"],
+      instanceLabel: "Stigg — unsupported key flow",
+    });
+
+    const result = await connectDraftWithApiKey({
+      draftId: draft.draftId,
+      apiKey: "any-key",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/cannot sync support/i);
+    expect(await integrationCount()).toBe(0);
+  });
+
+  it("refuses to finalize a legacy integration whose functions have no handler", async () => {
+    const integration = await createIntegration({
+      userId,
+      providerName: "salesforce",
+      functionNames: ["agreement"],
+      instanceLabel: "Salesforce — legacy",
+    });
+
+    await expect(
+      finalizeConnection(integration, new Date())
+    ).rejects.toThrow(/cannot sync agreement/i);
+
+    const after = await prisma.integration.findUniqueOrThrow({
+      where: { id: integration.id },
+    });
+    expect(after.status).toBe("pending_authorization");
   });
 });
 

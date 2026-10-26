@@ -308,6 +308,21 @@ export type ExternalRefs = Readonly<Partial<Record<TargetObject, string>>>;
  * retry, and a successful one that deleted live lines costs the data.
  */
 export interface SyncHandler {
+  /**
+   * Target objects this handler can actually produce.
+   *
+   * Declared rather than inferred from `FunctionDefinition.dataModels` because
+   * a function is a category, not a promise that every provider fills every
+   * object in it. Stigg writes agreement discounts but deliberately not
+   * agreement entitlements; HubSpot writes deals but not subscriptions. The
+   * picker and integration detail page read this list so "Writes" describes
+   * what the connected provider can do, not what the function could contain.
+   *
+   * Must be a subset of the owning function's objects; `registerSyncHandler`
+   * enforces that, and the sync engine still decides write order from
+   * `objectsForFunction`.
+   */
+  readonly objects: readonly TargetObject[];
   fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage>;
   /**
    * Provider ids of the records this one hangs off, keyed by what each is —

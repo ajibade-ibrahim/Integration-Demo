@@ -57,9 +57,10 @@ describe("the billing schema", () => {
   });
 
   it("agrees with what the function declares it syncs", () => {
-    // The parity twin that did not exist for billing. `dataModels` drives the
-    // picker's "Writes: …" line and `objectsForFunction` drives the sync, so a
-    // divergence would advertise one thing and do another.
+    // The parity twin that did not exist for billing. `dataModels` is the
+    // function's declared roadmap and `objectsForFunction` drives the sync; the
+    // per-handler objects narrow the picker's "Writes" line. A divergence here
+    // would make the roadmap and the writer disagree.
     expect(
       [...functionRegistry.require(BILLING_FUNCTION).dataModels].sort()
     ).toEqual([...objectsForFunction(BILLING_FUNCTION)].sort());

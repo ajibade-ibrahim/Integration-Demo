@@ -55,6 +55,7 @@ export const STRIPE_SESSION_OPTIONS = {
 } as const;
 
 export const stripeIdentityHandler: SyncHandler = {
+  objects: ["customer", "contact"],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(ctx, "Stripe", STRIPE_SESSION_OPTIONS);
 

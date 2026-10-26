@@ -99,6 +99,13 @@ async function collectPages(
 }
 
 export const chargebeeAgreementHandler: SyncHandler = {
+  objects: [
+    "agreement",
+    "subscription",
+    "agreementItem",
+    "agreementEntitlement",
+    "agreementDiscount",
+  ],
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
     const session = createProviderSession(
       ctx,

@@ -11,6 +11,7 @@
 
 import { NextResponse } from "next/server";
 import { bootstrap } from "@/core/bootstrap";
+import { unsupportedFunctionsFor } from "@/core/capabilities";
 import { findIntegrationForUser } from "@/core/repositories/integration-repository";
 import { currentUserId } from "@/lib/current-user";
 import { executeSync } from "@/core/sync/sync-engine";
@@ -31,6 +32,19 @@ export async function POST(
   if (integration.status !== "active") {
     return NextResponse.json(
       { error: `Integration is ${integration.status}; connect it first` },
+      { status: 409 }
+    );
+  }
+
+  const unsupported = unsupportedFunctionsFor(
+    integration.functionNames,
+    integration.providerName
+  );
+  if (unsupported.length > 0) {
+    return NextResponse.json(
+      {
+        error: `This integration cannot sync ${unsupported.join(", ")}; no handler is available`,
+      },
       { status: 409 }
     );
   }
