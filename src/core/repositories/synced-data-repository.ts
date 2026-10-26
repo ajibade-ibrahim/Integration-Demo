@@ -16,7 +16,9 @@
 
 import { prisma } from "@/lib/prisma";
 import { readJsonObject } from "./json-column";
+import { parseFieldProvenance } from "../identity/provenance";
 import type {
+  FieldProvenanceEntry,
   IdentityAssertionKind,
   IdentityEvidenceSource,
   IdentityKeyKind,
@@ -160,8 +162,8 @@ export interface CustomerAccountRow {
   createDate: Date | null;
   type: string | null;
   customFields: Record<string, string>;
-  /** field name -> the integrationId whose value won it. */
-  fieldProvenance: Record<string, string>;
+  /** field name -> source record, evidence, and losing alternatives. */
+  fieldProvenance: Record<string, FieldProvenanceEntry>;
   members: AccountMemberRow[];
   keys: AccountKeyRow[];
 }
@@ -214,7 +216,7 @@ export async function loadCustomerAccounts(
     createDate: account.createDate,
     type: account.type,
     customFields: readJsonObject(account.customFields),
-    fieldProvenance: readJsonObject(account.fieldProvenance),
+    fieldProvenance: parseFieldProvenance(account.fieldProvenance),
     members: account.members.map((member) => ({
       id: member.id,
       externalSourceId: member.externalSourceId,

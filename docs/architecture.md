@@ -340,9 +340,14 @@ separately:
 - **The highest-priority connection that actually has a value wins.** A system
   that has nothing on file does not blank out another system's value, so
   "missing" never beats "present".
-- **The Accounts screen shows which connection supplied each field** (a
-  provider chip), so the combined profile never looks like it came from
+- **The Accounts screen shows which source record and evidence supplied each
+  field** (a provider chip whose tooltip names the record, field, value and
+  observation time), so the combined profile never looks like it came from
   nowhere.
+- **Losing values are retained, not discarded.** Every field records the losing
+  value, its source record and why it lost — lower priority or an equal-priority
+  tie-break. Shared custom-field keys are stored per key
+  (`customFields.<name>`) and reviewed the same way.
 - **Creation date is the one exception:** it takes the *earliest* date any
   system reports. If a CRM saw the company in 2019, the company existed in 2019.
 - **Where equal-priority systems disagree on a value, the conflict is shown**
@@ -435,7 +440,7 @@ The short version:
 | Database access | `src/core/repositories/` |
 | Connection status rules | `src/core/repositories/integration-repository.ts` |
 | The schedule | `src/core/sync/scheduler.ts` |
-| What counts as matching evidence | `src/core/identity/evidence.ts`; winner rules in `survivorship.ts`; address normalization in `normalize.ts` |
+| What counts as matching evidence | `src/core/identity/evidence.ts`; winner rules and losing values in `survivorship.ts`; provenance read compatibility in `provenance.ts`; address normalization in `normalize.ts` |
 | The database schema | `prisma/schema.prisma` — described in [`data-model.md`](./data-model.md) |
 
 Tests are arranged in three layers: pure logic (`tests/unit`), the invariants

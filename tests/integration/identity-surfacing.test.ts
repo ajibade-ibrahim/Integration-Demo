@@ -4,10 +4,11 @@
  * Two things are being pinned here, and the second is the load-bearing one.
  *
  * **Provenance is complete.** Every non-null field on an account names the
- * integration that supplied it. Traceability is a stated requirement, but the
- * sharper reason is that the two correction actions are unusable without it: a
- * user cannot answer "is this the same company?" about a merge they cannot see
- * the evidence for.
+ * source record, provider, evidence and observation time that supplied it, and
+ * retains losing values with their reasons. Traceability is a stated
+ * requirement, but the sharper reason is that the two correction actions are
+ * unusable without it: a user cannot answer "is this the same company?" about a
+ * merge they cannot see the evidence for.
  *
  * **Priority moves values, never membership.** This is the safety property the
  * whole design rests on. If reordering sources could repartition accounts, then
@@ -30,6 +31,7 @@ import {
   loadAssertionsForDisplay,
   loadCustomerAccounts,
 } from "@/core/repositories/synced-data-repository";
+import { prisma } from "@/lib/prisma";
 
 import { makeIdentityTenant, type IdentityTenant } from "./identity-helpers";
 
@@ -93,17 +95,48 @@ describe("what the Accounts tab reads", () => {
     expect(account?.industry).toBe("Utilities");
   });
 
-  it("names the winning integration for every non-null field", async () => {
+  it("names the winning source record and evidence for every non-null field", async () => {
     const tenant = await oneCompanyTwoSources();
+    const observedAt = new Date("2025-06-01T12:00:00.000Z");
+    await prisma.integration.updateMany({
+      where: { userId: tenant.userId },
+      data: { lastSyncTimestamp: observedAt },
+    });
     await resolveIdentities(tenant.userId, "manual");
 
     const [account] = await loadCustomerAccounts(tenant.userId);
     const stripe = tenant.integrationId("stripe");
     const mock = tenant.integrationId("mock");
 
-    expect(account?.fieldProvenance["email"]).toBe(stripe);
-    expect(account?.fieldProvenance["domain"]).toBe(mock);
-    expect(account?.fieldProvenance["industry"]).toBe(mock);
+    expect(account?.fieldProvenance["email"]).toMatchObject({
+      integrationId: stripe,
+      providerName: "stripe",
+      externalSourceId: "cus_1",
+      evidenceKey: "email",
+      value: "billing@ridgeline.example",
+      observedAt: observedAt.toISOString(),
+    });
+    expect(account?.fieldProvenance["domain"]).toMatchObject({
+      integrationId: mock,
+      providerName: "mock",
+      externalSourceId: "c-009",
+      evidenceKey: "domain",
+      value: "ridgeline.example",
+    });
+    expect(account?.fieldProvenance["industry"]?.integrationId).toBe(mock);
+
+    // The equal-priority name conflict keeps the losing value and its reason.
+    const name = account?.fieldProvenance["name"];
+    expect(name?.integrationId).toBe(mock);
+    expect(name?.value).toBe("Ridgeline Utilities Group");
+    expect(name?.alternatives).toEqual([
+      expect.objectContaining({
+        integrationId: stripe,
+        externalSourceId: "cus_1",
+        value: "Ridgeline Utilities Inc",
+        reason: expect.stringMatching(/equal priority/i),
+      }),
+    ]);
 
     // Every id in provenance is one of the members, which is what makes the
     // provider chip renderable at all — the page looks the label up from the
@@ -111,8 +144,10 @@ describe("what the Accounts tab reads", () => {
     const memberIds = new Set(
       account?.members.map((member) => member.integrationId) ?? []
     );
-    for (const integrationId of Object.values(account?.fieldProvenance ?? {})) {
-      expect(memberIds.has(integrationId)).toBe(true);
+    for (const provenance of Object.values(account?.fieldProvenance ?? {})) {
+      expect(memberIds.has(provenance.integrationId)).toBe(true);
+      expect(provenance.customerId).toBeDefined();
+      expect(provenance.observedAt).toBe(observedAt.toISOString());
     }
   });
 
@@ -128,6 +163,46 @@ describe("what the Accounts tab reads", () => {
       account?.keys.filter((key) => key.kind === "email").map((key) => key.rawValue)
     ).toEqual(["billing@ridgeline.example"]);
     expect(account?.keys.some((key) => key.kind === "domain")).toBe(true);
+  });
+
+  it("stores per-key provenance for custom fields", async () => {
+    const tenant = await makeIdentityTenant([{ provider: "mock" }]);
+    await tenant.customer("mock", "c-1", {
+      name: "Acme",
+      customFields: { tier: "gold" },
+    });
+    await resolveIdentities(tenant.userId, "manual");
+
+    const [account] = await loadCustomerAccounts(tenant.userId);
+
+    expect(account?.customFields).toEqual({ tier: "gold" });
+    expect(account?.fieldProvenance["customFields.tier"]).toMatchObject({
+      integrationId: tenant.integrationId("mock"),
+      externalSourceId: "c-1",
+      evidenceKey: "customFields.tier",
+      evidenceValue: "gold",
+      value: "gold",
+    });
+  });
+
+  it("normalizes an account resolved before provenance carried evidence", async () => {
+    const tenant = await makeIdentityTenant([{ provider: "mock" }]);
+    await tenant.customer("mock", "c-legacy", { name: "Legacy Co" });
+    await resolveIdentities(tenant.userId, "manual");
+
+    await prisma.customerAccount.updateMany({
+      where: { userId: tenant.userId },
+      data: {
+        fieldProvenance: JSON.stringify({
+          name: tenant.integrationId("mock"),
+        }),
+      },
+    });
+
+    const [account] = await loadCustomerAccounts(tenant.userId);
+    expect(account?.fieldProvenance["name"]).toEqual({
+      integrationId: tenant.integrationId("mock"),
+    });
   });
 
   it("sorts by name, then by id", async () => {
@@ -216,7 +291,9 @@ describe("the priority control", () => {
 
     const after = (await loadCustomerAccounts(tenant.userId))[0];
     expect(after?.name).toBe("Ridgeline Utilities Inc");
-    expect(after?.fieldProvenance["name"]).toBe(tenant.integrationId("stripe"));
+    expect(after?.fieldProvenance["name"]?.integrationId).toBe(
+      tenant.integrationId("stripe")
+    );
   });
 
   it("leaves membership and keys untouched when it does", async () => {

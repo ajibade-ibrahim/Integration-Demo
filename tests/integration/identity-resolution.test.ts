@@ -103,9 +103,15 @@ describe("three connections, one company", () => {
     expect(acme.industry).toBe("Manufacturing");
     expect(acme.domain).toBe("acme.example");
 
-    expect(acme.fieldProvenance["name"]).toBe(tenant.integrationId("stripe"));
-    expect(acme.fieldProvenance["industry"]).toBe(tenant.integrationId("hubspot"));
-    expect(acme.fieldProvenance["email"]).toBe(tenant.integrationId("stripe"));
+    expect(acme.fieldProvenance["name"]?.integrationId).toBe(
+      tenant.integrationId("stripe")
+    );
+    expect(acme.fieldProvenance["industry"]?.integrationId).toBe(
+      tenant.integrationId("hubspot")
+    );
+    expect(acme.fieldProvenance["email"]?.integrationId).toBe(
+      tenant.integrationId("stripe")
+    );
   });
 
   it("indexes exactly the keys the three members can supply", async () => {

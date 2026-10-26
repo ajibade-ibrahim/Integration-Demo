@@ -37,6 +37,7 @@ function member(
     createDate: null,
     type: null,
     customFields: {},
+    observedAt: new Date("2024-01-01T00:00:00Z"),
     crossRefs: {},
     importedCrossRefs: {},
     providerMetadata: {},
@@ -113,9 +114,38 @@ describe("a null never wins", () => {
     expect(fields.email).toBe("billing@acme.example");
     expect(fields.name).toBe("Acme Corp");
     expect(fields.industry).toBe("Manufacturing");
-    expect(fields.fieldProvenance["email"]).toBe("int-stripe");
-    expect(fields.fieldProvenance["industry"]).toBe("int-hubspot");
-    expect(fields.fieldProvenance["name"]).toBe("int-stripe");
+    expect(fields.fieldProvenance["email"]?.integrationId).toBe("int-stripe");
+    expect(fields.fieldProvenance["industry"]?.integrationId).toBe("int-hubspot");
+    expect(fields.fieldProvenance["name"]?.integrationId).toBe("int-stripe");
+  });
+
+  it("names the source record and evidence behind the winning value", () => {
+    const { fields } = resolveAccountFields("acct-1", [stripe, hubspot]);
+    const provenance = fields.fieldProvenance["name"];
+
+    expect(provenance).toMatchObject({
+      integrationId: "int-stripe",
+      providerName: "stripe",
+      instanceLabel: "Stripe",
+      customerId: "c-stripe",
+      externalSourceId: "ext-c-stripe",
+      evidenceKey: "name",
+      evidenceValue: "Acme Corp",
+      value: "Acme Corp",
+      observedAt: "2024-01-01T00:00:00.000Z",
+    });
+
+    // The losing value is retained with the reason it lost, even though these
+    // priorities are unequal and therefore do not raise an issue.
+    expect(provenance?.alternatives).toEqual([
+      expect.objectContaining({
+        integrationId: "int-hubspot",
+        customerId: "c-hubspot",
+        externalSourceId: "ext-c-hubspot",
+        value: "Acme Manufacturing Inc",
+        reason: expect.stringMatching(/lower priority/i),
+      }),
+    ]);
   });
 
   it("treats an empty string as no opinion, not as a value", () => {
@@ -128,7 +158,7 @@ describe("a null never wins", () => {
 
     const { fields } = resolveAccountFields("acct-1", [blank, hubspot]);
     expect(fields.industry).toBe("Manufacturing");
-    expect(fields.fieldProvenance["industry"]).toBe("int-hubspot");
+    expect(fields.fieldProvenance["industry"]?.integrationId).toBe("int-hubspot");
   });
 
   it("leaves a field null when no member supplies it", () => {
@@ -154,7 +184,20 @@ describe("createDate is the declared exception", () => {
     // Stripe outranks HubSpot and saw the company in 2023, but it demonstrably
     // existed in 2019.
     expect(fields.createDate?.toISOString()).toBe("2019-01-15T00:00:00.000Z");
-    expect(fields.fieldProvenance["createDate"]).toBe("int-hubspot");
+    expect(fields.fieldProvenance["createDate"]?.integrationId).toBe(
+      "int-hubspot"
+    );
+    // Earliest is a value policy, not a priority one. The later source is still
+    // retained with that reason.
+    expect(
+      fields.fieldProvenance["createDate"]?.alternatives
+    ).toEqual([
+      expect.objectContaining({
+        integrationId: "int-stripe",
+        value: "2023-04-01T00:00:00.000Z",
+        reason: expect.stringMatching(/earliest/i),
+      }),
+    ]);
   });
 
   it("raises no conflict issue when equal-priority dates differ", () => {
@@ -212,7 +255,7 @@ describe("equal priority is reported, not silently coin-flipped", () => {
   });
 
   it("raises exactly one field_conflict carrying both values and both sources", () => {
-    const { issues } = resolveAccountFields("acct-1", [a, b]);
+    const { fields, issues } = resolveAccountFields("acct-1", [a, b]);
 
     const conflicts = issues.filter((i) => i.kind === "field_conflict");
     expect(conflicts).toHaveLength(1);
@@ -223,6 +266,29 @@ describe("equal priority is reported, not silently coin-flipped", () => {
     expect(conflict.accountId).toBe("acct-1");
     expect(conflict.values).toEqual(["Manufacturing", "Logistics"]);
     expect(conflict.integrationIds).toEqual(["int-a", "int-b"]);
+    expect(conflict.contenders).toEqual([
+      expect.objectContaining({
+        integrationId: "int-a",
+        customerId: "a",
+        value: "Manufacturing",
+        won: true,
+      }),
+      expect.objectContaining({
+        integrationId: "int-b",
+        customerId: "b",
+        value: "Logistics",
+        won: false,
+        reason: expect.stringMatching(/equal priority/i),
+      }),
+    ]);
+
+    expect(fields.fieldProvenance["industry"]?.alternatives).toEqual([
+      expect.objectContaining({
+        integrationId: "int-b",
+        value: "Logistics",
+        reason: expect.stringMatching(/equal priority/i),
+      }),
+    ]);
   });
 
   it("still resolves deterministically, whatever the input order", () => {
@@ -280,12 +346,76 @@ describe("custom fields", () => {
       customFields: { tier: "silver", segment: "smb" },
     });
 
-    const { fields } = resolveAccountFields("acct-1", [low, high]);
+    const { fields, issues } = resolveAccountFields("acct-1", [low, high]);
     expect(fields.customFields).toEqual({
       region: "emea",
       segment: "smb",
       tier: "gold",
     });
+
+    // Custom fields get the same per-key provenance as regular fields.
+    expect(fields.fieldProvenance["customFields.tier"]).toMatchObject({
+      integrationId: "int-a",
+      customerId: "a",
+      evidenceKey: "customFields.tier",
+      evidenceValue: "gold",
+      value: "gold",
+    });
+    expect(fields.fieldProvenance["customFields.tier"]?.alternatives).toEqual([
+      expect.objectContaining({
+        integrationId: "int-b",
+        value: "silver",
+        reason: expect.stringMatching(/lower priority/i),
+      }),
+    ]);
+    expect(
+      fields.fieldProvenance["customFields.region"]?.integrationId
+    ).toBe("int-a");
+    expect(
+      fields.fieldProvenance["customFields.segment"]?.integrationId
+    ).toBe("int-b");
+
+    // Unequal priority is settled, so it is retained in provenance rather than
+    // raised as an ambiguity.
+    expect(issues).toEqual([]);
+  });
+
+  it("flags an equal-priority shared custom key and keeps both values", () => {
+    const a = member({
+      id: "a",
+      integrationId: "int-a",
+      customFields: { tier: "gold" },
+    });
+    const b = member({
+      id: "b",
+      integrationId: "int-b",
+      customFields: { tier: "silver" },
+    });
+
+    const { fields, issues } = resolveAccountFields("acct-1", [a, b]);
+
+    const conflict = issues.find(
+      (issue) => issue.kind === "field_conflict"
+    );
+    if (conflict?.kind !== "field_conflict") throw new Error("wrong kind");
+    expect(conflict.fieldName).toBe("customFields.tier");
+    expect(conflict.values).toEqual(["gold", "silver"]);
+    expect(conflict.contenders?.[1]).toMatchObject({
+      integrationId: "int-b",
+      value: "silver",
+      won: false,
+      reason: expect.stringMatching(/equal priority/i),
+    });
+
+    expect(
+      fields.fieldProvenance["customFields.tier"]?.alternatives
+    ).toEqual([
+      expect.objectContaining({
+        integrationId: "int-b",
+        value: "silver",
+        reason: expect.stringMatching(/equal priority/i),
+      }),
+    ]);
   });
 
   it("ignores an empty value rather than letting it win a key", () => {

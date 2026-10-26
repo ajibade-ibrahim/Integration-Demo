@@ -381,7 +381,10 @@ Things worth looking at while you are there:
 - Each field carries a **provider chip** naming the connection that supplied it.
   Stripe wins the email, the CRM wins the industry, and neither erases the
   other: a field is contested only among the sources that actually carry a
-  value, so a null never wins.
+  value, so a null never wins. The chip's tooltip names the exact source record,
+  evidence key/value and observation time, and losing values stay under the
+  field with the reason they lost — including ordinary unequal-priority
+  decisions, not only ties. Shared custom-field keys get the same treatment.
 - Ridgeline is named differently by all three at equal priority, so the account
   reports a **field conflict** rather than presenting an arbitrary pick as a
   decision. Set a **Source priority** on one integration (its detail page) and
@@ -608,7 +611,7 @@ src/core/                framework-free domain — no Next.js imports
   registries/            function, provider, and handler registries
   field-mapper/          validate, apply, serialize
   identity/              cross-integration resolution — evidence, survivorship,
-                         assertions, the pass; all pure but the resolver itself
+                         provenance, assertions, the pass; all pure but the resolver itself
   oauth/                 service, AES-256-GCM crypto, state store
   integrations/          draft store, and creating a connection from a draft
   sync/                  engine, lease, coverage, record writer, scheduler, clock, errors

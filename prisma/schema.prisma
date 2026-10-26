@@ -1377,11 +1377,19 @@ model CustomerAccount {
   /// src/core/repositories/json-column.ts, bounded by MAX_CUSTOM_FIELDS.
   customFields String @default("{}")
 
-  /// field name -> the integrationId that won it, as JSON.
+  /// field path -> source evidence, as JSON.
+  ///
+  /// Each entry names the winning integration, source `Customer` id, provider
+  /// record id, evidence key/value and observation time, and keeps every losing
+  /// value with the reason it lost. Custom fields use the key
+  /// `customFields.<name>`, so a shared custom key has the same reviewable
+  /// provenance as a built-in field.
   ///
   /// Traceability is an explicit requirement of the governing spec, and it is
-  /// what lets the UI show a provider chip beside each field instead of
-  /// presenting a merged record as if it came from nowhere.
+  /// what lets the UI show a source chip beside each field instead of
+  /// presenting a merged record as if it came from nowhere. The reader accepts
+  /// the previous string-valued shape, so accounts resolved before this JSON
+  /// grew stay readable until their next pass.
   fieldProvenance String @default("{}")
 
   createdAt DateTime @default(now())

@@ -31,9 +31,20 @@
  */
 
 import { IDENTITY_SCHEMA } from "../identity-schema";
-import { MAX_CUSTOM_FIELDS, type FieldDefinition } from "../object-schema";
+import {
+  MAX_CUSTOM_FIELDS,
+  type FieldConflictPolicy,
+  type FieldDefinition,
+} from "../object-schema";
 import type { AccountFields, ResolutionCustomer } from "../repositories/identity-repository";
-import type { CustomerType, IdentityIssue } from "../types/common";
+import type {
+  CustomerType,
+  FieldAlternative,
+  FieldConflictContender,
+  FieldProvenanceEntry,
+  FieldSourceEvidence,
+  IdentityIssue,
+} from "../types/common";
 
 /**
  * Order members strongest-first for value conflicts.
@@ -98,11 +109,142 @@ function comparable(value: string | Date): string {
   return value instanceof Date ? value.toISOString() : value;
 }
 
+interface SuppliedField {
+  member: ResolutionCustomer;
+  value: string | Date;
+}
+
 interface FieldOutcome {
   value: string | Date | undefined;
-  /** The integration whose value won, for provenance. */
-  integrationId: string | undefined;
+  /** The source record and evidence behind the winning value. */
+  provenance: FieldProvenanceEntry | undefined;
   issue: IdentityIssue | undefined;
+}
+
+interface CustomFieldsOutcome {
+  values: Record<string, string>;
+  provenance: Record<string, FieldProvenanceEntry>;
+  issues: IdentityIssue[];
+}
+
+/** The source-record half of a provenance entry, before adding losing values. */
+function evidenceFor(
+  member: ResolutionCustomer,
+  fieldPath: string,
+  value: string | Date
+): FieldSourceEvidence & { value: string } {
+  const observed = comparable(value);
+  return {
+    integrationId: member.integrationId,
+    providerName: member.providerName,
+    instanceLabel: member.instanceLabel,
+    customerId: member.id,
+    externalSourceId: member.externalSourceId,
+    evidenceKey: fieldPath,
+    evidenceValue: observed,
+    observedAt: member.observedAt.toISOString(),
+    value: observed,
+  };
+}
+
+function lostReason(
+  candidate: SuppliedField,
+  winner: SuppliedField,
+  policy: FieldConflictPolicy
+): string {
+  if (policy === "earliest") {
+    return `Later than ${winner.member.instanceLabel}'s ${comparable(
+      winner.value
+    )}; the earliest value wins`;
+  }
+
+  if (candidate.member.identityPriority !== winner.member.identityPriority) {
+    return `Lower priority than ${winner.member.instanceLabel} (${candidate.member.identityPriority} vs ${winner.member.identityPriority})`;
+  }
+
+  const tieBreaker =
+    candidate.member.providerName !== winner.member.providerName
+      ? `provider name (${candidate.member.providerName} after ${winner.member.providerName})`
+      : candidate.member.instanceLabel !== winner.member.instanceLabel
+        ? `instance label (${candidate.member.instanceLabel} after ${winner.member.instanceLabel})`
+        : "source record id";
+
+  return `Equal priority with ${winner.member.instanceLabel}; tie broken by ${tieBreaker}`;
+}
+
+function winnerReason(policy: FieldConflictPolicy): string {
+  return policy === "earliest"
+    ? "Earliest value wins"
+    : "Selected by the deterministic equal-priority tie-break";
+}
+
+function buildAlternatives(
+  supplied: readonly SuppliedField[],
+  winner: SuppliedField,
+  fieldPath: string,
+  policy: FieldConflictPolicy
+): FieldAlternative[] {
+  return supplied.flatMap((candidate) => {
+    if (
+      candidate === winner ||
+      comparable(candidate.value) === comparable(winner.value)
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        ...evidenceFor(candidate.member, fieldPath, candidate.value),
+        reason: lostReason(candidate, winner, policy),
+      },
+    ];
+  });
+}
+
+function buildProvenance(
+  winner: SuppliedField,
+  fieldPath: string,
+  alternatives: readonly FieldAlternative[]
+): FieldProvenanceEntry {
+  return {
+    ...evidenceFor(winner.member, fieldPath, winner.value),
+    ...(alternatives.length === 0 ? {} : { alternatives: [...alternatives] }),
+  };
+}
+
+function conflictIssue(args: {
+  accountId: string;
+  fieldName: string;
+  fieldPath: string;
+  label: string;
+  winner: SuppliedField;
+  tied: readonly SuppliedField[];
+  policy: FieldConflictPolicy;
+}): IdentityIssue {
+  const { accountId, fieldName, fieldPath, label, winner, tied, policy } = args;
+
+  const contenders: FieldConflictContender[] = [winner, ...tied].map(
+    (candidate) => ({
+      ...evidenceFor(candidate.member, fieldPath, candidate.value),
+      won: candidate === winner,
+      reason:
+        candidate === winner
+          ? winnerReason(policy)
+          : lostReason(candidate, winner, policy),
+    })
+  );
+
+  // The winner is included so the UI can show what was chosen alongside what
+  // was rejected; index-aligned with `integrationIds`.
+  return {
+    kind: "field_conflict",
+    reason: `${contenders.length} equally ranked sources disagree on ${label}`,
+    accountId,
+    fieldName,
+    values: contenders.map((candidate) => candidate.value),
+    integrationIds: contenders.map((candidate) => candidate.integrationId),
+    contenders,
+  };
 }
 
 /**
@@ -128,16 +270,18 @@ function resolveField(
   ranked: readonly ResolutionCustomer[],
   field: FieldDefinition
 ): FieldOutcome {
-  const supplied = ranked.flatMap((member) => {
+  const supplied: SuppliedField[] = ranked.flatMap((member) => {
     const value = memberValue(member, field.name);
     return value === undefined || value === null ? [] : [{ member, value }];
   });
 
   if (supplied.length === 0) {
-    return { value: undefined, integrationId: undefined, issue: undefined };
+    return { value: undefined, provenance: undefined, issue: undefined };
   }
 
-  if (field.conflictPolicy === "earliest") {
+  const policy = field.conflictPolicy ?? "highestPriority";
+
+  if (policy === "earliest") {
     // Already in rank order, and `<` is strict, so an equal value keeps the
     // higher-ranked member's provenance.
     let winner = supplied[0]!;
@@ -148,7 +292,11 @@ function resolveField(
     }
     return {
       value: winner.value,
-      integrationId: winner.member.integrationId,
+      provenance: buildProvenance(
+        winner,
+        field.name,
+        buildAlternatives(supplied, winner, field.name, policy)
+      ),
       issue: undefined,
     };
   }
@@ -160,28 +308,25 @@ function resolveField(
       comparable(candidate.value) !== comparable(winner.value)
   );
 
-  if (tied.length === 0) {
-    return {
-      value: winner.value,
-      integrationId: winner.member.integrationId,
-      issue: undefined,
-    };
-  }
-
-  // The winner is included so the UI can show what was chosen alongside what
-  // was rejected; index-aligned with `integrationIds`.
-  const contenders = [winner, ...tied];
   return {
     value: winner.value,
-    integrationId: winner.member.integrationId,
-    issue: {
-      kind: "field_conflict",
-      reason: `${contenders.length} equally ranked sources disagree on ${field.label.toLowerCase()}`,
-      accountId,
-      fieldName: field.name,
-      values: contenders.map((c) => comparable(c.value)),
-      integrationIds: contenders.map((c) => c.member.integrationId),
-    },
+    provenance: buildProvenance(
+      winner,
+      field.name,
+      buildAlternatives(supplied, winner, field.name, policy)
+    ),
+    issue:
+      tied.length === 0
+        ? undefined
+        : conflictIssue({
+            accountId,
+            fieldName: field.name,
+            fieldPath: field.name,
+            label: field.label.toLowerCase(),
+            winner,
+            tied,
+            policy,
+          }),
   };
 }
 
@@ -194,19 +339,66 @@ function resolveField(
  * fifty is better than one that fails to resolve.
  */
 function resolveCustomFields(
+  accountId: string,
   ranked: readonly ResolutionCustomer[]
-): Record<string, string> {
-  const merged = new Map<string, string>();
+): CustomFieldsOutcome {
+  // Rank order is preserved within each key, so the first source is the winner
+  // under the same precedence rule as a regular field.
+  const byKey = new Map<string, SuppliedField[]>();
   for (const member of ranked) {
     for (const [key, value] of Object.entries(member.customFields)) {
-      if (value === "" || merged.has(key)) continue;
-      merged.set(key, value);
+      if (value === "") continue;
+      const supplied = byKey.get(key) ?? [];
+      supplied.push({ member, value });
+      byKey.set(key, supplied);
     }
   }
 
-  return Object.fromEntries(
-    [...merged.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(0, MAX_CUSTOM_FIELDS)
-  );
+  const values: Record<string, string> = {};
+  const provenance: Record<string, FieldProvenanceEntry> = {};
+  const issues: IdentityIssue[] = [];
+
+  const selectedKeys = [...byKey.keys()]
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, MAX_CUSTOM_FIELDS);
+
+  for (const key of selectedKeys) {
+    const supplied = byKey.get(key);
+    if (supplied === undefined || supplied.length === 0) continue;
+
+    const winner = supplied[0]!;
+    const fieldPath = `customFields.${key}`;
+    const alternatives = buildAlternatives(
+      supplied,
+      winner,
+      fieldPath,
+      "highestPriority"
+    );
+
+    values[key] = comparable(winner.value);
+    provenance[fieldPath] = buildProvenance(winner, fieldPath, alternatives);
+
+    const tied = supplied.filter(
+      (candidate) =>
+        candidate.member.identityPriority === winner.member.identityPriority &&
+        comparable(candidate.value) !== comparable(winner.value)
+    );
+    if (tied.length > 0) {
+      issues.push(
+        conflictIssue({
+          accountId,
+          fieldName: fieldPath,
+          fieldPath,
+          label: `custom field "${key}"`,
+          winner,
+          tied,
+          policy: "highestPriority",
+        })
+      );
+    }
+  }
+
+  return { values, provenance, issues };
 }
 
 export interface SurvivorshipResult {
@@ -233,17 +425,20 @@ export function resolveAccountFields(
 
   const ranked = rankMembers(members);
   const issues: IdentityIssue[] = [];
-  const fieldProvenance: Record<string, string> = {};
+  const fieldProvenance: Record<string, FieldProvenanceEntry> = {};
 
   const resolved = new Map<string, string | Date | undefined>();
   for (const field of IDENTITY_SCHEMA.customer.fields) {
     const outcome = resolveField(accountId, ranked, field);
     resolved.set(field.name, outcome.value);
-    if (outcome.integrationId !== undefined) {
-      fieldProvenance[field.name] = outcome.integrationId;
+    if (outcome.provenance !== undefined) {
+      fieldProvenance[field.name] = outcome.provenance;
     }
     if (outcome.issue !== undefined) issues.push(outcome.issue);
   }
+
+  const custom = resolveCustomFields(accountId, ranked);
+  issues.push(...custom.issues);
 
   const name = resolved.get("name");
   const domain = resolved.get("domain");
@@ -265,8 +460,8 @@ export function resolveAccountFields(
       industry: typeof industry === "string" ? industry : null,
       createDate: createDate instanceof Date ? createDate : null,
       type: typeof type === "string" ? (type as CustomerType) : null,
-      customFields: resolveCustomFields(ranked),
-      fieldProvenance,
+      customFields: custom.values,
+      fieldProvenance: { ...fieldProvenance, ...custom.provenance },
     },
     issues,
   };

@@ -30,8 +30,31 @@ export function readJsonObject(raw: string | null | undefined): Record<string, s
   }
 }
 
-export function writeJsonObject(value: Record<string, string>): string {
+export function writeJsonObject(value: Record<string, unknown>): string {
   return JSON.stringify(value);
+}
+
+/**
+ * A JSON object with values left as parsed.
+ *
+ * `readJsonObject` deliberately coerces everything to a string for
+ * `customFields`. `fieldProvenance` now stores objects, so it needs this
+ * sibling rather than a cast that would turn each entry into
+ * `"[object Object]"`.
+ */
+export function readJsonRecord(
+  raw: string | null | undefined
+): Record<string, unknown> {
+  if (raw === null || raw === undefined || raw === "") return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
 export function readJsonArray<T>(raw: string | null | undefined): T[] {

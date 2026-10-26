@@ -17,6 +17,8 @@
 import { randomUUID } from "node:crypto";
 
 import { writeJsonObject } from "@/core/repositories/json-column";
+import { parseFieldProvenance } from "@/core/identity/provenance";
+import type { FieldProvenanceEntry } from "@/core/types/common";
 import { prisma } from "@/lib/prisma";
 
 /** One connected integration. */
@@ -55,7 +57,7 @@ export interface AccountView {
   domain: string | null;
   email: string | null;
   industry: string | null;
-  fieldProvenance: Record<string, string>;
+  fieldProvenance: Record<string, FieldProvenanceEntry>;
   /** Member external ids, sorted. */
   members: string[];
 }
@@ -211,7 +213,7 @@ export async function makeIdentityTenant(connections: readonly ConnectionSpec[])
         domain: row.domain,
         email: row.email,
         industry: row.industry,
-        fieldProvenance: JSON.parse(row.fieldProvenance) as Record<string, string>,
+        fieldProvenance: parseFieldProvenance(row.fieldProvenance),
         members: row.members.map((member) => member.externalSourceId).sort(),
       }))
       .sort((a, b) => (a.members[0] ?? "").localeCompare(b.members[0] ?? ""));

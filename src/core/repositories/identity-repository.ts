@@ -33,6 +33,7 @@ import type { ProviderMetadata } from "../types/registry";
 import {
   type CustomerType,
   type EmailClass,
+  type FieldProvenanceEntry,
   type IdentityAssertionKind,
   type IdentityEvidenceSource,
   type IdentityIssue,
@@ -62,6 +63,14 @@ export interface ResolutionCustomer {
   createDate: Date | null;
   type: CustomerType | null;
   customFields: Record<string, string>;
+
+  /**
+   * When this connection last finished a sync. That is the observation time for
+   * evidence from this record; `Customer.updatedAt` is not, because resolution
+   * itself links customers and bumps it. Falls back to `updatedAt` only for a
+   * customer on a connection that has never completed a sync.
+   */
+  observedAt: Date;
 
   /**
    * `<providerName> -> that provider's id for this same company`, from
@@ -147,8 +156,11 @@ export interface AccountFields {
   createDate: Date | null;
   type: CustomerType | null;
   customFields: Record<string, string>;
-  /** field name -> the integrationId whose value won it. */
-  fieldProvenance: Record<string, string>;
+  /**
+   * field name (or `customFields.<key>`) -> the source record and evidence
+   * that won it, plus every losing value and why it lost.
+   */
+  fieldProvenance: Record<string, FieldProvenanceEntry>;
 }
 
 export interface ResolutionRunCounts {
@@ -195,6 +207,7 @@ export async function loadResolutionInput(
           providerName: true,
           identityPriority: true,
           instanceLabel: true,
+          lastSyncTimestamp: true,
           // The scope segment of every self-key on this integration.
           token: { select: { providerMetadata: true } },
         },
@@ -221,6 +234,7 @@ export async function loadResolutionInput(
     createDate: row.createDate,
     type: row.type as CustomerType | null,
     customFields: readJsonObject(row.customFields),
+    observedAt: row.integration.lastSyncTimestamp ?? row.updatedAt,
     crossRefs: readJsonObject(row.crossRefs),
     importedCrossRefs: readJsonObject(row.importedCrossRefs),
     providerMetadata: readJsonObject(

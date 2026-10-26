@@ -29,7 +29,10 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import type { IdentityIssue } from "@/core/types/common";
+import type {
+  FieldProvenanceEntry,
+  IdentityIssue,
+} from "@/core/types/common";
 
 export interface AccountView {
   id: string;
@@ -41,7 +44,7 @@ export interface AccountView {
   createDate: string | null;
   type: string | null;
   customFields: Record<string, string>;
-  fieldProvenance: Record<string, string>;
+  fieldProvenance: Record<string, FieldProvenanceEntry>;
   members: Array<{
     id: string;
     externalSourceId: string;
@@ -181,9 +184,27 @@ export function AccountsPanel({
             {fieldConflicts.length} field
             {fieldConflicts.length === 1 ? "" : "s"} resolved by a tie-break
           </p>
-          <ul className="mt-2 space-y-1">
+          <ul className="mt-2 space-y-2">
             {fieldConflicts.map((issue, index) => (
-              <li key={index}>{issue.reason}</li>
+              <li key={index}>
+                {issue.reason}
+                {issue.contenders !== undefined && issue.contenders.length > 0 && (
+                  <ul className="mt-1 space-y-0.5 text-xs">
+                    {issue.contenders.map((contender, contenderIndex) => (
+                      <li key={`${contender.integrationId}:${contender.value}:${contenderIndex}`}>
+                        <span className="font-medium">
+                          {contender.won ? "Kept" : "Rejected"} {contender.value}
+                        </span>{" "}
+                        from {contender.instanceLabel ?? contender.integrationId}
+                        {contender.externalSourceId === undefined
+                          ? ""
+                          : ` #${contender.externalSourceId}`}
+                        : {contender.reason}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
             ))}
           </ul>
           <p className="mt-2">
@@ -296,13 +317,19 @@ function AccountCard({
   ) => void;
 }) {
   // Provenance names an integration id, and every winning value came from a
-  // member, so the members are a complete lookup for it.
+  // member, so the members are a complete lookup for its display label. Old
+  // string-shaped provenance is normalized by the repository to the same entry.
+  const provenanceOf = (field: string): FieldProvenanceEntry | undefined =>
+    account.fieldProvenance[field];
+
   const sourceOf = (field: string): string | undefined => {
-    const integrationId = account.fieldProvenance[field];
-    if (integrationId === undefined) return undefined;
-    return account.members.find(
-      (member) => member.integrationId === integrationId
-    )?.integrationLabel;
+    const entry = provenanceOf(field);
+    if (entry === undefined) return undefined;
+    return (
+      account.members.find(
+        (member) => member.integrationId === entry.integrationId
+      )?.integrationLabel ?? entry.instanceLabel
+    );
   };
 
   const anchor = account.members[0];
@@ -318,14 +345,30 @@ function AccountCard({
       </div>
 
       <dl className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
-        <Field label="Domain" value={account.domain} source={sourceOf("domain")} />
-        <Field label="Email" value={account.email} source={sourceOf("email")} />
+        <Field
+          label="Domain"
+          value={account.domain}
+          source={sourceOf("domain")}
+          provenance={provenanceOf("domain")}
+        />
+        <Field
+          label="Email"
+          value={account.email}
+          source={sourceOf("email")}
+          provenance={provenanceOf("email")}
+        />
         <Field
           label="Industry"
           value={account.industry}
           source={sourceOf("industry")}
+          provenance={provenanceOf("industry")}
         />
-        <Field label="Type" value={account.type} source={sourceOf("type")} />
+        <Field
+          label="Type"
+          value={account.type}
+          source={sourceOf("type")}
+          provenance={provenanceOf("type")}
+        />
         <Field
           label="Created"
           value={
@@ -334,9 +377,37 @@ function AccountCard({
               : new Date(account.createDate).toLocaleDateString()
           }
           source={sourceOf("createDate")}
+          provenance={provenanceOf("createDate")}
         />
-        <Field label="Name from" value={account.name} source={sourceOf("name")} />
+        <Field
+          label="Name from"
+          value={account.name}
+          source={sourceOf("name")}
+          provenance={provenanceOf("name")}
+        />
       </dl>
+
+      {Object.keys(account.customFields).length > 0 && (
+        <div className="mt-3">
+          <p className="text-xs uppercase tracking-wide text-slate-400">
+            Custom fields
+          </p>
+          <dl className="mt-1 grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+            {Object.entries(account.customFields).map(([key, value]) => {
+              const field = `customFields.${key}`;
+              return (
+                <Field
+                  key={key}
+                  label={key}
+                  value={value}
+                  source={sourceOf(field)}
+                  provenance={provenanceOf(field)}
+                />
+              );
+            })}
+          </dl>
+        </div>
+      )}
 
       {account.keys.length > 0 && (
         <div className="mt-3">
@@ -449,11 +520,33 @@ function Field({
   label,
   value,
   source,
+  provenance,
 }: {
   label: string;
   value: string | null;
   source: string | undefined;
+  provenance: FieldProvenanceEntry | undefined;
 }) {
+  const sourceTitle =
+    provenance === undefined
+      ? undefined
+      : [
+          provenance.providerName,
+          provenance.externalSourceId === undefined
+            ? undefined
+            : `record #${provenance.externalSourceId}`,
+          provenance.evidenceKey === undefined
+            ? undefined
+            : `${provenance.evidenceKey}=${provenance.evidenceValue ?? provenance.value ?? ""}`,
+          provenance.observedAt === undefined
+            ? undefined
+            : `observed ${provenance.observedAt}`,
+        ]
+          .filter((part): part is string => part !== undefined && part !== "")
+          .join(" · ");
+
+  const alternatives = provenance?.alternatives ?? [];
+
   return (
     <div>
       <dt className="text-xs uppercase tracking-wide text-slate-400">{label}</dt>
@@ -466,11 +559,28 @@ function Field({
           no member ever "wins" a field by leaving it blank.
         */}
         {value !== null && source !== undefined && (
-          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+          <span
+            title={sourceTitle}
+            className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500"
+          >
             {source}
           </span>
         )}
       </dd>
+      {alternatives.length > 0 && (
+        <dd className="mt-1 space-y-0.5 text-[11px] text-slate-500">
+          {alternatives.map((alternative, index) => (
+            <p key={`${alternative.integrationId}:${alternative.value}:${index}`}>
+              Rejected <span className="font-medium">{alternative.value}</span>{" "}
+              from {alternative.instanceLabel ?? alternative.integrationId}
+              {alternative.externalSourceId === undefined
+                ? ""
+                : ` #${alternative.externalSourceId}`}
+              : {alternative.reason}
+            </p>
+          ))}
+        </dd>
+      )}
     </div>
   );
 }

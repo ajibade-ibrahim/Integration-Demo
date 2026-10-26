@@ -605,7 +605,9 @@ describe("updateAccountFields", () => {
         name: "Acme Corp",
         email: "billing@acme.example",
         customFields: { tier: "gold" },
-        fieldProvenance: { name: tenant.integrationId },
+        fieldProvenance: {
+          name: { integrationId: tenant.integrationId },
+        },
       }),
     });
 

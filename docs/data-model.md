@@ -144,7 +144,7 @@ to join records *across* connections.
 
 | Table | What it holds |
 |---|---|
-| **CustomerAccount** | One combined company profile: the resolved name, domain, email, industry, type and creation date, plus a record of **which connection supplied each field**. Rebuilt from scratch on every matching pass, so it can never drift from its sources. |
+| **CustomerAccount** | One combined company profile: the resolved name, domain, email, industry, type and creation date, plus **field provenance** naming the winning connection and source record, evidence key/value, observation time, and every losing value with its reason. Custom fields carry per-key provenance at `customFields.<name>`. Rebuilt from scratch on every matching pass, so it can never drift from its sources; old integration-id-only provenance still reads. |
 | **CustomerAccountKey** | The evidence that a company profile is "the same" as a record: each key it owns (an email address, a website domain, or an external reference), in both normalized and original form, with the source it came from and when it was first/last seen. |
 | **IdentityAssertion** | A person's verdict that two customer records are the *same company*, or explicitly *not* one company, with an optional note. These outrank every automatic signal. |
 | **IdentityResolutionRun** | One execution of the matching pass: how long it took, how many profiles were created/merged/cleaned up, how many records were linked, and any issues raised. |

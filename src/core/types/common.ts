@@ -711,6 +711,53 @@ export function isIdentityAssertionKind(
 }
 
 /**
+ * One source record's evidence for one resolved account field.
+ *
+ * `fieldProvenance` used to store only an integration id. It now stores this
+ * richer object on every new resolution; the reader still accepts the old
+ * string form, so accounts resolved before this shape existed stay readable.
+ *
+ * `observedAt` is the source connection's last completed sync time — the
+ * closest observation time available without storing raw payloads. It is not
+ * `Customer.updatedAt`, because resolution itself links customers and bumps it.
+ */
+export interface FieldSourceEvidence {
+  integrationId: string;
+  providerName?: string;
+  instanceLabel?: string;
+  /** Internal `Customer.id`; names the exact source record. */
+  customerId?: string;
+  /** Provider's own id for that source record. */
+  externalSourceId?: string;
+  /** Field path in the account, e.g. `industry` or `customFields.tier`. */
+  evidenceKey?: string;
+  /** The value the source record supplied. */
+  evidenceValue?: string;
+  /** ISO timestamp of the source record's last observation. */
+  observedAt?: string;
+  /** The resolved value this evidence supports. */
+  value?: string;
+}
+
+/** A competing value, kept when another source supplied a different one. */
+export interface FieldAlternative extends FieldSourceEvidence {
+  value: string;
+  reason: string;
+}
+
+/** The winning source for a field, plus every losing value and its reason. */
+export interface FieldProvenanceEntry extends FieldSourceEvidence {
+  alternatives?: FieldAlternative[];
+}
+
+/** One value shown in an equal-priority conflict review. */
+export interface FieldConflictContender extends FieldSourceEvidence {
+  value: string;
+  won: boolean;
+  reason: string;
+}
+
+/**
  * What went wrong, or went ambiguously, during a resolution pass.
  *
  * A discriminated union rather than one shape with optional fields, for the
@@ -772,6 +819,11 @@ export type IdentityIssue =
       /** The competing values, index-aligned with `integrationIds`. */
       values: string[];
       integrationIds: string[];
+      /**
+       * Richer review data for new runs. Optional because issues stored before
+       * this shape existed only carry values and integration ids.
+       */
+      contenders?: FieldConflictContender[];
     }
   | {
       kind: "key_race_lost";

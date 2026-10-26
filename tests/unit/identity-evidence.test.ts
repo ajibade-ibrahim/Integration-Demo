@@ -33,6 +33,7 @@ function customer(
     createDate: null,
     type: null,
     customFields: {},
+    observedAt: new Date("2024-01-01T00:00:00Z"),
     crossRefs: {},
     importedCrossRefs: {},
     providerMetadata: {},
