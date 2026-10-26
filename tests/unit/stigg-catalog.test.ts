@@ -77,11 +77,13 @@ describe("Stigg catalog parsing", () => {
 });
 
 describe("Stigg catalog synthesis", () => {
-  it("derives active from status, writing nothing when status is absent", () => {
+  it("derives active only from known statuses", () => {
     expect(activeFromStatus({ status: "PUBLISHED" })).toEqual({ active: true });
     expect(activeFromStatus({ status: "ARCHIVED" })).toEqual({ active: false });
     expect(activeFromStatus({ status: "DRAFT" })).toEqual({ active: false });
     expect(activeFromStatus({})).toEqual({});
+    // Unknown is not "archived": writing false would claim Stigg retired it.
+    expect(activeFromStatus({ status: "RETIRED_PENDING" })).toEqual({});
   });
 
   it("keeps only published packages", () => {
@@ -91,6 +93,8 @@ describe("Stigg catalog synthesis", () => {
         { id: "b", status: "DRAFT" },
         { id: "c", status: "ARCHIVED" },
         { id: "d" },
+        // Fail closed: an unrecognised status is not confirmed sellable.
+        { id: "e", status: "RETIRED_PENDING" },
       ]).map((r) => r["id"]),
     ).toEqual(["a"]);
   });

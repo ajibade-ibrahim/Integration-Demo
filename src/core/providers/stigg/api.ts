@@ -356,23 +356,33 @@ function asNumber(value: unknown): number | undefined {
  * `active` from a Stigg status, as a spreadable addition.
  *
  * Only Stigg's `PUBLISHED` state is sellable; `DRAFT` and `ARCHIVED` are known
- * non-published states. A missing status writes nothing, so `active: null`
- * keeps meaning "Stigg did not tell us" rather than a guessed `false`.
+ * non-published states. A missing or unrecognised status writes **nothing**, so
+ * `active: null` keeps meaning "Stigg did not tell us" rather than a guessed
+ * `false`. The writer warns and leaves the column null when a user maps a raw
+ * status through, so an unknown word is never silently treated as retired.
  */
 export function activeFromStatus(record: RawRecord): RawRecord {
-  const status = asString(record["status"]);
-  if (status === undefined) return {};
-  return { active: status === "PUBLISHED" };
+  switch (asString(record["status"])) {
+    case "PUBLISHED":
+      return { active: true };
+    case "DRAFT":
+    case "ARCHIVED":
+      return { active: false };
+    default:
+      return {};
+  }
 }
 
 /**
  * Keep only the packages Stigg says are published.
  *
  * The catalog is for sale, so `DRAFT` and `ARCHIVED` packages are dropped
- * rather than emitted with `active: false`. A package whose status is absent is
- * not *confirmed* sellable, so it is dropped too — the same fail-closed read as
- * `active`. Applied before `bestCatalogVersion`, so version selection then only
- * ever chooses among published packages.
+ * rather than emitted with `active: false`. A package whose status is absent or
+ * unrecognised is not *confirmed* sellable, so it is dropped too. That is this
+ * list's explicit fail-closed policy; `activeFromStatus` separately refuses to
+ * turn the same unknown word into `active: false`. Applied before
+ * `bestCatalogVersion`, so version selection then only ever chooses among
+ * published packages.
  */
 export function publishedOnly(records: readonly RawRecord[]): RawRecord[] {
   return records.filter(

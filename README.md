@@ -519,7 +519,21 @@ mapping is worse than one with an escape hatch.
 
 Transforms: `none | trim | lowercase | domainFromUrl | dateOnly`.
 `domainFromUrl` is load-bearing — Salesforce's `Account.Website` is a full URL
-and our target is a bare domain.
+and our target is a bare domain. Transforms are formatting only: none of them
+rewrites one vocabulary into another. Provider vocabulary belongs in a handler,
+where an unrecognised value can have an explicit policy instead of a hidden
+guess. Optional enums are warned about and left null; a required discriminator
+is rejected or given a documented fallback; an unknown provider boolean writes
+nothing. HubSpot deals are the current example: a deal contributes its name,
+`deal` type and currency, while stage, closed flags and CRM dates stay raw in
+`providerMetadata` — they are not promoted to agreement status, effective date
+or end date.
+
+Each rule set has a content version, `v1-<sha256>`, computed from the rules
+themselves rather than their row order. The editor shows it, and every sync
+records the version it read **before** any provider request, so a run remains
+explainable after someone edits the mapping. `MAPPING_RULE_VERSION` is bumped
+when a deploy changes what a rule means; the hash covers per-integration edits.
 
 ### Sync
 
@@ -769,10 +783,10 @@ runners cannot reach.
 
 ### Migrating existing connections
 
-Two mapping defaults changed after connections already existed, and
-`seedMappingsIfEmpty` can deliver neither: it returns early when an integration
-has any rule at all, which is exactly what stops a reconnect from trampling a
-user's edits. So the change has to be pushed rather than pulled.
+Three mapping defaults changed after connections already existed, and
+`seedMappingsIfEmpty` can deliver none of them: it returns early when an
+integration has any rule at all, which is exactly what stops a reconnect from
+trampling a user's edits. So the change has to be pushed rather than pulled.
 
 ```bash
 npm run mappings:retarget                 # dry run — prints every change
@@ -783,6 +797,16 @@ npm run mappings:retarget -- --apply
 |---|---|---|
 | The account email became a column | `customFields.email` / `customFields.primary_email` | `customer.email` |
 | Metrifox gained the Stripe join | *(nothing)* | `stripe_customer_id → crossRef.stripe` |
+| HubSpot deals stopped inventing status and dates | `agreement_status`, `effective_date`, `end_date` synthesized from closed flags and CRM timestamps | rules retired; raw values stay in `providerMetadata` and valid raw mappings |
+
+The HubSpot step also **clears the inferred values already stored** on those
+agreements. It removes a rule when its *source* is the retired synthesized
+field, so a deliberate mapping from `properties.createdate` to `effectiveDate`
+is untouched. A rule removed without its value cleared would leave an invented
+fact in the row forever, because the next sync would no longer touch that
+column. If that retired source had been aimed at a custom field, the rule is
+removed but the JSON value is left alone — it is the user's data, and this
+migration cannot know what it should become.
 
 It **rewrites** the email rule rather than adding one. `validateMappings` is
 perfectly happy with the old and new targets side by side — they are different
@@ -870,6 +894,23 @@ working injection. See [`soql.ts`](src/core/providers/salesforce/soql.ts).
 warns.** Email is a person's primary identifier and a broken one poisons later
 matching. An org-specific picklist value that doesn't match our enum is routine
 and shouldn't cost the whole record.
+
+**Unknown provider values are never guessed.** Optional enum statuses are
+warned about and left null; required discriminators are rejected or given a
+documented fallback; provider booleans write nothing when the state is unknown.
+The handler translates vocabulary, the writer enforces the policy, and the tests
+pin both. A field transform never does this work.
+
+**A sync records the mapping version it used.** Rule sets are mutable, so a run
+stores a `v1-<sha256>` snapshot taken before the first provider request. The
+editor shows the current version, the run panel shows the recorded one, and an
+edit mid-run cannot relabel writes already in flight.
+
+**HubSpot deals do not claim our lifecycle or dates.** A closed-won deal is not
+an active agreement, a close date on an open deal is a forecast, and a CRM
+create date is not an effective date. Those raw facts stay in
+`providerMetadata`; `status`, `effectiveDate` and `endDate` remain empty unless
+the provider actually states them.
 
 **Deletion proceeds even if revocation fails.** A provider outage must not
 strand an integration the user asked to remove. The unconfirmed revocation is

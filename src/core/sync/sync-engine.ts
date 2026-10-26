@@ -13,6 +13,7 @@
  */
 
 import { applyMappings, requestedSourcePaths } from "../field-mapper/field-mapper";
+import { mappingVersionFor } from "../field-mapper/mapping-version";
 import { functionsInWriteOrder } from "../object-schema";
 import { getValidToken, refreshToken } from "../oauth/oauth-service";
 import { requireSyncHandler } from "../registries/handler-registry";
@@ -22,12 +23,17 @@ import {
   type IntegrationRecord,
 } from "../repositories/integration-repository";
 import { findMappings } from "../repositories/mapping-repository";
-import { writeJsonArray, writeJsonCounts } from "../repositories/json-column";
+import {
+  writeJsonArray,
+  writeJsonCounts,
+  writeJsonObject,
+} from "../repositories/json-column";
 import type {
   RecordIssue,
   SyncRunCoverage,
   TargetObject,
 } from "../types/common";
+import type { FieldMappingRule } from "../types/mapping";
 import {
   syncLeaseTiming,
   syncTiming,
@@ -60,6 +66,7 @@ import {
   acquireSyncLease,
   assertLeaseHeld,
   closeSyncRun,
+  recordSyncRunMappingVersions,
   startSyncLeaseHeartbeat,
   verifyLeaseHeld,
   type SyncLease,
@@ -113,6 +120,34 @@ globalForSync.syncInFlight = inFlight;
 export interface SyncOptions {
   clock?: Clock;
   trigger?: "manual" | "scheduled";
+}
+
+interface FunctionMappingSnapshot {
+  rules: readonly FieldMappingRule[];
+  version: string;
+}
+
+/**
+ * Read every function's rules once, before the first provider request.
+ *
+ * The snapshot is the run's configuration. It is what gets hashed onto the run
+ * and what `runOnce` applies on every retry, so a save that lands mid-run
+ * changes the next run rather than half of this one.
+ */
+async function loadMappingSnapshots(
+  integration: IntegrationRecord
+): Promise<Map<string, FunctionMappingSnapshot>> {
+  const snapshots = new Map<string, FunctionMappingSnapshot>();
+
+  for (const functionName of integration.functionNames) {
+    const rules = await findMappings(integration.id, functionName);
+    snapshots.set(functionName, {
+      rules,
+      version: mappingVersionFor(rules),
+    });
+  }
+
+  return snapshots;
 }
 
 /**
@@ -212,6 +247,7 @@ async function runWithRetries(
   let lastAttempt = 0;
   let requiresReauthorization = false;
   let state = emptyRunState();
+  let snapshots: Map<string, FunctionMappingSnapshot> | undefined;
 
   for (let attempt = 1; attempt <= timing.maxAttempts; attempt++) {
     lastAttempt = attempt;
@@ -223,12 +259,30 @@ async function runWithRetries(
     try {
       await verifyLeaseHeld(lease, heartbeat, clock);
 
+      if (snapshots === undefined) {
+        snapshots = await loadMappingSnapshots(integration);
+
+        const versions = Object.fromEntries(
+          [...snapshots].map(([functionName, snapshot]) => [
+            functionName,
+            snapshot.version,
+          ])
+        );
+        const recorded = await recordSyncRunMappingVersions(
+          lease,
+          clock,
+          writeJsonObject(versions)
+        );
+        if (!recorded) return leaseLostResult(lease);
+      }
+
       const outcome = await runOnce(
         integration,
         lease,
         heartbeat,
         clock,
-        state
+        state,
+        snapshots
       );
 
       const status = outcome.issues.some((i) => i.severity === "rejected")
@@ -350,7 +404,8 @@ async function runOnce(
   lease: SyncLease,
   heartbeat: SyncLeaseHeartbeat,
   clock: Clock,
-  state: RunState
+  state: RunState,
+  snapshots: ReadonlyMap<string, FunctionMappingSnapshot>
 ): Promise<RunState> {
   const token = await getValidToken(integration.id, clock.now());
   await verifyLeaseHeld(lease, heartbeat, clock);
@@ -369,7 +424,13 @@ async function runOnce(
     state.coverage.functions.push(coverage);
 
     try {
-      const rules = await findMappings(integration.id, functionName);
+      const snapshot = snapshots.get(functionName);
+      if (snapshot === undefined) {
+        throw new Error(
+          `No mapping snapshot was recorded for '${functionName}'`
+        );
+      }
+      const rules = snapshot.rules;
       const sourcePaths = requestedSourcePaths(rules);
       const mappedObjects = new Set(sourcePaths.keys());
 

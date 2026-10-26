@@ -9,13 +9,17 @@
  * after the fact needs a migration, and this module is the decision half of
  * one; `scripts/retarget-account-email-mappings.mts` is the I/O half.
  *
- * Two changes are carried here, both from the identity work:
+ * Three changes are carried here:
  *
  *   1. **The account email became a column.** Stripe's `email` and Metrifox's
  *      `primary_email` used to land in `customFields`; they now target the
  *      first-class `customer.email` that identity resolution matches on.
  *   2. **Metrifox gained `crossRef.stripe`.** The `payments_stripe_customers`
  *      join is on by default for new connections and unreachable for old ones.
+ *   3. **HubSpot deals stopped inventing status and dates.** The old defaults
+ *      synthesized `agreement_status`, `effective_date` and `end_date` from
+ *      closed flags and CRM timestamps. Those rules are removed, and the values
+ *      they already wrote are cleared — a provider fact was never behind them.
  *
  * ## Why this is a rewrite and not an addition
  *
@@ -90,6 +94,101 @@ export interface StoredMappingRule {
   transform: string;
 }
 
+/**
+ * Defaults that were removed because the source field no longer exists.
+ *
+ * A rule naming a source the handler stopped synthesizing would otherwise keep
+ * writing null, erasing the stored field on the next sync. Removing the rule is
+ * the mapping half; clearing the value it already wrote is the data half, and
+ * both are needed for the field to stop claiming something the provider never
+ * said.
+ */
+const RETIRED_RULES: Readonly<
+  Record<
+    string,
+    Readonly<
+      Record<
+        string,
+        ReadonlyArray<{
+          sourceFieldPath: string;
+          targetObject: FieldMappingRule["targetObject"];
+          targetFieldPath: string;
+          reason: string;
+        }>
+      >
+    >
+  >
+> = {
+  hubspot: {
+    agreement: [
+      {
+        sourceFieldPath: "agreement_status",
+        targetObject: "agreement",
+        targetFieldPath: "status",
+        reason:
+          "HubSpot deal stage and closed flags are not our agreement status",
+      },
+      {
+        sourceFieldPath: "effective_date",
+        targetObject: "agreement",
+        targetFieldPath: "effectiveDate",
+        reason:
+          "HubSpot's create date is not an agreement effective date",
+      },
+      {
+        sourceFieldPath: "end_date",
+        targetObject: "agreement",
+        targetFieldPath: "endDate",
+        reason: "HubSpot's close date is not an agreement end date",
+      },
+    ],
+  },
+};
+
+export interface RetiredMappingMatch {
+  rule: StoredMappingRule;
+  reason: string;
+}
+
+/**
+ * Find stored rules whose synthesized source was retired.
+ *
+ * Matching is by **source**, not target, so a user who sent the old synthesized
+ * status to a custom field is caught too. That rule would now read a field the
+ * handler no longer emits and write null on every sync. What is deliberately
+ * not matched is the raw provider source: `properties.createdate` is still
+ * there, so a mapping from it to `effectiveDate` remains valid.
+ */
+export function findRetiredRules(
+  providerName: string,
+  functionName: string,
+  rules: readonly StoredMappingRule[]
+): RetiredMappingMatch[] {
+  const retired = RETIRED_RULES[providerName]?.[functionName] ?? [];
+  const matches: RetiredMappingMatch[] = [];
+
+  for (const rule of rules) {
+    const definition = retired.find(
+      (candidate) =>
+        candidate.sourceFieldPath === rule.sourceFieldPath &&
+        candidate.targetObject === rule.targetObject
+    );
+    if (definition !== undefined) {
+      matches.push({ rule, reason: definition.reason });
+    }
+  }
+
+  return matches.sort((a, b) =>
+    a.rule.id < b.rule.id ? -1 : a.rule.id > b.rule.id ? 1 : 0
+  );
+}
+
+export interface RetiredField {
+  targetObject: FieldMappingRule["targetObject"];
+  targetFieldPath: string;
+  reason: string;
+}
+
 export interface MappingRetargetPlan {
   /** Rows to update in place, keeping their id, source path and transform. */
   retarget: Array<{ id: string; from: string; to: string }>;
@@ -97,6 +196,15 @@ export interface MappingRetargetPlan {
   remove: Array<{ id: string; targetFieldPath: string; reason: string }>;
   /** Rules with no existing row, to insert. */
   add: FieldMappingRule[];
+  /**
+   * Stored record fields a removed rule used to fill.
+   *
+   * The rule change fixes the next sync; this is what lets the migration clear
+   * values that were already written from the retired source. A rule removed
+   * without its value cleared would leave an inferred fact behind with nothing
+   * left to correct it.
+   */
+  clearFields: RetiredField[];
   /**
    * The rule set as it will be once the plan is applied.
    *
@@ -127,6 +235,7 @@ export function planMappingRetarget(args: {
   const retarget: MappingRetargetPlan["retarget"] = [];
   const remove: MappingRetargetPlan["remove"] = [];
   const add: FieldMappingRule[] = [];
+  const clearFields: RetiredField[] = [];
 
   // --- the account email ----------------------------------------------------
 
@@ -176,6 +285,31 @@ export function planMappingRetarget(args: {
     });
   }
 
+  // --- rules whose synthesized source was retired ---------------------------
+
+  for (const match of findRetiredRules(providerName, functionName, rules)) {
+    remove.push({
+      id: match.rule.id,
+      targetFieldPath: match.rule.targetFieldPath,
+      reason: match.reason,
+    });
+    // Only the lifecycle columns this build knows how to clear. A rule that
+    // sent the retired source to a custom field is removed too, but its JSON
+    // value is left alone rather than guessed at.
+    if (
+      match.rule.targetFieldPath === "status" ||
+      match.rule.targetFieldPath === "effectiveDate" ||
+      match.rule.targetFieldPath === "endDate"
+    ) {
+      clearFields.push({
+        targetObject:
+          match.rule.targetObject as FieldMappingRule["targetObject"],
+        targetFieldPath: match.rule.targetFieldPath,
+        reason: match.reason,
+      });
+    }
+  }
+
   // --- defaults this connection is too old to have --------------------------
 
   // Only for a function this integration actually maps. An empty rule set means
@@ -211,6 +345,7 @@ export function planMappingRetarget(args: {
     retarget,
     remove,
     add,
+    clearFields,
     result,
     empty: retarget.length === 0 && remove.length === 0 && add.length === 0,
   };

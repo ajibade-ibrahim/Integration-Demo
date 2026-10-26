@@ -1,10 +1,10 @@
 /**
  * HubSpot's deal handler against a mocked CRM.
  *
- * What carries the risk here: the second paginated list (line items), the
- * synthesized status from closed flags, the company association that becomes
- * the customer link, and the `complete` claim the reconciling agreement-item
- * writer trusts.
+ * What carries the risk here: the second paginated list (line items), the line
+ * between raw deal facts and our agreement vocabulary, the company association
+ * that becomes the customer link, and the `complete` claim the reconciling
+ * agreement-item writer trusts.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -126,7 +126,7 @@ function pagedEndpoint(
 }
 
 describe("HubSpot deal synthesis", () => {
-  it("maps closed flags, dates, currency and provider metadata", async () => {
+  it("keeps raw deal facts without inventing agreement status or dates", async () => {
     server.use(
       pagedEndpoint(DEALS, [
         [
@@ -159,30 +159,50 @@ describe("HubSpot deal synthesis", () => {
     const won = byObject.agreement.find((r) => r["id"] === "deal-won");
     expect(won?.["agreement_name"]).toBe("Acme renewal");
     expect(won?.["agreement_type"]).toBe("deal");
-    expect(won?.["agreement_status"]).toBe("active");
-    expect(won?.["effective_date"]).toBe("2024-01-01T00:00:00.000Z");
-    // Closed, so the close date is the agreement end date.
-    expect(won?.["end_date"]).toBe("2024-06-01T00:00:00.000Z");
     expect(won?.["currency"]).toBe("USD");
+    // These are not HubSpot facts. The closed flags and CRM dates stay below,
+    // in metadata, rather than being promoted to our lifecycle vocabulary.
+    expect(won).not.toHaveProperty("agreement_status");
+    expect(won).not.toHaveProperty("effective_date");
+    expect(won).not.toHaveProperty("end_date");
     expect(JSON.parse(String(won?.["provider_metadata"]))).toMatchObject({
+      dealname: "Acme renewal",
       dealstage: "appointmentscheduled",
       pipeline: "default",
       amount: "12000.00",
+      createdate: "2024-01-01T00:00:00.000Z",
+      closedate: "2024-06-01T00:00:00.000Z",
+      deal_currency_code: "USD",
+      hs_is_closed: "true",
+      hs_is_closed_won: "true",
     });
 
     const open = byObject.agreement.find((r) => r["id"] === "deal-open");
     expect(open?.["agreement_name"]).toBe("Deal deal-open");
-    expect(open?.["agreement_status"]).toBe("draft");
-    // An open deal's close date is a forecast, not an end date.
-    expect(open?.["end_date"]).toBeUndefined();
+    expect(open).not.toHaveProperty("agreement_status");
+    expect(open).not.toHaveProperty("effective_date");
+    // An open deal's close date is a forecast, and is kept only as a raw fact.
+    expect(open).not.toHaveProperty("end_date");
+    expect(JSON.parse(String(open?.["provider_metadata"]))).toMatchObject({
+      closedate: "2024-06-01T00:00:00.000Z",
+      hs_is_closed: "false",
+      hs_is_closed_won: "false",
+    });
 
     const lost = byObject.agreement.find((r) => r["id"] === "deal-lost");
-    expect(lost?.["agreement_status"]).toBe("canceled");
+    expect(lost).not.toHaveProperty("agreement_status");
+    expect(JSON.parse(String(lost?.["provider_metadata"]))).toMatchObject({
+      hs_is_closed: "true",
+      hs_is_closed_lost: "true",
+    });
 
     const unknown = byObject.agreement.find(
       (r) => r["id"] === "deal-closed-unknown"
     );
-    expect(unknown?.["agreement_status"]).toBeUndefined();
+    expect(unknown).not.toHaveProperty("agreement_status");
+    expect(JSON.parse(String(unknown?.["provider_metadata"]))).toMatchObject({
+      hs_is_closed: "true",
+    });
 
     expect(
       hubspotAgreementHandler.externalRefsOf(byObject.agreement[0]!, "agreement")
@@ -426,9 +446,6 @@ describe("HubSpot deal discovery", () => {
       expect.arrayContaining([
         "agreement_name",
         "agreement_type",
-        "agreement_status",
-        "effective_date",
-        "end_date",
         "currency",
         "provider_metadata",
         "properties.dealname",
@@ -436,6 +453,10 @@ describe("HubSpot deal discovery", () => {
       ])
     );
     expect(agreementPaths).not.toContain("properties.hidden_prop");
+    // Retired synthesized fields: the raw properties remain discoverable.
+    expect(agreementPaths).not.toContain("agreement_status");
+    expect(agreementPaths).not.toContain("effective_date");
+    expect(agreementPaths).not.toContain("end_date");
 
     const items = await hubspotFieldDiscovery.discover(ctx, "agreementItem");
     expect(items.map((f) => f.path)).toEqual(

@@ -11,7 +11,10 @@
  * `validateMappings` became function-scoped, a rule targeting an object its
  * function does not write stopped being valid — and a stored rule like that
  * would not fail on save (it was saved long ago) but would silently write
- * nothing on every sync. Nothing else in the system would report it.
+ * nothing on every sync. Nothing else in the system would report it. The same
+ * pass reports rules whose synthesized source this build retired: those still
+ * validate (the target is writable) but now read a field the handler no longer
+ * produces.
  *
  * The prune deliberately covers only three tables, all of which the schema
  * already documents as having a TTL:
@@ -29,6 +32,7 @@
 import { PrismaClient } from "@prisma/client";
 import { bootstrap } from "../src/core/bootstrap";
 import { validateMappings } from "../src/core/field-mapper/field-mapper";
+import { findRetiredRules } from "../src/core/identity/mapping-retarget";
 import { objectsForFunction } from "../src/core/object-schema";
 import { functionRegistry } from "../src/core/registries/function-registry";
 import { getSyncHandler } from "../src/core/registries/handler-registry";
@@ -68,7 +72,7 @@ for (const group of ruleSets) {
     }),
     prisma.integration.findUnique({
       where: { id: group.integrationId },
-      select: { instanceLabel: true },
+      select: { instanceLabel: true, providerName: true },
     }),
   ]);
 
@@ -86,6 +90,27 @@ for (const group of ruleSets) {
   report(`${name} (${rows.length} rules)`, result.valid ? 0 : result.violations.length);
   for (const violation of result.violations) {
     console.log(`         rule ${violation.index} (${violation.field}): ${violation.message}`);
+  }
+
+  // A validator only checks that a target is writable, not that its source
+  // still exists. These rules name a synthesized field this build retired, so
+  // they would write null on the next sync and erase the stored value.
+  const retired = findRetiredRules(
+    integration?.providerName ?? "",
+    group.functionName,
+    rows
+  );
+  report(
+    `${name}: rules using a retired synthesized source`,
+    retired.length,
+    retired.length > 0
+      ? " — run npm run mappings:retarget -- --apply"
+      : ""
+  );
+  for (const match of retired) {
+    console.log(
+      `         ${match.rule.targetObject}.${match.rule.targetFieldPath} from '${match.rule.sourceFieldPath}'`
+    );
   }
 }
 if (ruleSets.length === 0) console.log("  [ok  ] no mapping rules stored");

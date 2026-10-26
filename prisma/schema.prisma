@@ -1591,6 +1591,18 @@ model SyncRun {
   /// rather than as complete.
   coverageJson String @default("{}")
 
+  /// Mapping content version per function, snapshot when this run started:
+  /// `{"identity":"v1-<sha256>"}`. Computed by
+  /// src/core/field-mapper/mapping-version.ts from the rules the run actually
+  /// read, before any provider request, so editing the mapping mid-run cannot
+  /// change what this row says produced the writes.
+  ///
+  /// Defaults to `{}` because runs recorded before this column existed cannot
+  /// honestly claim a version. See `MAPPING_RULE_VERSION` for the code half of
+  /// the version: a deploy that changes rule semantics bumps it so old and new
+  /// runs cannot share a version by accident.
+  mappingVersionsJson String @default("{}")
+
   attempt Int @default(1)
 
   /// JSON array of { sourceRecordId, targetObject, reason, fieldName? }.

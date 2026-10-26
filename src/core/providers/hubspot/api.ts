@@ -97,7 +97,7 @@ const PROPERTY_NAME = /^[a-z][a-z0-9_]*$/;
  *
  * Mapped paths look like `properties.domain`; HubSpot wants a bare comma list
  * of property names, and only returns properties you name, so this is what
- * decides whether a mapped field — or a synthesized status — arrives at all.
+ * decides whether a mapped field — or a required raw fact — arrives at all.
  */
 export function propertiesParam(
   sourcePaths: readonly string[],
@@ -120,9 +120,10 @@ export function propertiesParam(
 /**
  * Properties the deal handler reads even when the user mapped none of them.
  *
- * The closed flags are the only stable status vocabulary HubSpot offers:
- * `dealstage` is a per-pipeline id, but these three are maintained by HubSpot
- * itself. The rest supply the agreement's required name, dates and currency.
+ * These supply the agreement's required name and currency, and preserve the
+ * stage, closed flags and CRM dates as raw provider facts. `dealstage` is a
+ * per-pipeline id, while the three closed flags are HubSpot-maintained — but
+ * neither vocabulary is ours, so none of them is promoted to `status`.
  */
 export const HUBSPOT_DEAL_PROPERTIES = [
   "dealname",
@@ -185,34 +186,26 @@ function propertyString(
   return asString(properties[name]);
 }
 
-/** HubSpot's booleans are the strings "true" and "false". */
-function isTrue(value: string | undefined): boolean {
-  return value !== undefined && value.toLowerCase() === "true";
-}
-
 /**
- * Translate a deal's closed flags into our agreement-status vocabulary.
+ * Raw deal facts kept beside the agreement.
  *
- * Open deals are `draft` — not yet agreed. Closed-won is `active`; closed-lost
- * is `canceled`. A deal HubSpot reports as closed without saying which outcome
- * it had leaves the status unset rather than guessing, which is the same landing
- * state `Agreement.status` uses for every provider that did not say.
+ * None of these is translated into `Agreement.status` or its dates. A deal
+ * stage is user-defined per pipeline, and `hs_is_closed*` says whether the deal
+ * closed and how — not whether a subscription is active, canceled or expired.
+ * `createdate` is when the CRM row was created, not when the agreement took
+ * effect, and `closedate` is a forecast on an open deal rather than an end
+ * date. Keeping them here preserves the provider's facts without turning an
+ * interpretation into one.
  */
-export function hubspotDealStatus(
-  properties: Record<string, unknown>
-): string | undefined {
-  if (isTrue(propertyString(properties, "hs_is_closed_won"))) return "active";
-  if (isTrue(propertyString(properties, "hs_is_closed_lost"))) return "canceled";
-  if (isTrue(propertyString(properties, "hs_is_closed"))) return undefined;
-  return "draft";
-}
-
 const DEAL_METADATA_PROPERTIES = [
+  "dealname",
   "dealstage",
   "pipeline",
   "amount",
   "dealtype",
+  "createdate",
   "closedate",
+  "deal_currency_code",
   "hubspot_owner_id",
   "hs_is_closed",
   "hs_is_closed_won",
@@ -245,7 +238,13 @@ function metadataOf(
 }
 
 /**
- * Synthesize the agreement fields a deal record supplies.
+ * Synthesize the agreement fields a deal record actually supplies.
+ *
+ * Name, discriminator and currency are the three facts a HubSpot deal states in
+ * our vocabulary. Status and effective/end dates are deliberately absent: the
+ * closed flags and CRM dates are not that vocabulary, and deriving one from the
+ * other would present an interpretation as a provider fact. They remain
+ * available raw, under `provider_metadata` and as mappable `properties.*`.
  *
  * The spread comes first so a provider property of the same name can never
  * shadow a synthesized value. `properties` and `associations` survive
@@ -262,22 +261,12 @@ export function flattenHubspotDeal(record: RawRecord): RawRecord {
         : `Deal ${id}`
       : dealName;
 
-  const created = propertyString(properties, "createdate");
-  const closeDate = propertyString(properties, "closedate");
-  const closed =
-    isTrue(propertyString(properties, "hs_is_closed")) ||
-    isTrue(propertyString(properties, "hs_is_closed_won")) ||
-    isTrue(propertyString(properties, "hs_is_closed_lost"));
   const currency = propertyString(properties, "deal_currency_code");
-  const status = hubspotDealStatus(properties);
 
   return {
     ...record,
     agreement_name: name,
     agreement_type: "deal",
-    ...(status === undefined ? {} : { agreement_status: status }),
-    ...(created === undefined ? {} : { effective_date: created }),
-    ...(closed && closeDate !== undefined ? { end_date: closeDate } : {}),
     ...(currency === undefined ? {} : { currency }),
     provider_metadata: metadataOf(properties, DEAL_METADATA_PROPERTIES),
   };

@@ -179,6 +179,35 @@ Things that make the rules safe to use:
   company-matching step treats as strong evidence. Only real, registered
   systems can be named this way.
 
+### Formatting versus interpretation
+
+A transform is formatting: trim, lowercase, extract a host, keep a date. It is
+deliberately unable to map one vocabulary onto another. Provider words become
+ours inside the handler, where the unknown-value policy is visible and tested:
+
+| Kind | Unknown value policy |
+|---|---|
+| Optional enum status/type | Warn on the record, store null |
+| Required discriminator | Reject, or a documented fallback with a warning |
+| Provider boolean | Write nothing, so null keeps meaning "not told" |
+| Provider list used as a filter | Fail closed only where the list is the sellable set, and say so |
+
+HubSpot deals follow this rule. Name, `deal` type and currency are facts the
+provider states in a shape we can use. Deal stage, closed flags, create date and
+close date are kept raw in `providerMetadata`; they are not translated into
+agreement status, effective date or end date. A closed-won deal is not an
+active subscription, and a forecast close date is not an end date.
+
+### Which rules produced a refresh
+
+A rule set is mutable, so "the current mapping" cannot explain an older run.
+Each function's rules are hashed to `v1-<sha256>` and that snapshot is written
+to the `SyncRun` before the first provider request. The hash is independent of
+row order, and `MAPPING_RULE_VERSION` changes when a deploy changes the meaning
+of a rule. The mapping editor shows the current version; the run panel shows the
+version that run used. An edit during a refresh affects the next refresh, not
+the one already paging.
+
 ## 6. What happens during a refresh
 
 A refresh is one complete pass: fetch, translate, save, report. Only
@@ -268,7 +297,9 @@ report: pages and records read and written per object, whether the handler
 declared each list complete, mapped objects it never yielded, supported objects
 with no mapping, and whether a list stopped at the shared page guard. A success
 can therefore be a success with unverified coverage, and the run panel says so
-rather than calling a page-capped list fresh.
+rather than calling a page-capped list fresh. The same row carries the mapping
+version snapshot per function, so the rules behind the writes stay identifiable
+after the mapping editor replaces them.
 
 ### One owner across instances
 

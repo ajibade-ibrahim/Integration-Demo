@@ -246,6 +246,142 @@ describe("defaults a connection is too old to have", () => {
   });
 });
 
+describe("retiring HubSpot's inferred agreement fields", () => {
+  const hubspotAgreementRules = stored([
+    {
+      sourceFieldPath: "agreement_name",
+      targetObject: "agreement",
+      targetFieldPath: "name",
+      transform: "trim",
+    },
+    {
+      sourceFieldPath: "agreement_status",
+      targetObject: "agreement",
+      targetFieldPath: "status",
+      transform: "none",
+    },
+    {
+      sourceFieldPath: "effective_date",
+      targetObject: "agreement",
+      targetFieldPath: "effectiveDate",
+      transform: "none",
+    },
+    {
+      sourceFieldPath: "end_date",
+      targetObject: "agreement",
+      targetFieldPath: "endDate",
+      transform: "none",
+    },
+  ]);
+
+  it("removes the rules and names the stored fields to clear", () => {
+    const result = plan(hubspotAgreementRules, "hubspot", "agreement");
+
+    expect(result.remove.map((entry) => entry.targetFieldPath)).toEqual([
+      "status",
+      "effectiveDate",
+      "endDate",
+    ]);
+    expect(result.clearFields).toEqual([
+      {
+        targetObject: "agreement",
+        targetFieldPath: "status",
+        reason: expect.stringContaining("not our agreement status"),
+      },
+      {
+        targetObject: "agreement",
+        targetFieldPath: "effectiveDate",
+        reason: expect.stringContaining("create date"),
+      },
+      {
+        targetObject: "agreement",
+        targetFieldPath: "endDate",
+        reason: expect.stringContaining("close date"),
+      },
+    ]);
+    expect(result.result.map((rule) => rule.targetFieldPath)).toEqual(["name"]);
+    expect(validateMappings("agreement", result.result).valid).toBe(true);
+  });
+
+  it("removes a retired source aimed at a custom field, without clearing it", () => {
+    // The source is gone either way, so the rule must go; the custom value is
+    // the user's data and this migration does not know how to rewrite it.
+    const result = plan(
+      stored([
+        {
+          sourceFieldPath: "agreement_status",
+          targetObject: "agreement",
+          targetFieldPath: "customFields.oldStatus",
+          transform: "none",
+        },
+      ]),
+      "hubspot",
+      "agreement"
+    );
+
+    expect(result.remove.map((entry) => entry.targetFieldPath)).toEqual([
+      "customFields.oldStatus",
+    ]);
+    expect(result.clearFields).toEqual([]);
+    expect(result.result).toEqual([]);
+  });
+
+  it("leaves a deliberate mapping from a raw deal property alone", () => {
+    // The user chose a raw provider field; only the synthesized source is
+    // retired, so nothing is removed and nothing is cleared.
+    const result = plan(
+      stored([
+        {
+          sourceFieldPath: "properties.createdate",
+          targetObject: "agreement",
+          targetFieldPath: "effectiveDate",
+          transform: "none",
+        },
+      ]),
+      "hubspot",
+      "agreement"
+    );
+
+    expect(result.empty).toBe(true);
+    expect(result.clearFields).toEqual([]);
+  });
+
+  it("does nothing to another provider, function or object", () => {
+    expect(
+      plan(hubspotAgreementRules, "stripe", "agreement").empty
+    ).toBe(true);
+    expect(
+      plan(hubspotAgreementRules, "hubspot", "identity").empty
+    ).toBe(true);
+    expect(
+      plan(
+        stored([
+          {
+            sourceFieldPath: "agreement_status",
+            targetObject: "customer",
+            targetFieldPath: "status",
+            transform: "none",
+          },
+        ]),
+        "hubspot",
+        "agreement"
+      ).empty
+    ).toBe(true);
+  });
+
+  it("finds nothing on the second run", () => {
+    const first = plan(hubspotAgreementRules, "hubspot", "agreement");
+    const second = planMappingRetarget({
+      providerName: "hubspot",
+      functionName: "agreement",
+      rules: asStored(first.result),
+    });
+
+    expect(second.empty).toBe(true);
+    expect(second.clearFields).toEqual([]);
+  });
+});
+
 describe("the plan as a whole", () => {
   it("produces a rule set the editor would accept", () => {
     // The same gate a user's save goes through. A migration that writes a

@@ -210,6 +210,37 @@ export async function verifySyncLease(
   return true;
 }
 
+/**
+ * Store the mapping snapshot the run is about to use.
+ *
+ * Kept separate from acquisition because it is run metadata, not ownership:
+ * the rules have to be read before the version can be computed, and that read
+ * should not hold the integration lock. The update still checks owner, token
+ * and expiry, so a paused worker cannot stamp a mapping onto a run another
+ * worker has taken over.
+ */
+export async function recordSyncRunMappingVersions(
+  lease: SyncLease,
+  clock: Clock,
+  mappingVersionsJson: string
+): Promise<boolean> {
+  const nowMs = clock.now();
+  if (nowMs >= lease.expiresAt) return false;
+
+  const { count } = await prisma.syncRun.updateMany({
+    where: {
+      id: lease.runId,
+      status: "running",
+      leaseOwner: lease.ownerId,
+      fencingToken: lease.fencingToken,
+      leaseExpiresAt: { gt: new Date(nowMs) },
+    },
+    data: { mappingVersionsJson },
+  });
+
+  return count === 1;
+}
+
 export interface CloseSyncRunData {
   status: Extract<SyncRunStatus, "success" | "partial" | "failed">;
   completedAt: Date;

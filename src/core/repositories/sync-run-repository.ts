@@ -3,7 +3,11 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { readJsonArray, readJsonCounts } from "./json-column";
+import {
+  readJsonArray,
+  readJsonCounts,
+  readJsonObject,
+} from "./json-column";
 import { parseRunCoverage } from "../sync/coverage";
 import type {
   RecordIssue,
@@ -25,6 +29,15 @@ export interface SyncRunRecord {
    * catalog sync rather than "0 customers".
    */
   recordCounts: Record<string, number>;
+  /**
+   * Mapping content version per function, e.g. `{ identity: "v1-…" }`.
+   *
+   * Empty for runs recorded before mapping versions existed, and empty for a
+   * run that failed before reading its rules. It is deliberately not
+   * reconstructed from the current mapping: that would answer a different
+   * question than "what produced this run".
+   */
+  mappingVersions: Record<string, string>;
   /** Pages, records, completeness and omissions per function/object. */
   coverage: SyncRunCoverage;
   attempt: number;
@@ -48,6 +61,7 @@ export async function listRecentRuns(
     startedAt: run.startedAt,
     completedAt: run.completedAt,
     recordCounts: readJsonCounts(run.recordCountsJson),
+    mappingVersions: readJsonObject(run.mappingVersionsJson),
     coverage: parseRunCoverage(run.coverageJson),
     attempt: run.attempt,
     issues: readJsonArray<RecordIssue>(run.errorsJson),

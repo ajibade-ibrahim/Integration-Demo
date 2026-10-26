@@ -187,4 +187,18 @@ describe("shipped default mappings", () => {
     // no billing scope has none even though billing itself now has defaults.
     expect(defaultMappingsFor("billing", "hubspot")).toEqual([]);
   });
+
+  it("does not present HubSpot deal inference as agreement facts", () => {
+    // These targets are ours, not HubSpot's. The raw stage, closed flags and
+    // CRM dates remain available as properties/custom fields; the lifecycle
+    // columns stay unmapped by default.
+    const agreement = defaultMappingsFor("agreement", "hubspot");
+    const targets = agreement
+      .filter((rule) => rule.targetObject === "agreement")
+      .map((rule) => rule.targetFieldPath);
+
+    expect(targets).not.toContain("status");
+    expect(targets).not.toContain("effectiveDate");
+    expect(targets).not.toContain("endDate");
+  });
 });

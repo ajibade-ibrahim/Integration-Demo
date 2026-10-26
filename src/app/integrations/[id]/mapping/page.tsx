@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { bootstrap, IDENTITY_FUNCTION } from "@/core/bootstrap";
 import { findIntegrationForUser } from "@/core/repositories/integration-repository";
 import { currentUserId } from "@/lib/current-user";
+import { mappingVersionFor } from "@/core/field-mapper/mapping-version";
 import { findMappings } from "@/core/repositories/mapping-repository";
 import { defaultMappingsFor } from "@/core/providers/defaults-registry";
 import { discoverFields } from "@/core/sync/discovery-service";
@@ -35,6 +36,7 @@ export default async function MappingPage({
   const provider = providerRegistry.get(integration.providerName);
   const rules = await findMappings(id, functionName);
   const suggested = defaultMappingsFor(functionName, integration.providerName);
+  const mappingVersion = mappingVersionFor(rules);
 
   // Discovery talks to the provider. A failure here must not block editing —
   // the editor falls back to free-text source paths.
@@ -103,6 +105,14 @@ export default async function MappingPage({
           Decide how {provider?.label ?? integration.providerName} fields land in
           your schema. Unmapped target fields are left empty; a mapped field the
           source does not have becomes null rather than failing the record.
+        </p>
+        <p className="mt-2 text-xs text-slate-500">
+          Mapping version{" "}
+          <code className="font-mono text-slate-700" title={mappingVersion}>
+            {mappingVersion.slice(0, 15)}…
+          </code>{" "}
+          — each sync records the version it used, so a run stays explainable
+          after these rules are edited.
         </p>
       </div>
 

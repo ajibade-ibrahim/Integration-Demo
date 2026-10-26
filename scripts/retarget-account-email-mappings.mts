@@ -1,5 +1,5 @@
 /**
- * Move already-connected integrations onto the identity-era mapping defaults.
+ * Move already-connected integrations onto the current mapping defaults.
  *
  *   npx tsx scripts/retarget-account-email-mappings.mts            # dry run
  *   npx tsx scripts/retarget-account-email-mappings.mts --apply
@@ -13,13 +13,17 @@
  *
  * `seedMappingsIfEmpty` bails when an integration already has any mapping
  * (`mapping-repository.ts:84`), so a connection made before a default changed
- * never sees the change. Two changed:
+ * never sees the change. Three changed:
  *
  *   - The account email moved from `customFields.email` / `customFields.
  *     primary_email` to the first-class `customer.email` that identity
  *     resolution matches on.
  *   - Metrifox gained `stripe_customer_id → crossRef.stripe`, the
  *     `payments_stripe_customers` join.
+ *   - HubSpot deals stopped synthesizing our status and effective/end dates
+ *     from closed flags and CRM timestamps. The rules are retired here, and
+ *     values they already wrote are cleared rather than left behind as facts
+ *     the provider never stated.
  *
  * The decisions live in `src/core/identity/mapping-retarget.ts` so they can be
  * tested; this file is the I/O around them. It also backfills the rows already
@@ -59,6 +63,7 @@ const counts = {
   added: 0,
   promoted: 0,
   deduplicated: 0,
+  cleared: 0,
   refusedCustomers: 0,
   invalidGroups: 0,
 };
@@ -122,7 +127,7 @@ for (const integration of integrations) {
     // The plan should never produce an invalid set. Checking anyway, and
     // skipping the whole group when it fails, is what keeps a bug here from
     // leaving one integration with a rule set its next sync cannot use.
-    const validation = validateMappings(plan.result);
+    const validation = validateMappings(functionName, plan.result);
     if (!validation.valid) {
       counts.invalidGroups += 1;
       console.log(
@@ -142,6 +147,11 @@ for (const integration of integrations) {
     for (const rule of plan.add) {
       console.log(
         `  + ${rule.sourceFieldPath} → ${rule.targetObject}.${rule.targetFieldPath} (new default)`
+      );
+    }
+    if (plan.clearFields.length > 0) {
+      console.log(
+        `  × clear ${plan.clearFields.map((field) => `${field.targetObject}.${field.targetFieldPath}`).join(", ")} on stored rows`
       );
     }
     console.log("");
@@ -178,6 +188,49 @@ for (const integration of integrations) {
         })
       ),
     ]);
+
+    // The mapping transaction removed the retired rules; this removes the
+    // inferred values they already wrote. Scoped to the exact fields whose
+    // rules were removed, so a user's deliberate mapping from a raw provider
+    // property to the same target is left alone.
+    const clearStatus = plan.clearFields.some(
+      (field) =>
+        field.targetObject === "agreement" && field.targetFieldPath === "status"
+    );
+    const clearEffectiveDate = plan.clearFields.some(
+      (field) =>
+        field.targetObject === "agreement" &&
+        field.targetFieldPath === "effectiveDate"
+    );
+    const clearEndDate = plan.clearFields.some(
+      (field) =>
+        field.targetObject === "agreement" &&
+        field.targetFieldPath === "endDate"
+    );
+
+    const data = {
+      ...(clearStatus ? { status: null } : {}),
+      ...(clearEffectiveDate ? { effectiveDate: null } : {}),
+      ...(clearEndDate ? { endDate: null } : {}),
+    };
+    const OR = [
+      ...(clearStatus ? [{ status: { not: null } }] : []),
+      ...(clearEffectiveDate ? [{ effectiveDate: { not: null } }] : []),
+      ...(clearEndDate ? [{ endDate: { not: null } }] : []),
+    ];
+
+    if (OR.length > 0) {
+      const { count } = await prisma.agreement.updateMany({
+        where: { integrationId: integration.id, OR },
+        data,
+      });
+      counts.cleared += count;
+      if (count > 0) {
+        console.log(
+          `  × ${count} stored agreement(s): retired fields cleared\n`
+        );
+      }
+    }
   }
 }
 
@@ -257,6 +310,7 @@ console.log(`legacy rules removed:   ${counts.removed}`);
 console.log(`late defaults added:    ${counts.added}`);
 console.log(`addresses promoted:     ${counts.promoted}`);
 console.log(`duplicate keys dropped: ${counts.deduplicated}`);
+console.log(`agreements cleared:     ${counts.cleared}`);
 console.log(`customers left alone:   ${counts.refusedCustomers}`);
 if (counts.invalidGroups > 0) {
   console.log(`groups refused:         ${counts.invalidGroups}`);

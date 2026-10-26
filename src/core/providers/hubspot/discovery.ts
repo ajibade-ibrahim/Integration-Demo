@@ -33,22 +33,6 @@ const AGREEMENT_FIELDS: readonly DiscoveredFieldDef[] = [
     type: "string",
   },
   {
-    path: "agreement_status",
-    label:
-      "Status (synthesized; open → draft, won → active, lost → canceled)",
-    type: "string",
-  },
-  {
-    path: "effective_date",
-    label: "Effective date (ISO 8601, synthesized from Create date)",
-    type: "datetime",
-  },
-  {
-    path: "end_date",
-    label: "End date (ISO 8601, synthesized only when the deal is closed)",
-    type: "datetime",
-  },
-  {
     path: "currency",
     label: "Currency (synthesized from Deal currency)",
     type: "string",

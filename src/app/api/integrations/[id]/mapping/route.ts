@@ -17,6 +17,7 @@ import {
   findMappings,
   saveMappings,
 } from "@/core/repositories/mapping-repository";
+import { mappingVersionFor } from "@/core/field-mapper/mapping-version";
 import { defaultMappingsFor } from "@/core/providers/defaults-registry";
 import { isTargetObject } from "@/core/types/common";
 import { isFieldTransform, type FieldMappingRule } from "@/core/types/mapping";
@@ -80,6 +81,7 @@ export async function GET(
   return NextResponse.json({
     functionName: target.functionName,
     rules,
+    version: mappingVersionFor(rules),
     // Offered so the editor can show a "reset to suggested" affordance without
     // a second endpoint.
     suggested: defaultMappingsFor(target.functionName, target.providerName),
@@ -148,8 +150,11 @@ export async function PUT(
     );
   }
 
+  const saved = await findMappings(id, target.functionName);
+
   return NextResponse.json({
     functionName: target.functionName,
-    rules: await findMappings(id, target.functionName),
+    rules: saved,
+    version: mappingVersionFor(saved),
   });
 }

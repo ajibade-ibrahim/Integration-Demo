@@ -2,6 +2,13 @@
 
 import type { TargetObject } from "./common";
 
+/**
+ * Formatting only. None of these maps one vocabulary onto another: a transform
+ * can trim, lowercase, extract a host or keep a date, but it cannot turn
+ * `closedwon` into `active` or a pipeline stage into our lifecycle. Provider
+ * vocabulary translation belongs in a handler, where the unknown-value policy
+ * can be stated and tested rather than hidden in a mapping rule.
+ */
 export const FIELD_TRANSFORMS = [
   "none",
   "trim",

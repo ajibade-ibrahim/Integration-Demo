@@ -163,7 +163,7 @@ Two safety details worth stating plainly:
 
 | Table | What it holds |
 |---|---|
-| **SyncRun** | One refresh attempt: whether it succeeded, was partial, failed, was skipped because another refresh was running, or was abandoned after its lease expired; what triggered it; start and finish times; how many records of each kind were written; a reason for every record that was skipped or flagged; and a separate coverage report — pages and records read, handler-declared completeness, mapped objects never yielded, supported objects never mapped, and whether a list reached the page guard. A running row also carries its lease owner, expiry, last heartbeat and fencing token, which stop two instances from owning the same refresh. |
+| **SyncRun** | One refresh attempt: whether it succeeded, was partial, failed, was skipped because another refresh was running, or was abandoned after its lease expired; what triggered it; start and finish times; how many records of each kind were written; a reason for every record that was skipped or flagged; and a separate coverage report — pages and records read, handler-declared completeness, mapped objects never yielded, supported objects never mapped, and whether a list reached the page guard; and the mapping content version read for each function before the first provider request. A running row also carries its lease owner, expiry, last heartbeat and fencing token, which stop two instances from owning the same refresh. |
 
 ---
 

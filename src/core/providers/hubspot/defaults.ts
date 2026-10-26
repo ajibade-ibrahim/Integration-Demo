@@ -30,9 +30,12 @@ export const hubspotIdentityDefaults: FieldMappingRule[] = [
  * an unnamed deal is not rejected on every sync.
  *
  * The raw stage, pipeline, amount and type are mapped into `customFields` rather
- * than the status column. Deal stages are user-defined per pipeline, so the
- * handler's closed-flag mapping owns `status`; the raw values stay available
- * without pretending to be our vocabulary.
+ * than the status column. Deal stages are user-defined per pipeline, so no
+ * default pretends they are our vocabulary. `status`, `effectiveDate` and
+ * `endDate` have no default either: HubSpot states a deal stage, closed flags,
+ * a creation time and a forecast close date, not our agreement lifecycle or its
+ * effective/end dates. Those raw facts stay in `provider_metadata` and remain
+ * available as source fields for a user who maps them deliberately.
  *
  * Line-item money is deliberately not mapped to `unitPriceMinor`: HubSpot
  * states `price` in major units, while that column holds minor units and the
@@ -42,9 +45,6 @@ export const hubspotIdentityDefaults: FieldMappingRule[] = [
 export const hubspotAgreementDefaults: FieldMappingRule[] = [
   { sourceFieldPath: "agreement_name", targetObject: "agreement", targetFieldPath: "name", transform: "trim" },
   { sourceFieldPath: "agreement_type", targetObject: "agreement", targetFieldPath: "agreementType", transform: "none" },
-  { sourceFieldPath: "agreement_status", targetObject: "agreement", targetFieldPath: "status", transform: "none" },
-  { sourceFieldPath: "effective_date", targetObject: "agreement", targetFieldPath: "effectiveDate", transform: "none" },
-  { sourceFieldPath: "end_date", targetObject: "agreement", targetFieldPath: "endDate", transform: "none" },
   { sourceFieldPath: "currency", targetObject: "agreement", targetFieldPath: "currency", transform: "none" },
   { sourceFieldPath: "provider_metadata", targetObject: "agreement", targetFieldPath: "providerMetadata", transform: "none" },
   { sourceFieldPath: "properties.dealstage", targetObject: "agreement", targetFieldPath: "customFields.dealStage", transform: "none" },

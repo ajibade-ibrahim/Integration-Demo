@@ -193,18 +193,22 @@ describe("HubSpot deal sync", () => {
     });
     expect(agreement.name).toBe("Acme renewal");
     expect(agreement.agreementType).toBe("deal");
-    expect(agreement.status).toBe("active");
+    // HubSpot says the deal is closed-won, not that our agreement is active,
+    // and its CRM dates are not our effective/end dates.
+    expect(agreement.status).toBeNull();
+    expect(agreement.effectiveDate).toBeNull();
+    expect(agreement.endDate).toBeNull();
     expect(agreement.currency).toBe("USD");
     expect(agreement.externalCustomerId).toBe("101");
     expect(agreement.customerId).toBe(customer.id);
-    expect(agreement.effectiveDate?.toISOString()).toBe(
-      "2024-01-01T00:00:00.000Z"
-    );
-    expect(agreement.endDate?.toISOString()).toBe("2024-06-01T00:00:00.000Z");
     expect(readJsonObject(agreement.providerMetadata)).toMatchObject({
       dealstage: "closedwon",
       pipeline: "default",
       amount: "12000.00",
+      createdate: "2024-01-01T00:00:00.000Z",
+      closedate: "2024-06-01T00:00:00.000Z",
+      hs_is_closed: "true",
+      hs_is_closed_won: "true",
     });
 
     const items = await prisma.agreementItem.findMany({

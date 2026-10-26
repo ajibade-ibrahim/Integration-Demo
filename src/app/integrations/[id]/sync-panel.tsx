@@ -59,6 +59,8 @@ interface Run {
   completedAt: string | null;
   /** Rows written per target object; absent keys were not synced at all. */
   recordCounts: Record<string, number>;
+  /** Mapping content version per function; empty on runs recorded before it. */
+  mappingVersions: Record<string, string>;
   /** What was acquired, separately from what was written. */
   coverage: Coverage;
   attempt: number;
@@ -431,6 +433,17 @@ function RunRow({ run }: { run: Run }) {
                     <p className="text-xs font-medium text-slate-700">
                       {FUNCTION_LABELS[fn.functionName] ?? fn.functionName}
                     </p>
+                    {run.mappingVersions[fn.functionName] !== undefined && (
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        Mapping{" "}
+                        <code
+                          className="font-mono"
+                          title={run.mappingVersions[fn.functionName]}
+                        >
+                          {run.mappingVersions[fn.functionName]?.slice(0, 15)}…
+                        </code>
+                      </p>
+                    )}
                     {fn.error !== undefined && (
                       <p className="mt-1 text-xs text-red-700">{fn.error}</p>
                     )}
