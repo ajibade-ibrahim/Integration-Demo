@@ -263,6 +263,13 @@ refresh that had no issues reports **success**; one that could not continue
 reports **failed**; one that found another refresh already running is
 **discarded**.
 
+Those statuses describe writes. The run also stores a separate **coverage**
+report: pages and records read and written per object, whether the handler
+declared each list complete, mapped objects it never yielded, supported objects
+with no mapping, and whether a list stopped at the shared page guard. A success
+can therefore be a success with unverified coverage, and the run panel says so
+rather than calling a page-capped list fresh.
+
 ### Company matching runs afterwards
 
 When the refresh finishes, the platform runs the company-matching pass

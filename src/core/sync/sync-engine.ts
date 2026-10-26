@@ -26,8 +26,21 @@ import {
 } from "../repositories/integration-repository";
 import { findMappings } from "../repositories/mapping-repository";
 import { writeJsonArray, writeJsonCounts } from "../repositories/json-column";
-import type { RecordIssue, TargetObject } from "../types/common";
+import type {
+  RecordIssue,
+  SyncRunCoverage,
+  TargetObject,
+} from "../types/common";
 import { syncTiming, systemClock, type Clock } from "./clock";
+import {
+  createFunctionCoverage,
+  emptyRunCoverage,
+  finishFunctionCoverage,
+  recordCoverageIssues,
+  recordCoveragePage,
+  recordCoverageWrites,
+  recordFunctionError,
+} from "./coverage";
 import {
   ProviderHttpError,
   ReauthorizationRequiredError,
@@ -56,6 +69,8 @@ export interface SyncResult {
    */
   recordCounts: Partial<Record<TargetObject, number>>;
   issues: RecordIssue[];
+  /** What was acquired, per function and object; separate from write success. */
+  coverage: SyncRunCoverage;
   error?: string;
   attempts: number;
 }
@@ -132,6 +147,20 @@ export async function executeSync(
   }
 }
 
+interface RunState {
+  recordCounts: Partial<Record<TargetObject, number>>;
+  issues: RecordIssue[];
+  coverage: SyncRunCoverage;
+}
+
+function emptyRunState(): RunState {
+  return {
+    recordCounts: {},
+    issues: [],
+    coverage: emptyRunCoverage(),
+  };
+}
+
 async function runWithRetries(
   integration: IntegrationRecord,
   syncRunId: string,
@@ -139,10 +168,18 @@ async function runWithRetries(
   timing: ReturnType<typeof syncTiming>
 ): Promise<SyncResult> {
   let lastError = "";
+  let lastAttempt = 0;
+  let state = emptyRunState();
 
   for (let attempt = 1; attempt <= timing.maxAttempts; attempt++) {
+    lastAttempt = attempt;
+    // A retry starts a fresh attempt. Keeping the previous attempt's counts
+    // would double-count writes that idempotent upserts repeated; the counts
+    // retained for a failed run are the writes from the attempt that failed.
+    state = emptyRunState();
+
     try {
-      const outcome = await runOnce(integration, clock);
+      const outcome = await runOnce(integration, clock, state);
 
       const status = outcome.issues.some((i) => i.severity === "rejected")
         ? "partial"
@@ -156,6 +193,7 @@ async function runWithRetries(
           recordCountsJson: writeJsonCounts(outcome.recordCounts),
           attempt,
           errorsJson: writeJsonArray(outcome.issues),
+          coverageJson: JSON.stringify(outcome.coverage),
         },
       });
       await markLastSync(integration.id, new Date(clock.now()));
@@ -195,13 +233,20 @@ async function runWithRetries(
     }
   }
 
+  state.coverage.error = lastError;
+
   await prisma.syncRun.update({
     where: { id: syncRunId },
     data: {
       status: "failed",
       completedAt: new Date(clock.now()),
-      attempt: timing.maxAttempts,
-      errorsJson: writeJsonArray([{ reason: lastError }]),
+      attempt: lastAttempt,
+      // Keep issues from the attempt that failed, and put the run-level error
+      // in coverage as well. A failed run can have written records first; those
+      // counts and pages are evidence, not noise to discard.
+      recordCountsJson: writeJsonCounts(state.recordCounts),
+      errorsJson: writeJsonArray(state.issues),
+      coverageJson: JSON.stringify(state.coverage),
     },
   });
 
@@ -209,121 +254,148 @@ async function runWithRetries(
   return {
     syncRunId,
     status: "failed",
-    recordCounts: {},
-    issues: [],
+    recordCounts: state.recordCounts,
+    issues: state.issues,
+    coverage: state.coverage,
     error: lastError,
-    attempts: timing.maxAttempts,
+    attempts: lastAttempt,
   };
-}
-
-interface RunOutcome {
-  recordCounts: Partial<Record<TargetObject, number>>;
-  issues: RecordIssue[];
 }
 
 async function runOnce(
   integration: IntegrationRecord,
-  clock: Clock
-): Promise<RunOutcome> {
+  clock: Clock,
+  state: RunState
+): Promise<RunState> {
   const token = await getValidToken(integration.id, clock.now());
-
-  const recordCounts: Partial<Record<TargetObject, number>> = {};
-  const issues: RecordIssue[] = [];
 
   // Ordered, not as stored: an agreement's parents are written by `identity`
   // and `catalog`, and `IntegrationFunction` rows come back in whatever order
   // Postgres likes. See `functionsInWriteOrder`.
   for (const functionName of functionsInWriteOrder(integration.functionNames)) {
     const handler = requireSyncHandler(functionName, integration.providerName);
-    const rules = await findMappings(integration.id, functionName);
-
-    // Nothing mapped means nothing to write; say so rather than reporting a
-    // successful run that produced no rows.
-    if (rules.length === 0) {
-      throw new Error(
-        `No field mappings configured for '${functionName}'; set them up before syncing`
-      );
-    }
-
-    const collected = new Map<TargetObject, CollectedRecord[]>();
-
-    // Per-object `SourcePage.complete`, ANDed across pages. An object the
-    // handler never yielded simply has no entry, which the writer reads as
-    // "never yielded" and refuses to reconcile — as it must, since that is
-    // also how an object with no mapping rule looks from here.
-    const complete = new Map<TargetObject, boolean>();
-
-    const sourcePaths = requestedSourcePaths(rules);
-    for await (const page of handler.fetchPages({
-      integrationId: integration.id,
-      accessToken: token.accessToken,
-      metadata: token.metadata,
-      requestedSourcePaths: sourcePaths,
-      clock,
-      // A long sync can outlive its access token. Handing handlers a way to
-      // refresh mid-run means a 401 on page 40 costs one extra request rather
-      // than the whole run's worth of pagination.
-      //
-      // Withheld entirely for credential kinds that cannot refresh — an API key
-      // has nothing to exchange. `HandlerContext` reads an absent callback as
-      // "a 401 is terminal", which turns a revoked key into a clean reconnect
-      // prompt instead of a failed refresh wearing a confusing error.
-      ...(canRefresh(integration.providerName)
-        ? {
-            refreshAccessToken: async () => {
-              const refreshed = await refreshToken(integration.id);
-              return {
-                accessToken: refreshed.accessToken,
-                metadata: refreshed.metadata,
-              };
-            },
-          }
-        : {}),
-    })) {
-      const bucket = collected.get(page.object) ?? [];
-      for (const raw of page.records) {
-        bucket.push({
-          externalSourceId: handler.externalIdOf(raw),
-          externalRefs: handler.externalRefsOf(raw, page.object),
-          mapped: applyMappings(rules, page.object, raw),
-        });
-      }
-      collected.set(page.object, bucket);
-
-      const previous = complete.get(page.object);
-      const thisPage = page.complete === true;
-      complete.set(
-        page.object,
-        previous === undefined ? thisPage : previous && thisPage
-      );
-    }
-
-    // Parents before children, in the order the function declares. Which
-    // writers run, and in what sequence, is the writer module's business —
-    // this loop knows only that a function produced records and that someone
-    // has to persist them.
-    //
-    // `mappedObjects` and `complete` are passed rather than re-derived in the
-    // writer: the engine already holds the mapping rules and has just seen the
-    // pages, and a second derivation is a second thing that can disagree with
-    // the first — which here would mean deleting rows a run never covered.
-    const result = await writeRecordsForFunction(integration.id, functionName, {
-      collected,
-      mappedObjects: new Set(sourcePaths.keys()),
-      complete,
+    const coverage = createFunctionCoverage({
+      functionName,
+      supportedObjects: handler.objects,
+      mappedObjects: new Set(),
     });
+    state.coverage.functions.push(coverage);
 
-    for (const [object, count] of Object.entries(result.counts)) {
-      const key = object as TargetObject;
-      recordCounts[key] = (recordCounts[key] ?? 0) + count;
+    try {
+      const rules = await findMappings(integration.id, functionName);
+      const sourcePaths = requestedSourcePaths(rules);
+      const mappedObjects = new Set(sourcePaths.keys());
+
+      for (const entry of coverage.objects) {
+        entry.mapped = mappedObjects.has(entry.object);
+      }
+
+      // Nothing mapped means nothing to write; say so rather than reporting a
+      // successful run that produced no rows.
+      if (rules.length === 0) {
+        throw new Error(
+          `No field mappings configured for '${functionName}'; set them up before syncing`
+        );
+      }
+
+      const collected = new Map<TargetObject, CollectedRecord[]>();
+
+      // Per-object `SourcePage.complete`, ANDed across pages. An object the
+      // handler never yielded simply has no entry, which the writer reads as
+      // "never yielded" and refuses to reconcile — as it must, since that is
+      // also how an object with no mapping rule looks from here.
+      const complete = new Map<TargetObject, boolean>();
+
+      for await (const page of handler.fetchPages({
+        integrationId: integration.id,
+        accessToken: token.accessToken,
+        metadata: token.metadata,
+        requestedSourcePaths: sourcePaths,
+        clock,
+        // A long sync can outlive its access token. Handing handlers a way to
+        // refresh mid-run means a 401 on page 40 costs one extra request rather
+        // than the whole run's worth of pagination.
+        //
+        // Withheld entirely for credential kinds that cannot refresh — an API key
+        // has nothing to exchange. `HandlerContext` reads an absent callback as
+        // "a 401 is terminal", which turns a revoked key into a clean reconnect
+        // prompt instead of a failed refresh wearing a confusing error.
+        ...(canRefresh(integration.providerName)
+          ? {
+              refreshAccessToken: async () => {
+                const refreshed = await refreshToken(integration.id);
+                return {
+                  accessToken: refreshed.accessToken,
+                  metadata: refreshed.metadata,
+                };
+              },
+            }
+          : {}),
+      })) {
+        const bucket = collected.get(page.object) ?? [];
+        for (const raw of page.records) {
+          bucket.push({
+            externalSourceId: handler.externalIdOf(raw),
+            externalRefs: handler.externalRefsOf(raw, page.object),
+            mapped: applyMappings(rules, page.object, raw),
+          });
+        }
+        collected.set(page.object, bucket);
+
+        recordCoveragePage(
+          coverage,
+          page.object,
+          page.records.length,
+          page.complete
+        );
+
+        const previous = complete.get(page.object);
+        const thisPage = page.complete === true;
+        complete.set(
+          page.object,
+          previous === undefined ? thisPage : previous && thisPage
+        );
+      }
+
+      // Parents before children, in the order the function declares. Which
+      // writers run, and in what sequence, is the writer module's business —
+      // this loop knows only that a function produced records and that someone
+      // has to persist them.
+      //
+      // `mappedObjects` and `complete` are passed rather than re-derived in the
+      // writer: the engine already holds the mapping rules and has just seen the
+      // pages, and a second derivation is a second thing that can disagree with
+      // the first — which here would mean deleting rows a run never covered.
+      const result = await writeRecordsForFunction(integration.id, functionName, {
+        collected,
+        mappedObjects,
+        complete,
+      });
+
+      for (const [object, count] of Object.entries(result.counts)) {
+        const key = object as TargetObject;
+        state.recordCounts[key] = (state.recordCounts[key] ?? 0) + count;
+      }
+      state.issues.push(...result.issues);
+
+      recordCoverageWrites(coverage, result.counts);
+      recordCoverageIssues(coverage, result.issues);
+
+      // Children stranded by earlier runs may now be linkable.
+      await relinkOrphansForFunction(integration.id, functionName);
+
+      finishFunctionCoverage(coverage);
+    } catch (error) {
+      recordFunctionError(
+        coverage,
+        error instanceof Error ? error.message : "Unknown function failure"
+      );
+      finishFunctionCoverage(coverage);
+      throw error;
     }
-    issues.push(...result.issues);
-
-    // Children stranded by earlier runs may now be linkable.
-    await relinkOrphansForFunction(integration.id, functionName);
   }
 
-  return { recordCounts, issues };
+  return state;
 }
 
 function emptyResult(
@@ -335,6 +407,7 @@ function emptyResult(
     status,
     recordCounts: {},
     issues: [],
+    coverage: emptyRunCoverage(),
     error,
     attempts: 0,
   };

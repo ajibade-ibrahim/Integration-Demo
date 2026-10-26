@@ -163,7 +163,7 @@ Two safety details worth stating plainly:
 
 | Table | What it holds |
 |---|---|
-| **SyncRun** | One refresh attempt: whether it succeeded, was partial, failed, or was skipped because another refresh was running; what triggered it; start and finish times; how many records of each kind were written; and a reason for every record that was skipped or flagged. |
+| **SyncRun** | One refresh attempt: whether it succeeded, was partial, failed, or was skipped because another refresh was running; what triggered it; start and finish times; how many records of each kind were written; a reason for every record that was skipped or flagged; and a separate coverage report — pages and records read, handler-declared completeness, mapped objects never yielded, supported objects never mapped, and whether a list reached the page guard. |
 
 ---
 
@@ -240,11 +240,14 @@ renewal moves a live connection to *needs reconnect*.
 ### Refresh outcomes
 
 Every refresh is recorded as one of five results: **running** (still in
-progress), **success** (everything written), **partial** (some records were
-skipped or flagged, each with a reason), **failed** (it could not continue;
-whatever was already written stays), or **discarded** (another refresh for the
-same connection was already running). The matching pass reports the same five
-states.
+progress), **success** (the run completed and every record it saw was accepted
+or warned), **partial** (some records were skipped or flagged, each with a
+reason), **failed** (it could not continue; whatever was already written stays,
+along with its counts and partial coverage), or **discarded** (another refresh
+for the same connection was already running). These are write outcomes, not a
+claim that every provider list was complete: the run's coverage report records
+pages read and whether a handler declared its list whole. The matching pass
+reports the same five states.
 
 ### The four reconciled lists
 

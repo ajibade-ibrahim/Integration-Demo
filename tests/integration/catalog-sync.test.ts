@@ -27,6 +27,7 @@ import { defaultMappingsFor } from "@/core/providers/defaults-registry";
 import { NON_EXPIRING_AT, saveToken } from "@/core/repositories/token-repository";
 import { readJsonCounts } from "@/core/repositories/json-column";
 import { createFakeClock } from "@/core/sync/clock";
+import type { SyncRunCoverage } from "@/core/types/common";
 
 const USER_ID = "user-catalog-sync";
 const INTEGRATION_ID = "integration-catalog-sync";
@@ -201,6 +202,21 @@ describe("a catalog sync, end to end", () => {
       feature: 0,
       entitlement: 0,
     });
+
+    const coverage = JSON.parse(run.coverageJson) as SyncRunCoverage;
+    const catalog = coverage.functions.find(
+      (entry) => entry.functionName === "catalog"
+    );
+    expect(catalog?.objects.find((entry) => entry.object === "product"))
+      .toMatchObject({
+        mapped: true,
+        yielded: true,
+        pages: 1,
+        recordsRead: 1,
+        recordsWritten: 1,
+        complete: null,
+        atPageLimit: false,
+      });
   });
 
   it("is idempotent across runs", async () => {
@@ -239,6 +255,12 @@ describe("a catalog sync, end to end", () => {
     // `partial` is reserved for rejected records; a warning keeps the run green.
     expect(first.status).toBe("success");
     expect(first.issues.map((i) => i.severity)).toEqual(["warning"]);
+    // But the warning is on the coverage record, so a green status cannot be
+    // mistaken for an unqualified complete success.
+    const priceCoverage = first.coverage.functions
+      .find((entry) => entry.functionName === "catalog")
+      ?.objects.find((entry) => entry.object === "price");
+    expect(priceCoverage).toMatchObject({ warnings: 1, complete: null });
 
     // No offering yet — it is synthesised from the product which did not arrive.
     expect(await prisma.offering.count({ where: { integrationId: INTEGRATION_ID } })).toBe(0);
@@ -358,5 +380,64 @@ describe("identity still syncs the way it did", () => {
       feature: 0,
       entitlement: 0,
     });
+  });
+
+  it("keeps writes and coverage from functions completed before a failure", async () => {
+    // Identity runs first and succeeds. Catalog then fails, so the run is
+    // failed — but the customer and contact rows are real, and the report must
+    // say what was written and how far acquisition got.
+    server.use(
+      http.get(CUSTOMERS, () =>
+        listing([
+          {
+            id: "cus_1",
+            object: "customer",
+            name: "Acme",
+            email: "billing@acme.test",
+            created: 1_680_893_993,
+            metadata: {},
+          },
+        ])
+      ),
+      http.get(PRODUCTS, () =>
+        HttpResponse.json({ error: { message: "boom" } }, { status: 500 })
+      )
+    );
+    await connect(["identity", "catalog"]);
+
+    const result = await executeSync(INTEGRATION_ID, {
+      clock: createFakeClock(1_700_000_000_000),
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.recordCounts).toEqual({ customer: 1, contact: 1 });
+    expect(result.coverage.error).toMatch(/boom|500/i);
+
+    const run = await prisma.syncRun.findFirstOrThrow({
+      where: { integrationId: INTEGRATION_ID },
+    });
+    expect(readJsonCounts(run.recordCountsJson)).toEqual({
+      customer: 1,
+      contact: 1,
+    });
+
+    const coverage = JSON.parse(run.coverageJson) as SyncRunCoverage;
+    const identity = coverage.functions.find(
+      (entry) => entry.functionName === "identity"
+    );
+    expect(identity?.objects.find((entry) => entry.object === "customer"))
+      .toMatchObject({
+        mapped: true,
+        yielded: true,
+        recordsRead: 1,
+        recordsWritten: 1,
+      });
+
+    const catalog = coverage.functions.find(
+      (entry) => entry.functionName === "catalog"
+    );
+    expect(catalog?.error).toMatch(/boom|500/i);
+    expect(catalog?.objects.find((entry) => entry.object === "product"))
+      .toMatchObject({ mapped: true, yielded: false });
   });
 });

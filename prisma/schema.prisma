@@ -1556,6 +1556,18 @@ model SyncRun {
   /// catalog sync.
   recordCountsJson String @default("{}")
 
+  /// What the run actually acquired, per function and target object:
+  /// pages fetched, records read/written, whether the handler declared the
+  /// list whole, which mapped objects were never yielded, and which supported
+  /// objects had no mapping. A successful write is not the same claim as
+  /// complete coverage; this column is where the difference is stored.
+  ///
+  /// Read and written through src/core/sync/coverage.ts and
+  /// src/core/repositories/sync-run-repository.ts. Defaults to `{}` so runs
+  /// recorded before this column existed read as "coverage not recorded"
+  /// rather than as complete.
+  coverageJson String @default("{}")
+
   attempt Int @default(1)
 
   /// JSON array of { sourceRecordId, targetObject, reason, fieldName? }.

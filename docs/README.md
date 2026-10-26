@@ -127,7 +127,10 @@ A **refresh** (called a **sync** or **run**) fetches the latest data from the
 system, translates it using your rules, and saves it. Each refresh reports what
 it did: *success*, *partial* (some records were skipped, with a reason for
 each), *failed*, or *discarded* (a refresh for that connection was already
-running). See
+running). The run history also shows **coverage** — pages and records read,
+whether a handler declared the list complete, which mapped objects were never
+yielded, and which supported objects had no mapping — so a green write status
+is not mistaken for proof that the provider list was whole. See
 [`architecture.md`](./architecture.md#6-what-happens-during-a-refresh) for the
 full story.
 

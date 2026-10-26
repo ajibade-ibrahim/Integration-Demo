@@ -543,6 +543,61 @@ export function isSyncRunStatus(v: unknown): v is SyncRunStatus {
 }
 
 // ---------------------------------------------------------------------------
+// Sync coverage
+// ---------------------------------------------------------------------------
+
+/**
+ * What one target object did during a run.
+ *
+ * `complete` is deliberately tri-state. `true` means the handler declared the
+ * list whole on every page it yielded; `false` means it declared at least one
+ * page incomplete; `null` means it never made a completeness claim. The last
+ * case is common for upsert-only root objects, and reporting it as `false`
+ * would turn "we did not ask for a guarantee" into "the provider failed".
+ */
+export interface SyncObjectCoverage {
+  object: TargetObject;
+  mapped: boolean;
+  yielded: boolean;
+  pages: number;
+  recordsRead: number;
+  recordsWritten: number;
+  complete: boolean | null;
+  warnings: number;
+  rejected: number;
+  /**
+   * True when the handler reached the shared page guard (1000 pages) without
+   * declaring the list complete. The guard is a safety net, not a successful
+   * end-of-data signal; reaching it is a coverage limitation even when the
+   * handler returned normally.
+   */
+  atPageLimit: boolean;
+}
+
+/** Coverage for one function in a run, across every object it can write. */
+export interface SyncFunctionCoverage {
+  functionName: string;
+  objects: SyncObjectCoverage[];
+  /** Mapped objects the handler never yielded a page for. */
+  omittedObjects: TargetObject[];
+  /** Objects the registered handler supports but the user never mapped. */
+  unmappedObjects: TargetObject[];
+  pages: number;
+  recordsRead: number;
+  recordsWritten: number;
+  warnings: number;
+  rejected: number;
+  error?: string;
+}
+
+/** The persisted coverage report for a run. */
+export interface SyncRunCoverage {
+  functions: SyncFunctionCoverage[];
+  /** Run-level failure, separate from per-function rejected records. */
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Identity resolution
 // ---------------------------------------------------------------------------
 

@@ -105,7 +105,7 @@ export default async function IntegrationsPage({
                       <span className="text-xs text-slate-400">
                         {integration.lastSyncTimestamp === null
                           ? "Never synced"
-                          : `Synced ${integration.lastSyncTimestamp.toLocaleDateString()}`}
+                          : `Last sync ${integration.lastSyncTimestamp.toLocaleDateString()}`}
                       </span>
                       <SyncabilityBadge syncable={syncable} />
                       <StatusBadge status={integration.status} />
