@@ -210,13 +210,6 @@ export async function markAuthorized(id: string, at: Date): Promise<void> {
   });
 }
 
-export async function markLastSync(id: string, at: Date): Promise<void> {
-  await prisma.integration.update({
-    where: { id },
-    data: { lastSyncTimestamp: at },
-  });
-}
-
 export async function markPendingRevocation(id: string): Promise<void> {
   await prisma.integration.update({
     where: { id },

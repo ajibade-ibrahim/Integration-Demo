@@ -4,6 +4,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { readJsonArray, readJsonCounts } from "./json-column";
+import { parseRunCoverage } from "../sync/coverage";
 import type {
   RecordIssue,
   SyncRunCoverage,
@@ -47,30 +48,8 @@ export async function listRecentRuns(
     startedAt: run.startedAt,
     completedAt: run.completedAt,
     recordCounts: readJsonCounts(run.recordCountsJson),
-    coverage: readCoverage(run.coverageJson),
+    coverage: parseRunCoverage(run.coverageJson),
     attempt: run.attempt,
     issues: readJsonArray<RecordIssue>(run.errorsJson),
   }));
-}
-
-/**
- * A malformed or pre-coverage row reads as "coverage not recorded". Treating
- * it as complete would be the one wrong default: absence of evidence is not
- * evidence that a run acquired everything.
- */
-function readCoverage(raw: string): SyncRunCoverage {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      Array.isArray((parsed as { functions?: unknown }).functions)
-    ) {
-      return parsed as SyncRunCoverage;
-    }
-  } catch {
-    // Fall through to the empty report.
-  }
-  return { functions: [] };
 }

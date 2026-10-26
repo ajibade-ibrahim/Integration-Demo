@@ -29,6 +29,7 @@ interface TickResult {
   checked?: number;
   due?: number;
   expired?: number;
+  recovered?: number;
   runs?: Array<{ label: string; status: string; customerCount: number; contactCount: number; error?: string }>;
   error?: string;
 }
@@ -56,7 +57,7 @@ async function tick(): Promise<void> {
 
     const runs = body.runs ?? [];
     console.log(
-      `[worker] ${startedAt.toISOString()} — checked ${body.checked ?? 0}, due ${body.due ?? 0}, expired ${body.expired ?? 0}`
+      `[worker] ${startedAt.toISOString()} — checked ${body.checked ?? 0}, due ${body.due ?? 0}, recovered ${body.recovered ?? 0}, expired ${body.expired ?? 0}`
     );
     for (const run of runs) {
       console.log(

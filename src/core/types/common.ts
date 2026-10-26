@@ -531,6 +531,7 @@ export const SYNC_RUN_STATUSES = [
   "partial",
   "failed",
   "discarded",
+  "abandoned",
 ] as const;
 
 export type SyncRunStatus = (typeof SYNC_RUN_STATUSES)[number];

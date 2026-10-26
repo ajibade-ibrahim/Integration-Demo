@@ -28,6 +28,37 @@ export function emptyRunCoverage(): SyncRunCoverage {
   return { functions: [] };
 }
 
+/**
+ * Parse a persisted coverage report.
+ *
+ * A malformed or pre-coverage row reads as "coverage not recorded". Treating it
+ * as complete would be the one wrong default: absence of evidence is not
+ * evidence that a run acquired everything.
+ */
+export function parseRunCoverage(raw: string): SyncRunCoverage {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      Array.isArray((parsed as { functions?: unknown }).functions)
+    ) {
+      return parsed as SyncRunCoverage;
+    }
+  } catch {
+    // Fall through to the empty report.
+  }
+  return emptyRunCoverage();
+}
+
+/** Add a run-level reason without discarding coverage already recorded. */
+export function coverageWithError(raw: string, error: string): string {
+  const coverage = parseRunCoverage(raw);
+  coverage.error = error;
+  return JSON.stringify(coverage);
+}
+
 interface CreateFunctionCoverageArgs {
   functionName: string;
   supportedObjects: readonly TargetObject[];

@@ -573,10 +573,11 @@ in tests rather than waited out.
 
 ### Scheduling
 
-Next.js has no scheduler. `POST /api/cron/sync` runs every integration that is
-due per its interval (default 24h, clamped 1–168h) and expires any integration
-orphaned in `pending_authorization` for over 30 minutes. That sweep is close to
-a no-op now: an integration is only created once its credential is proven, so an
+Next.js has no scheduler. `POST /api/cron/sync` first marks sync runs whose
+lease expired as **abandoned**, then runs every integration that is due per its
+interval (default 24h, clamped 1–168h) and expires any integration orphaned in
+`pending_authorization` for over 30 minutes. That last sweep is close to a no-op
+now: an integration is only created once its credential is proven, so an
 abandoned connect leaves a draft that expires in memory rather than a row.
 Drive it with a platform cron, or locally:
 
@@ -586,7 +587,9 @@ npm run worker           # polls /api/cron/sync every 60s
 
 Set `CRON_SECRET` to require a bearer token; it is mandatory in production,
 because otherwise the route is an unauthenticated endpoint that makes outbound
-API calls on every integration in the database.
+API calls on every integration in the database. The durable lease defaults to
+five minutes with a one-minute heartbeat; both are configurable with
+`SYNC_LEASE_DURATION_MS` and `SYNC_LEASE_HEARTBEAT_MS`.
 
 The primary demo path remains the manual **Sync now** button.
 
@@ -608,7 +611,7 @@ src/core/                framework-free domain — no Next.js imports
                          assertions, the pass; all pure but the resolver itself
   oauth/                 service, AES-256-GCM crypto, state store
   integrations/          draft store, and creating a connection from a draft
-  sync/                  engine, record writer, scheduler, clock, errors
+  sync/                  engine, lease, coverage, record writer, scheduler, clock, errors
   providers/             hubspot/, salesforce/, metrifox/, stripe/, chargebee/,
                          mock/ — one each
   credentials/           API-key connect service
@@ -832,16 +835,20 @@ The database is the portable part. These are not:
 - **Raise `SYNC_RETRY_DELAY_MS` and `RATE_LIMIT_FALLBACK_MS`.** They are lowered
   in `.env.example` so failures are observable in a demo, not because two
   seconds is a sane retry delay against a real API.
-- **The sync in-flight lock is still in-process.** OAuth state and connect drafts
-  moved to tables (`OAuthState`, `IntegrationDraft`) precisely so they survive a
-  second instance — each is written by one request and read by another, so
-  in-process they broke the moment the reader landed anywhere else. The lock in
-  `sync-engine.ts` is a `globalThis` `Set` and did not move: behind more than one
-  instance, two nodes can sync one integration at once. That fails safe, so it is
-  a known limit rather than a blocker.
+- **Sync ownership is durable.** Each `SyncRun` carries an owner, expiry,
+  heartbeat and fencing token. A worker claims the integration under a
+  per-integration Postgres advisory lock, renews the lease while it works, and
+  can close the run only while that owner/token/expiry still match. A crashed
+  worker's lease expires; the next scheduler tick marks the run **abandoned**,
+  and the next claim gets a higher token. The in-process `Set` remains as a fast
+  path, but the database row is the cross-instance authority. A stale worker
+  stops before starting another page, function, write or reconciliation, and its
+  fenced close cannot overwrite the newer run or integration timestamp.
 - **Not serverless without changes.** `POST /api/integrations/[id]/sync` returns
   202 and leaves the sync running after the response, which a platform that
-  freezes the function on response will kill mid-run.
+  freezes the function on response will kill mid-run. The durable lease now
+  makes that failure recoverable — the run is marked **abandoned** after expiry
+  and the next tick can reclaim it — but it does not keep the function alive.
 
 ---
 

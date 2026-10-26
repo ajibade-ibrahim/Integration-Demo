@@ -245,6 +245,16 @@ report(
   await prisma.syncRun.count({ where: { status: "running" } })
 );
 report(
+  "sync runs with an expired lease",
+  await prisma.syncRun.count({
+    where: {
+      status: "running",
+      OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: new Date() } }],
+    },
+  }),
+  " — the next scheduler tick marks these abandoned"
+);
+report(
   "resolution runs still marked running",
   await prisma.identityResolutionRun.count({ where: { status: "running" } })
 );

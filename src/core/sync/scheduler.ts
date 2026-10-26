@@ -14,6 +14,7 @@ import {
   updateStatus,
 } from "../repositories/integration-repository";
 import { resolveAfterSync } from "../identity/resolve-after-sync";
+import { recoverExpiredSyncRuns } from "./lease";
 import { executeSync, totalRecordsWritten } from "./sync-engine";
 import type { TargetObject } from "../types/common";
 import { systemClock, type Clock } from "./clock";
@@ -60,6 +61,8 @@ export interface SchedulerResult {
   due: number;
   runs: ScheduledRun[];
   expired: number;
+  /** Runs whose lease expired and were marked abandoned before selection. */
+  recovered: number;
   resolutions: ScheduledResolution[];
 }
 
@@ -75,6 +78,12 @@ export async function runScheduledSyncs(
   const clock = options.clock ?? systemClock;
   const now = clock.now();
 
+  // A crashed process leaves its run `running` until someone reclaims that
+  // integration. Sweeping here makes the failure visible on the next tick even
+  // when the integration is not due for hours. Acquisition repeats the same
+  // recovery under an integration lock for a manual sync.
+  const recovered = await recoverExpiredSyncRuns(now);
+
   const expired = await expirePendingAuthorizations(now);
 
   const all = await listAllIntegrations();
@@ -85,6 +94,7 @@ export async function runScheduledSyncs(
       : due.slice(0, options.maxIntegrations);
 
   const runs: ScheduledRun[] = [];
+  const synced: IntegrationRecord[] = [];
 
   // Sequential on purpose. Running every integration at once would multiply our
   // request rate against every provider simultaneously, which is the fastest
@@ -103,6 +113,11 @@ export async function runScheduledSyncs(
       recordsWritten: totalRecordsWritten(result.recordCounts),
       ...(result.error === undefined ? {} : { error: result.error }),
     });
+
+    // The worker that owns a discarded run resolves after its own work. A
+    // second whole-tenant pass here would duplicate the matching pass against
+    // data that is still being written.
+    if (result.status !== "discarded") synced.push(integration);
   }
 
   return {
@@ -110,7 +125,8 @@ export async function runScheduledSyncs(
     due: due.length,
     runs,
     expired,
-    resolutions: await resolveTouchedUsers(selected),
+    recovered,
+    resolutions: await resolveTouchedUsers(synced),
   };
 }
 

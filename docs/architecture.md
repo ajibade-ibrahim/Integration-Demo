@@ -261,7 +261,7 @@ The refresh finishes and reports **partial** with a full list of reasons, which
 is far more useful than a single error that hides nineteen good records. A
 refresh that had no issues reports **success**; one that could not continue
 reports **failed**; one that found another refresh already running is
-**discarded**.
+**discarded**; one whose worker stopped renewing its lease is **abandoned**.
 
 Those statuses describe writes. The run also stores a separate **coverage**
 report: pages and records read and written per object, whether the handler
@@ -269,6 +269,20 @@ declared each list complete, mapped objects it never yielded, supported objects
 with no mapping, and whether a list stopped at the shared page guard. A success
 can therefore be a success with unverified coverage, and the run panel says so
 rather than calling a page-capped list fresh.
+
+### One owner across instances
+
+A refresh can outlive the request that started it, so "already refreshing?" is
+not answered by an in-process variable alone. A worker claims the run in a
+database transaction that locks the integration, creates the run with a lease
+(owner, expiry, heartbeat and fencing token), and refuses if a live lease
+exists. The worker renews the lease while it pages, writes and reconciles. If it
+crashes, the lease expires; the scheduler marks the run **abandoned** and a later
+worker can claim a new one. Closing is fenced on the same owner/token and checks
+expiry again under the lock, so a paused old worker cannot overwrite the newer
+run, advance `lastSyncTimestamp`, or change connection status after losing
+ownership. The in-process lock remains only as a fast path for the common
+double-click.
 
 ### Company matching runs afterwards
 
@@ -345,6 +359,7 @@ separately:
 | A temporary provider outage | The whole refresh is retried with increasing waits, up to a limit. |
 | One record is malformed | That record is skipped or flagged, with a reason; everything else is saved; the refresh reports **partial**. |
 | Two refreshes are requested at once | One runs; the other is told it was **discarded**. Nothing is silently ignored. |
+| A worker crashes mid-refresh | Its lease expires; the run is marked **abandoned**, and a later worker starts a fresh run with a higher fencing token. |
 | A refresh fails completely | Everything already saved stays saved; the next scheduled refresh tries again. |
 | A connection is deleted | Its synced records go with it. If the provider could not be reached to revoke access, the deletion still completes and the failed revocation is recorded in the server log, so the provider key can be revoked by hand. |
 

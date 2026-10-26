@@ -69,3 +69,28 @@ export function syncTiming(): SyncTiming {
     rateLimitFallbackMs: envInt("RATE_LIMIT_FALLBACK_MS", 60 * 1000),
   };
 }
+
+export interface SyncLeaseTiming {
+  /** How long a worker owns a run without renewing it. */
+  durationMs: number;
+  /** How often a live worker extends its lease. Always less than duration. */
+  heartbeatMs: number;
+}
+
+export function syncLeaseTiming(): SyncLeaseTiming {
+  const durationMs = Math.max(
+    10_000,
+    envInt("SYNC_LEASE_DURATION_MS", 5 * 60 * 1000)
+  );
+  const requestedHeartbeat = envInt("SYNC_LEASE_HEARTBEAT_MS", 60 * 1000);
+
+  return {
+    durationMs,
+    // A heartbeat at or after the expiry would let a healthy worker lose the
+    // run it is still using. Two renewals per lease is the minimum useful rate.
+    heartbeatMs: Math.max(
+      1_000,
+      Math.min(requestedHeartbeat, Math.floor(durationMs / 2))
+    ),
+  };
+}

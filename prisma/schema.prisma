@@ -1499,9 +1499,10 @@ model IdentityAssertion {
 /// which is also why it is a separate pass rather than a step inside
 /// `sync-engine`. Modelled on `SyncRun` below down to the JSON-in-String issues
 /// column: same lifecycle, and the same policy that a per-record problem is
-/// recorded and never aborts the run. It reuses SyncRunStatus because the five
-/// states mean the same things here, "discarded" included — that is what the
-/// concurrency guard produces.
+/// recorded and never aborts the run. It reuses SyncRunStatus because the states
+/// it uses mean the same things here, "discarded" included — that is what the
+/// concurrency guard produces. "Abandoned" belongs to durable sync ownership
+/// and is not produced by this pass.
 model IdentityResolutionRun {
   id     String @id @default(uuid())
   userId String
@@ -1535,13 +1536,27 @@ model SyncRun {
   integrationId String
   integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
-  /// SyncRunStatus: running | success | partial | failed | discarded
+  /// SyncRunStatus: running | success | partial | failed | discarded | abandoned
   status String
 
   trigger String @default("manual")
 
   startedAt   DateTime  @default(now())
   completedAt DateTime?
+
+  /// Durable ownership for a run that can outlive one request.
+  ///
+  /// The in-process Set in sync-engine.ts is a fast path, not the authority:
+  /// behind two instances it cannot see the other worker. Claiming a run is a
+  /// transaction that takes a per-integration advisory lock, checks for a live
+  /// lease, marks any expired `running` run abandoned, and creates this run with
+  /// a monotonically increasing fencing token. A stale worker's later update
+  /// must match owner + token + run and re-check expiry, so a paused worker
+  /// cannot close a run another worker has taken over.
+  leaseOwner     String?
+  leaseExpiresAt DateTime?
+  heartbeatAt    DateTime?
+  fencingToken   Int       @default(0)
 
   /// Rows written per target object this run, as JSON:
   /// `{"customer": 12, "contact": 30}`. Read and written through
@@ -1574,6 +1589,7 @@ model SyncRun {
   errorsJson String @default("[]")
 
   @@index([integrationId, startedAt])
+  @@index([status, leaseExpiresAt])
 }
 
 /// A provider and function set the user has configured but not yet connected.

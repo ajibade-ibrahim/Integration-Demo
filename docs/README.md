@@ -126,8 +126,9 @@ A few honest details behind that table:
 A **refresh** (called a **sync** or **run**) fetches the latest data from the
 system, translates it using your rules, and saves it. Each refresh reports what
 it did: *success*, *partial* (some records were skipped, with a reason for
-each), *failed*, or *discarded* (a refresh for that connection was already
-running). The run history also shows **coverage** — pages and records read,
+each), *failed*, *discarded* (a refresh for that connection was already
+running), or *abandoned* (a worker stopped before finishing and its lease
+expired). The run history also shows **coverage** — pages and records read,
 whether a handler declared the list complete, which mapped objects were never
 yielded, and which supported objects had no mapping — so a green write status
 is not mistaken for proof that the provider list was whole. See

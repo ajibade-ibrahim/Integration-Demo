@@ -12,7 +12,6 @@
  * rather than another branch in this loop.
  */
 
-import { prisma } from "@/lib/prisma";
 import { applyMappings, requestedSourcePaths } from "../field-mapper/field-mapper";
 import { functionsInWriteOrder } from "../object-schema";
 import { getValidToken, refreshToken } from "../oauth/oauth-service";
@@ -20,8 +19,6 @@ import { requireSyncHandler } from "../registries/handler-registry";
 import { canRefresh } from "../registries/provider-registry";
 import {
   findIntegration,
-  markLastSync,
-  updateStatus,
   type IntegrationRecord,
 } from "../repositories/integration-repository";
 import { findMappings } from "../repositories/mapping-repository";
@@ -31,7 +28,12 @@ import type {
   SyncRunCoverage,
   TargetObject,
 } from "../types/common";
-import { syncTiming, systemClock, type Clock } from "./clock";
+import {
+  syncLeaseTiming,
+  syncTiming,
+  systemClock,
+  type Clock,
+} from "./clock";
 import {
   createFunctionCoverage,
   emptyRunCoverage,
@@ -45,6 +47,7 @@ import {
   ProviderHttpError,
   ReauthorizationRequiredError,
   RetryableSyncError,
+  SyncLeaseLostError,
 } from "./errors";
 
 // Re-exported so provider handlers and the engine name the same errors.
@@ -53,6 +56,15 @@ export {
   ReauthorizationRequiredError,
   RetryableSyncError,
 } from "./errors";
+import {
+  acquireSyncLease,
+  assertLeaseHeld,
+  closeSyncRun,
+  startSyncLeaseHeartbeat,
+  verifyLeaseHeld,
+  type SyncLease,
+  type SyncLeaseHeartbeat,
+} from "./lease";
 import {
   relinkOrphansForFunction,
   writeRecordsForFunction,
@@ -83,11 +95,14 @@ export function totalRecordsWritten(
 }
 
 /**
- * Integrations with a run in flight.
+ * Integrations with a run in flight in *this process*.
  *
- * On globalThis for the same reason as the OAuth state store: route modules are
- * compiled separately and reloaded in dev, and a per-module Set would let two
- * concurrent requests each believe they hold the lock.
+ * This is only a fast path. It stops the common double-click without a database
+ * round trip, but it cannot see another app instance; the lease on `SyncRun` is
+ * the cross-instance authority. On globalThis for the same reason as the OAuth
+ * state store: route modules are compiled separately and reloaded in dev, and
+ * a per-module Set would let two concurrent requests each believe they hold
+ * the lock.
  */
 const globalForSync = globalThis as unknown as {
   syncInFlight: Set<string> | undefined;
@@ -103,8 +118,9 @@ export interface SyncOptions {
 /**
  * Run a sync for every function the integration serves.
  *
- * @returns A `discarded` result if a run is already in flight — the second
- *   caller is told, rather than silently doing nothing.
+ * @returns A `discarded` result if a run is already in flight in this process
+ *   or another one owns the durable lease. The second caller is told, rather
+ *   than silently doing nothing.
  */
 export async function executeSync(
   integrationId: string,
@@ -112,6 +128,7 @@ export async function executeSync(
 ): Promise<SyncResult> {
   const clock = options.clock ?? systemClock;
   const timing = syncTiming();
+  const leaseTiming = syncLeaseTiming();
 
   const integration = await findIntegration(integrationId);
   if (integration === undefined) {
@@ -129,20 +146,43 @@ export async function executeSync(
   }
   inFlight.add(integrationId);
 
-  const syncRun = await prisma.syncRun.create({
-    data: {
-      integrationId,
-      status: "running",
-      trigger: options.trigger ?? "manual",
-    },
-    select: { id: true },
-  });
-
   try {
-    return await runWithRetries(integration, syncRun.id, clock, timing);
+    const acquisition = await acquireSyncLease({
+      integrationId,
+      trigger: options.trigger ?? "manual",
+      clock,
+      timing: leaseTiming,
+    });
+
+    if (!acquisition.acquired) {
+      return emptyResult(
+        "discarded",
+        "Another worker owns this integration's sync",
+        acquisition.activeRunId
+      );
+    }
+
+    const heartbeat = startSyncLeaseHeartbeat(
+      acquisition.lease,
+      clock,
+      leaseTiming
+    );
+
+    try {
+      return await runWithRetries(
+        integration,
+        acquisition.lease,
+        heartbeat,
+        clock,
+        timing
+      );
+    } finally {
+      heartbeat.stop();
+    }
   } finally {
     // Must release even if something throws, or the integration is wedged
-    // until the process restarts.
+    // in this process until it restarts. The database lease has its own expiry
+    // if this process stops here without closing the run.
     inFlight.delete(integrationId);
   }
 }
@@ -163,12 +203,14 @@ function emptyRunState(): RunState {
 
 async function runWithRetries(
   integration: IntegrationRecord,
-  syncRunId: string,
+  lease: SyncLease,
+  heartbeat: SyncLeaseHeartbeat,
   clock: Clock,
   timing: ReturnType<typeof syncTiming>
 ): Promise<SyncResult> {
   let lastError = "";
   let lastAttempt = 0;
+  let requiresReauthorization = false;
   let state = emptyRunState();
 
   for (let attempt = 1; attempt <= timing.maxAttempts; attempt++) {
@@ -179,37 +221,49 @@ async function runWithRetries(
     state = emptyRunState();
 
     try {
-      const outcome = await runOnce(integration, clock, state);
+      await verifyLeaseHeld(lease, heartbeat, clock);
+
+      const outcome = await runOnce(
+        integration,
+        lease,
+        heartbeat,
+        clock,
+        state
+      );
 
       const status = outcome.issues.some((i) => i.severity === "rejected")
         ? "partial"
         : "success";
 
-      await prisma.syncRun.update({
-        where: { id: syncRunId },
-        data: {
-          status,
-          completedAt: new Date(clock.now()),
-          recordCountsJson: writeJsonCounts(outcome.recordCounts),
-          attempt,
-          errorsJson: writeJsonArray(outcome.issues),
-          coverageJson: JSON.stringify(outcome.coverage),
-        },
+      const closed = await closeSyncRun(lease, clock, {
+        status,
+        completedAt: new Date(clock.now()),
+        recordCountsJson: writeJsonCounts(outcome.recordCounts),
+        attempt,
+        errorsJson: writeJsonArray(outcome.issues),
+        coverageJson: JSON.stringify(outcome.coverage),
+        markLastSync: true,
       });
-      await markLastSync(integration.id, new Date(clock.now()));
 
-      return { syncRunId, status, attempts: attempt, ...outcome };
+      if (!closed) return leaseLostResult(lease);
+
+      return { syncRunId: lease.runId, status, attempts: attempt, ...outcome };
     } catch (error) {
+      // Losing the lease is not a provider failure: another worker owns the
+      // run now, so retrying or closing this row would overwrite its work.
+      if (error instanceof SyncLeaseLostError) {
+        return leaseLostResult(lease);
+      }
+
       lastError =
         error instanceof Error ? error.message : "Unknown sync failure";
 
       // A grant that survived a refresh and still 401s is dead. Retrying only
-      // delays telling the user, so stop and flag it for reconnection.
+      // delays telling the user, so stop and flag it for reconnection. The flag
+      // is applied inside the fenced close below, not here: a paused worker
+      // must not change the connection after another worker has taken over.
       if (error instanceof ReauthorizationRequiredError) {
-        await updateStatus(integration.id, "requires_reauthorization");
-        console.error(
-          `[sync] Integration ${integration.id} needs re-authorization: ${lastError}`
-        );
+        requiresReauthorization = true;
         break;
       }
 
@@ -224,6 +278,14 @@ async function runWithRetries(
 
       if (!retryable || !attemptsLeft) break;
 
+      // Do not sleep through a takeover. The heartbeat should keep this lease
+      // alive; if it could not, stop before the next provider request.
+      try {
+        assertLeaseHeld(lease, heartbeat, clock);
+      } catch {
+        return leaseLostResult(lease);
+      }
+
       // Exponential backoff, unless the provider told us how long to wait.
       const wait =
         error instanceof RetryableSyncError && error.retryAfterMs !== undefined
@@ -235,24 +297,33 @@ async function runWithRetries(
 
   state.coverage.error = lastError;
 
-  await prisma.syncRun.update({
-    where: { id: syncRunId },
-    data: {
-      status: "failed",
-      completedAt: new Date(clock.now()),
-      attempt: lastAttempt,
-      // Keep issues from the attempt that failed, and put the run-level error
-      // in coverage as well. A failed run can have written records first; those
-      // counts and pages are evidence, not noise to discard.
-      recordCountsJson: writeJsonCounts(state.recordCounts),
-      errorsJson: writeJsonArray(state.issues),
-      coverageJson: JSON.stringify(state.coverage),
-    },
+  const closed = await closeSyncRun(lease, clock, {
+    status: "failed",
+    completedAt: new Date(clock.now()),
+    attempt: lastAttempt,
+    // Keep issues from the attempt that failed, and put the run-level error
+    // in coverage as well. A failed run can have written records first; those
+    // counts and pages are evidence, not noise to discard.
+    recordCountsJson: writeJsonCounts(state.recordCounts),
+    errorsJson: writeJsonArray(state.issues),
+    coverageJson: JSON.stringify(state.coverage),
+    markLastSync: false,
+    ...(requiresReauthorization
+      ? { integrationStatus: "requires_reauthorization" as const }
+      : {}),
   });
+
+  if (!closed) return leaseLostResult(lease);
+
+  if (requiresReauthorization) {
+    console.error(
+      `[sync] Integration ${integration.id} needs re-authorization: ${lastError}`
+    );
+  }
 
   // The integration stays active: one failed run must not block the schedule.
   return {
-    syncRunId,
+    syncRunId: lease.runId,
     status: "failed",
     recordCounts: state.recordCounts,
     issues: state.issues,
@@ -262,17 +333,33 @@ async function runWithRetries(
   };
 }
 
+function leaseLostResult(lease: SyncLease): SyncResult {
+  return {
+    syncRunId: lease.runId,
+    status: "discarded",
+    recordCounts: {},
+    issues: [],
+    coverage: emptyRunCoverage(),
+    error: "Another worker took over this sync after its lease expired",
+    attempts: 0,
+  };
+}
+
 async function runOnce(
   integration: IntegrationRecord,
+  lease: SyncLease,
+  heartbeat: SyncLeaseHeartbeat,
   clock: Clock,
   state: RunState
 ): Promise<RunState> {
   const token = await getValidToken(integration.id, clock.now());
+  await verifyLeaseHeld(lease, heartbeat, clock);
 
   // Ordered, not as stored: an agreement's parents are written by `identity`
   // and `catalog`, and `IntegrationFunction` rows come back in whatever order
   // Postgres likes. See `functionsInWriteOrder`.
   for (const functionName of functionsInWriteOrder(integration.functionNames)) {
+    await verifyLeaseHeld(lease, heartbeat, clock);
     const handler = requireSyncHandler(functionName, integration.providerName);
     const coverage = createFunctionCoverage({
       functionName,
@@ -323,6 +410,7 @@ async function runOnce(
         ...(canRefresh(integration.providerName)
           ? {
               refreshAccessToken: async () => {
+                assertLeaseHeld(lease, heartbeat, clock);
                 const refreshed = await refreshToken(integration.id);
                 return {
                   accessToken: refreshed.accessToken,
@@ -332,6 +420,8 @@ async function runOnce(
             }
           : {}),
       })) {
+        assertLeaseHeld(lease, heartbeat, clock);
+
         const bucket = collected.get(page.object) ?? [];
         for (const raw of page.records) {
           bucket.push({
@@ -366,6 +456,13 @@ async function runOnce(
       // writer: the engine already holds the mapping rules and has just seen the
       // pages, and a second derivation is a second thing that can disagree with
       // the first — which here would mean deleting rows a run never covered.
+      //
+      // This is the last point before the write phase where a takeover can be
+      // detected without money already spent. A writer that loses the lease
+      // midway cannot finish the run, but it must not start a new function or
+      // reconciliation while another owner might be running.
+      await verifyLeaseHeld(lease, heartbeat, clock);
+
       const result = await writeRecordsForFunction(integration.id, functionName, {
         collected,
         mappedObjects,
@@ -380,6 +477,8 @@ async function runOnce(
 
       recordCoverageWrites(coverage, result.counts);
       recordCoverageIssues(coverage, result.issues);
+
+      await verifyLeaseHeld(lease, heartbeat, clock);
 
       // Children stranded by earlier runs may now be linkable.
       await relinkOrphansForFunction(integration.id, functionName);
@@ -400,10 +499,11 @@ async function runOnce(
 
 function emptyResult(
   status: SyncResult["status"],
-  error: string
+  error: string,
+  syncRunId: string | null = null
 ): SyncResult {
   return {
-    syncRunId: null,
+    syncRunId,
     status,
     recordCounts: {},
     issues: [],

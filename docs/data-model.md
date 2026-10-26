@@ -163,7 +163,7 @@ Two safety details worth stating plainly:
 
 | Table | What it holds |
 |---|---|
-| **SyncRun** | One refresh attempt: whether it succeeded, was partial, failed, or was skipped because another refresh was running; what triggered it; start and finish times; how many records of each kind were written; a reason for every record that was skipped or flagged; and a separate coverage report — pages and records read, handler-declared completeness, mapped objects never yielded, supported objects never mapped, and whether a list reached the page guard. |
+| **SyncRun** | One refresh attempt: whether it succeeded, was partial, failed, was skipped because another refresh was running, or was abandoned after its lease expired; what triggered it; start and finish times; how many records of each kind were written; a reason for every record that was skipped or flagged; and a separate coverage report — pages and records read, handler-declared completeness, mapped objects never yielded, supported objects never mapped, and whether a list reached the page guard. A running row also carries its lease owner, expiry, last heartbeat and fencing token, which stop two instances from owning the same refresh. |
 
 ---
 
@@ -239,15 +239,17 @@ renewal moves a live connection to *needs reconnect*.
 
 ### Refresh outcomes
 
-Every refresh is recorded as one of five results: **running** (still in
+Every refresh is recorded as one of six results: **running** (still in
 progress), **success** (the run completed and every record it saw was accepted
 or warned), **partial** (some records were skipped or flagged, each with a
 reason), **failed** (it could not continue; whatever was already written stays,
-along with its counts and partial coverage), or **discarded** (another refresh
-for the same connection was already running). These are write outcomes, not a
-claim that every provider list was complete: the run's coverage report records
-pages read and whether a handler declared its list whole. The matching pass
-reports the same five states.
+along with its counts and partial coverage), **discarded** (another refresh for
+the same connection was already running), or **abandoned** (its owner stopped
+renewing the lease, usually because the worker crashed). These are write
+outcomes, not a claim that every provider list was complete: the run's coverage
+report records pages read and whether a handler declared its list whole. The
+matching pass reports the same states except *abandoned*, which belongs to
+durable sync ownership.
 
 ### The four reconciled lists
 

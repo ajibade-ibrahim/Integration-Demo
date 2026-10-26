@@ -122,6 +122,7 @@ const RUN_STATUS: Record<string, string> = {
   partial: "bg-amber-100 text-amber-800",
   failed: "bg-red-100 text-red-800",
   discarded: "bg-slate-100 text-slate-600",
+  abandoned: "bg-orange-100 text-orange-800",
 };
 
 type CoverageTone = "ok" | "warn" | "muted";
@@ -375,7 +376,8 @@ function RunRow({ run }: { run: Run }) {
       )}
       {run.coverage.error !== undefined && (
         <p className="mt-1 text-xs font-medium text-red-700">
-          Run failed: {run.coverage.error}
+          {run.status === "abandoned" ? "Run abandoned" : "Run failed"}:{" "}
+          {run.coverage.error}
         </p>
       )}
 

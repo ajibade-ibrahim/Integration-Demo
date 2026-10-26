@@ -56,7 +56,12 @@ export async function POST(
   // than records that are about to be grouped.
   if (wait) {
     const result = await executeSync(id, { trigger: "manual" });
-    await resolveAfterSync(integration.userId, "sync");
+    // A discarded run means another worker owns the integration; that worker
+    // resolves after its own run. Running a second whole-tenant pass here would
+    // duplicate work against a sync that is still in flight.
+    if (result.status !== "discarded") {
+      await resolveAfterSync(integration.userId, "sync");
+    }
     return NextResponse.json(result);
   }
 
@@ -69,9 +74,13 @@ export async function POST(
     })
     // Resolve either way, and after the catch rather than in it: a sync that
     // threw may still have written records before it did, and the pass covers
-    // the whole tenant rather than this one run. `resolveAfterSync` never
-    // rejects, so nothing escapes this chain unhandled.
-    .then(() => resolveAfterSync(integration.userId, "sync"));
+    // the whole tenant rather than this one run. A discarded run is skipped
+    // because the worker that owns the lease will resolve. `resolveAfterSync`
+    // never rejects, so nothing escapes this chain unhandled.
+    .then((result) => {
+      if (result?.status === "discarded") return;
+      return resolveAfterSync(integration.userId, "sync");
+    });
 
   return NextResponse.json({ status: "started" }, { status: 202 });
 }
