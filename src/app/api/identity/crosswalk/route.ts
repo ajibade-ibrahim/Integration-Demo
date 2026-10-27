@@ -23,17 +23,20 @@
  * making the same wrong join on every pass, and no inference will ever revise
  * it.
  *
- * Resolution is not run here. `/api/identity/resolve` is the trigger, so a user
- * importing three files pays for one pass instead of three.
+ * Importing does not run resolution. `/api/identity/resolve` is the trigger,
+ * so a user importing three files pays for one pass instead of three.
+ *
+ * Withdrawing **does** run it, after retiring the affected keys. The removal is
+ * the change the user asked for; making them trigger a second pass would leave
+ * a window in which the pairs are gone from the records but the derived keys
+ * and account fields still describe them.
  */
 
 import { NextResponse } from "next/server";
 import { bootstrap } from "@/core/bootstrap";
 import { MAX_CROSSWALK_PAIRS, parseCrosswalk } from "@/core/identity/crosswalk";
-import {
-  clearImportedCrossRefs,
-  importCrosswalk,
-} from "@/core/repositories/identity-repository";
+import { withdrawImportedCrosswalk } from "@/core/identity/withdrawal";
+import { importCrosswalk } from "@/core/repositories/identity-repository";
 import { providerRegistry } from "@/core/registries/provider-registry";
 import { currentUserId } from "@/lib/current-user";
 
@@ -118,11 +121,15 @@ export async function DELETE(request: Request): Promise<NextResponse> {
     );
   }
 
-  const cleared = await clearImportedCrossRefs({
+  const withdrawal = await withdrawImportedCrosswalk({
     userId: await currentUserId(),
     integrationId,
     foreignProvider,
   });
 
-  return NextResponse.json({ cleared });
+  return NextResponse.json({
+    cleared: withdrawal.cleared,
+    retiredKeys: withdrawal.retiredKeys,
+    reassessed: withdrawal.reassessed,
+  });
 }

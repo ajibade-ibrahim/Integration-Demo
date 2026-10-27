@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { bootstrap } from "@/core/bootstrap";
 import { unsupportedFunctionsFor } from "@/core/capabilities";
+import { findIdentityWithdrawalForUser } from "@/core/repositories/identity-withdrawal-repository";
 import { listIntegrations } from "@/core/repositories/integration-repository";
 import { currentUserId } from "@/lib/current-user";
 import { functionRegistry } from "@/core/registries/function-registry";
@@ -15,11 +16,21 @@ export const dynamic = "force-dynamic";
 export default async function IntegrationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ revocation?: string; error?: string }>;
+  searchParams: Promise<{
+    revocation?: string;
+    error?: string;
+    deleted?: string;
+  }>;
 }) {
   bootstrap();
-  const { revocation, error } = await searchParams;
-  const integrations = await listIntegrations(await currentUserId());
+  const { revocation, error, deleted } = await searchParams;
+  const userId = await currentUserId();
+  const [integrations, withdrawal] = await Promise.all([
+    listIntegrations(userId),
+    deleted === undefined || deleted === ""
+      ? Promise.resolve(undefined)
+      : findIdentityWithdrawalForUser(userId, deleted, "integration_deleted"),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -46,6 +57,39 @@ export default async function IntegrationsPage({
           revoked. Consider removing this app&apos;s access from the provider
           directly.
         </p>
+      )}
+      {withdrawal !== undefined && (
+        <section
+          className={`rounded-xl border p-4 text-sm ${
+            withdrawal.status === "reassessed"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+              : "border-amber-200 bg-amber-50 text-amber-900"
+          }`}
+        >
+          <p className="font-medium">
+            Deleted “{withdrawal.instanceLabel ?? "integration"}” from{" "}
+            {providerRegistry.get(withdrawal.providerName)?.label ??
+              withdrawal.providerName}{" "}
+            on {withdrawal.createdAt.toLocaleString()}.
+          </p>
+          <p className="mt-1">
+            Removed {withdrawal.removedRecords} synced record
+            {withdrawal.removedRecords === 1 ? "" : "s"} and{" "}
+            {withdrawal.retiredKeys} identity key
+            {withdrawal.retiredKeys === 1 ? "" : "s"}.{" "}
+            {withdrawal.status === "reassessed"
+              ? `${withdrawal.accountsReassessed} affected account${
+                  withdrawal.accountsReassessed === 1 ? "" : "s"
+                } rebuilt from surviving members; ${withdrawal.accountsReaped} empty account${
+                  withdrawal.accountsReaped === 1 ? "" : "s"
+                } removed.`
+              : "The removal is complete, but account cleanup did not finish. The next sync or account refresh will retry."}
+          </p>
+          <p className="mt-1">
+            Records from your other connections remain. This audit keeps the
+            provider, label, time, and counts only — no customer data.
+          </p>
+        </section>
       )}
 
       <div className="flex items-center justify-between">

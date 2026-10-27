@@ -439,7 +439,15 @@ events possible without guessing:
   own account snapshots are used to detect the move. The next matching pass
   rebuilds the current account's keys.
 - **Deleting an integration** deletes the keys it supplied, while keys supplied
-  by surviving members stay. The empty account is reaped by the next pass.
+  by surviving members stay. Resolution then runs against the post-deletion
+  records: shared accounts are rebuilt from their remaining members, fields
+  whose only source was the deleted connection are cleared, and empty accounts
+  are reaped. A deletion audit keeps the provider, label, time, counts and
+  affected account ids — never customer values.
+- **Forgetting imported crosswalk pairs** deletes the keys those pairs supplied
+  in the same transaction and runs the same reassessment. Accounts the pairs
+  already joined stay joined; withdrawing the file stops future supply, while
+  “Not this company” is still the action that separates an unwanted match.
 
 `lastSeenAt` moves every time a key is re-offered; a key that simply stops being
 offered is *not* retired. Absence is not deletion, and splitting a company
@@ -657,9 +665,9 @@ src/core/                framework-free domain — no Next.js imports
   registries/            function, provider, and handler registries
   field-mapper/          validate, apply, serialize
   identity/              cross-integration resolution — evidence, survivorship,
-                         provenance, assertions, the pass; all pure but the resolver itself
+                         provenance, assertions, explicit withdrawal, the pass
   oauth/                 service, AES-256-GCM crypto, state store
-  integrations/          draft store, and creating a connection from a draft
+  integrations/          draft store, connection creation, deletion + reassessment
   sync/                  engine, lease, coverage, record writer, scheduler, clock, errors
   providers/             hubspot/, salesforce/, metrifox/, stripe/, chargebee/,
                          mock/ — one each
@@ -948,12 +956,14 @@ the provider actually states them.
 is stored on the integration, not recomputed from token metadata, and each key
 carries an account/record snapshot. A credential moved to another tenant
 therefore retires its old claims; a deleted integration retires only its own,
-leaving the other members' keys intact. `lastSeenAt` is evidence freshness, not
-a deletion signal.
+leaving the other members' keys intact and rebuilding their accounts from the
+records that remain. `lastSeenAt` is evidence freshness, not a deletion signal.
 
 **Deletion proceeds even if revocation fails.** A provider outage must not
 strand an integration the user asked to remove. The unconfirmed revocation is
-flagged and surfaced so they can revoke from the provider's side.
+flagged and surfaced so they can revoke from the provider's side. The removal
+is followed by identity resolution; if that pass fails, the audit marks the
+cleanup as unfinished rather than claiming the accounts were rebuilt.
 
 ---
 

@@ -166,9 +166,14 @@ knowing:
 - **A match remembers its source.** Each key records the provider account and
   the customer or contact record that offered it, and when it was last seen.
   Re-keying a connection to a different provider account retires the old
-  account's keys; disconnecting retires only that connection's keys. Simply
-  stopping to supply a key is not treated as deletion, because a temporary
-  omission must not split a company.
+  account's keys; disconnecting retires only that connection's keys and then
+  rebuilds shared accounts from their remaining members. Simply stopping to
+  supply a key is not treated as deletion, because a temporary omission must not
+  split a company.
+- **An explicit removal leaves a receipt.** Deleting a connection, or forgetting
+  imported crosswalk pairs, retires the affected keys and re-runs matching. The
+  audit records what was removed, when, and which profiles were rebuilt or
+  removed — counts and identifiers only, never customer values.
 
 ## What happens to your data
 

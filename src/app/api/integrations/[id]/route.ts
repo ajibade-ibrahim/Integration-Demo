@@ -1,20 +1,27 @@
 /**
  * One integration: deleting it, and setting its survivorship rank.
  *
- * DELETE — revoke the grant, then remove everything.
+ * DELETE — revoke the grant, remove the integration, then rebuild the accounts
+ * that outlived it.
  *
  * Order matters: revocation needs the token, so it has to happen before the
  * cascade deletes it. But a provider outage must not strand an integration the
  * user asked to remove, so an unconfirmed revocation is recorded and the
  * deletion proceeds. Leaving the row behind would mean the only way to retry is
  * to fix someone else's server.
+ *
+ * Deletion waits for the post-removal resolution pass. A response that said
+ * "deleted" while accounts still cited the deleted connection in their field
+ * provenance would be the exact half-finished state this route exists to
+ * avoid. If that pass fails, the removal still succeeds and the audit says the
+ * reassessment did not finish.
  */
 
 import { NextResponse } from "next/server";
 import { bootstrap } from "@/core/bootstrap";
+import { deleteIntegrationAndReassess } from "@/core/integrations/deletion";
 import {
   clampIdentityPriority,
-  deleteIntegration,
   findIntegrationForUser,
   markPendingRevocation,
   updateIdentityPriority,
@@ -50,9 +57,20 @@ export async function DELETE(
   // dropping its state stops a stale callback from resurrecting anything.
   await discardStateFor(id);
 
-  await deleteIntegration(id);
+  const deletion = await deleteIntegrationAndReassess(id);
+  if (deletion === undefined) {
+    // The row disappeared between the ownership check and the transaction.
+    // Answer the same way as any other missing integration rather than
+    // pretending a second deletion succeeded.
+    return NextResponse.json({ error: "Integration not found" }, { status: 404 });
+  }
 
-  return NextResponse.json({ deleted: true, revoked });
+  return NextResponse.json({
+    deleted: true,
+    revoked,
+    auditId: deletion.auditId,
+    reassessed: deletion.reassessed,
+  });
 }
 
 /**

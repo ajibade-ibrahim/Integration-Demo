@@ -54,6 +54,26 @@ describe("the per-user concurrency guard", () => {
     expect(discarded.issues).toEqual([]);
   });
 
+  it("queues a deletion pass when the caller must observe removed rows", async () => {
+    const tenant = await makeIdentityTenant([{ provider: "stripe" }]);
+    await tenant.customer("stripe", "cus_1", { email: "billing@acme.example" });
+
+    const first = resolveIdentities(tenant.userId, "manual");
+    const second = resolveIdentities(tenant.userId, "deletion", {
+      waitForInFlight: true,
+    });
+    const [running, queued] = await Promise.all([first, second]);
+
+    // Ordinary overlap is discarded; a deletion cannot be, because the pass it
+    // would wait on may have loaded records that the deletion then removed.
+    expect([running.status, queued.status]).toEqual(["success", "success"]);
+    const runs = await listResolutionRuns(tenant.userId);
+    expect(runs.map((run) => run.trigger).sort()).toEqual([
+      "deletion",
+      "manual",
+    ]);
+  });
+
   it("writes no run row for the discarded caller", async () => {
     const tenant = await makeIdentityTenant([{ provider: "stripe" }]);
     await tenant.customer("stripe", "cus_1", { email: "billing@acme.example" });

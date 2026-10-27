@@ -14,11 +14,19 @@ import { useRouter } from "next/navigation";
 export function DeleteButton({
   integrationId,
   label,
+  isApiKey,
   recordCount,
+  keyCount,
+  accountsRebuilt,
+  accountsRemoved,
 }: {
   integrationId: string;
   label: string;
+  isApiKey: boolean;
   recordCount: number;
+  keyCount: number;
+  accountsRebuilt: number;
+  accountsRemoved: number;
 }) {
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
@@ -36,6 +44,7 @@ export function DeleteButton({
       const body = (await response.json()) as {
         error?: string;
         revoked?: boolean;
+        auditId?: string | null;
       };
 
       if (!response.ok) {
@@ -45,9 +54,14 @@ export function DeleteButton({
       }
 
       // Deletion succeeds even when the provider did not confirm revocation;
-      // saying so beats implying the token is definitely gone.
-      const suffix = body.revoked === false ? "?revocation=unconfirmed" : "";
-      router.push(`/integrations${suffix}`);
+      // saying so beats implying the token is definitely gone. The audit id
+      // lets the list page show what the pass rebuilt and removed, rather than
+      // a generic success message after a destructive action.
+      const params = new URLSearchParams();
+      if (body.revoked === false) params.set("revocation", "unconfirmed");
+      if (typeof body.auditId === "string") params.set("deleted", body.auditId);
+      const query = params.toString();
+      router.push(`/integrations${query === "" ? "" : `?${query}`}`);
       router.refresh();
     } catch {
       setError("Could not reach the server");
@@ -75,9 +89,34 @@ export function DeleteButton({
         Delete “{label}”?
       </p>
       <p className="mt-1 text-sm text-red-800">
-        This revokes the access token at the provider and removes the stored
-        credentials, field mappings, and {recordCount} synced record
-        {recordCount === 1 ? "" : "s"}. It cannot be undone.
+        {isApiKey
+          ? "This removes the stored API key from this app. The key itself stays valid at the provider until you rotate or delete it there."
+          : "This revokes the access token at the provider."}{" "}
+        It permanently removes the stored credentials, field mappings,
+        discovery cache, and {recordCount} synced record
+        {recordCount === 1 ? "" : "s"}. It also retires {keyCount} identity key
+        {keyCount === 1 ? "" : "s"} supplied by this connection.
+      </p>
+      {(accountsRebuilt > 0 || accountsRemoved > 0) && (
+        <p className="mt-1 text-sm text-red-800">
+          {accountsRebuilt > 0 &&
+            `${accountsRebuilt} affected account${
+              accountsRebuilt === 1 ? "" : "s"
+            } still ${
+              accountsRebuilt === 1 ? "has a member" : "have members"
+            } from another connection; ${
+              accountsRebuilt === 1 ? "it" : "they"
+            } will be rebuilt from those records. `}
+          {accountsRemoved > 0 &&
+            `${accountsRemoved} account${
+              accountsRemoved === 1 ? "" : "s"
+            } will be left with no members and removed.`}
+        </p>
+      )}
+      <p className="mt-1 text-sm text-red-800">
+        Records from your other connections stay. Identity notes that name a
+        removed record are removed too. The deletion audit keeps the provider,
+        label, time, and counts — no customer data. This cannot be undone.
       </p>
 
       {error !== null && (

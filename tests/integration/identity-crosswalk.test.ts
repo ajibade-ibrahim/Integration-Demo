@@ -226,7 +226,7 @@ describe("withdrawing them", () => {
     await resolveIdentities(tenant.userId, "manual");
     expect(await tenant.groups()).toEqual([["TESSELLATE-010", "cus_tess"]]);
 
-    expect(await clearImportedCrossRefs(base)).toBe(1);
+    expect((await clearImportedCrossRefs(base)).cleared).toBe(1);
     await resolveIdentities(tenant.userId, "manual");
 
     return { tenant, metrifoxId };
@@ -318,11 +318,13 @@ describe("ownership", () => {
     });
 
     expect(
-      await clearImportedCrossRefs({
-        userId: mine.userId,
-        integrationId: theirs.integrationId("metrifox"),
-        foreignProvider: "stripe",
-      })
+      (
+        await clearImportedCrossRefs({
+          userId: mine.userId,
+          integrationId: theirs.integrationId("metrifox"),
+          foreignProvider: "stripe",
+        })
+      ).cleared
     ).toBe(0);
 
     const row = await prisma.customer.findFirstOrThrow({

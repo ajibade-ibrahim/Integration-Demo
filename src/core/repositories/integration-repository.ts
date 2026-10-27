@@ -4,6 +4,7 @@
 
 import { prisma } from "@/lib/prisma";
 import type { IntegrationStatus } from "../types/common";
+import { writeJsonArray, writeJsonCounts } from "./json-column";
 
 export interface IntegrationRecord {
   id: string;
@@ -67,6 +68,180 @@ function toRecord(row: RowWithFunctions): IntegrationRecord {
 }
 
 const withFunctions = { functions: { select: { functionName: true } } } as const;
+
+/**
+ * Every relation that cascades from an integration, in the same words the
+ * schema uses. Counting from this one list keeps the delete-audit totals, the
+ * preview shown in the confirmation, and `recordCount` from drifting apart.
+ */
+const CASCADED_COUNT_SELECT = {
+  functions: true,
+  fieldMappings: true,
+  discoveredFields: true,
+  customers: true,
+  contacts: true,
+  products: true,
+  offerings: true,
+  prices: true,
+  features: true,
+  entitlements: true,
+  agreements: true,
+  subscriptions: true,
+  agreementItems: true,
+  agreementEntitlements: true,
+  agreementDiscounts: true,
+  invoices: true,
+  invoiceLines: true,
+  payments: true,
+  syncRuns: true,
+} as const;
+
+export type CascadedCounts = {
+  [K in keyof typeof CASCADED_COUNT_SELECT]: number;
+};
+
+/** Relations whose rows are business data; config and run history are not. */
+const SYNCED_RECORD_RELATIONS = [
+  "customers",
+  "contacts",
+  "products",
+  "offerings",
+  "prices",
+  "features",
+  "entitlements",
+  "agreements",
+  "subscriptions",
+  "agreementItems",
+  "agreementEntitlements",
+  "agreementDiscounts",
+  "invoices",
+  "invoiceLines",
+  "payments",
+] as const satisfies ReadonlyArray<keyof CascadedCounts>;
+
+function countSyncedRecords(counts: CascadedCounts): number {
+  return SYNCED_RECORD_RELATIONS.reduce(
+    (sum, relation) => sum + counts[relation],
+    0
+  );
+}
+
+type RemovalSnapshotClient = Pick<
+  typeof prisma,
+  "integration" | "customerAccountKey" | "customer"
+>;
+
+interface IntegrationRemovalSnapshot {
+  integration: {
+    id: string;
+    userId: string;
+    providerName: string;
+    instanceLabel: string;
+    sourceAccountId: string | null;
+  };
+  counts: CascadedCounts;
+  retiredKeys: number;
+  affectedAccountIds: string[];
+}
+
+async function readIntegrationRemovalSnapshot(
+  db: RemovalSnapshotClient,
+  id: string
+): Promise<IntegrationRemovalSnapshot | undefined> {
+  const integration = await db.integration.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      userId: true,
+      providerName: true,
+      instanceLabel: true,
+      sourceAccountId: true,
+      _count: { select: CASCADED_COUNT_SELECT },
+    },
+  });
+  if (integration === null) return undefined;
+
+  const [keyAccounts, customerAccounts, retiredKeys] = await Promise.all([
+    db.customerAccountKey.findMany({
+      where: { sourceIntegrationId: id },
+      select: { customerAccountId: true },
+      distinct: ["customerAccountId"],
+    }),
+    db.customer.findMany({
+      where: { integrationId: id, customerAccountId: { not: null } },
+      select: { customerAccountId: true },
+      distinct: ["customerAccountId"],
+    }),
+    db.customerAccountKey.count({ where: { sourceIntegrationId: id } }),
+  ]);
+
+  const affectedAccountIds = [
+    ...new Set([
+      ...keyAccounts.map((row) => row.customerAccountId),
+      ...customerAccounts.flatMap((row) =>
+        row.customerAccountId === null ? [] : [row.customerAccountId]
+      ),
+    ]),
+  ].sort();
+
+  return {
+    integration: {
+      id: integration.id,
+      userId: integration.userId,
+      providerName: integration.providerName,
+      instanceLabel: integration.instanceLabel,
+      sourceAccountId: integration.sourceAccountId,
+    },
+    counts: integration._count as CascadedCounts,
+    retiredKeys,
+    affectedAccountIds,
+  };
+}
+
+export interface IntegrationDeletionPreview {
+  /** Business rows that will be removed. */
+  recordCount: number;
+  /** Identity keys currently sourced from this connection. */
+  keyCount: number;
+  /** Affected accounts that will keep at least one member from another source. */
+  accountsRebuilt: number;
+  /** Affected accounts that will be left empty and reaped. */
+  accountsRemoved: number;
+}
+
+/**
+ * What deleting this integration will remove, for the confirmation panel.
+ *
+ * `accountsRebuilt` is based on members, not keys: a key from a surviving
+ * connection does not keep an account alive, because accounts with no customers
+ * are shells and the resolution pass reaps them.
+ */
+export async function loadIntegrationDeletionPreview(
+  id: string
+): Promise<IntegrationDeletionPreview | undefined> {
+  const snapshot = await readIntegrationRemovalSnapshot(prisma, id);
+  if (snapshot === undefined) return undefined;
+
+  const survivors =
+    snapshot.affectedAccountIds.length === 0
+      ? []
+      : await prisma.customer.findMany({
+          where: {
+            integrationId: { not: id },
+            customerAccountId: { in: snapshot.affectedAccountIds },
+          },
+          select: { customerAccountId: true },
+          distinct: ["customerAccountId"],
+        });
+
+  return {
+    recordCount: countSyncedRecords(snapshot.counts),
+    keyCount: snapshot.retiredKeys,
+    accountsRebuilt: survivors.length,
+    accountsRemoved:
+      snapshot.affectedAccountIds.length - survivors.length,
+  };
+}
 
 export interface CreateIntegrationInput {
   userId: string;
@@ -320,26 +495,88 @@ export async function findStalePendingAuthorizations(
   return rows.map(toRecord);
 }
 
+export interface IntegrationDeletionResult {
+  auditId: string | null;
+  userId: string;
+  providerName: string;
+  instanceLabel: string;
+  sourceAccountId: string | null;
+  counts: CascadedCounts;
+  recordCount: number;
+  retiredKeys: number;
+  affectedAccountIds: string[];
+}
+
 /**
- * Delete an integration and everything hanging off it.
+ * Delete an integration, retire its keys, and write the tombstone.
  *
  * Every child relation cascades at the schema level, so the integration delete
  * removes functions, tokens, mappings, discovery cache, synced records, and
  * sync runs. Identity keys do **not** cascade: they belong to the account, not
- * the integration, and are deliberately kept when one member disconnects.
+ * the integration, and may be held on behalf of another survivor. Delete
+ * precisely the keys this connection supplied (`sourceIntegrationId`), leaving
+ * every other member's keys alone.
  *
- * That is the right lifetime for keys a surviving member still supplies, but
- * not for keys this integration alone supplied. They name a source that no
- * longer exists, and until the next resolution pass they would keep matching
- * new records to a company the user disconnected. Delete precisely those
- * (`sourceIntegrationId`), leaving every other member's keys alone. Accounts
- * are reaped by the next resolution pass when they are empty.
+ * The audit row is written in the same transaction as the removal, so there is
+ * no state in which the data is gone and the explanation never arrived. It
+ * records counts and affected account ids only — never synced values.
+ *
+ * Reassessment is deliberately **not** here. This function has callers that are
+ * not user-visible deletions (the failed-connect rollback), and opening a
+ * tenant-wide resolution run as a side effect of cleanup would be surprising.
+ * The API deletion path uses `deleteIntegrationAndReassess`; pass
+ * `{ audit: false }` only for a rollback that never produced user-visible data.
  */
-export async function deleteIntegration(id: string): Promise<void> {
-  await prisma.$transaction([
-    prisma.customerAccountKey.deleteMany({
-      where: { sourceIntegrationId: id },
-    }),
-    prisma.integration.delete({ where: { id } }),
-  ]);
+export async function deleteIntegration(
+  id: string,
+  options: { audit?: boolean } = {}
+): Promise<IntegrationDeletionResult | undefined> {
+  return prisma.$transaction(
+    async (tx) => {
+      const snapshot = await readIntegrationRemovalSnapshot(tx, id);
+      if (snapshot === undefined) return undefined;
+
+      const deletedKeys = await tx.customerAccountKey.deleteMany({
+        where: { sourceIntegrationId: id },
+      });
+
+      await tx.integration.delete({ where: { id } });
+
+      const recordCount = countSyncedRecords(snapshot.counts);
+      const audit =
+        options.audit === false
+          ? null
+          : await tx.identityWithdrawal.create({
+              data: {
+                userId: snapshot.integration.userId,
+                kind: "integration_deleted",
+                integrationId: id,
+                providerName: snapshot.integration.providerName,
+                instanceLabel: snapshot.integration.instanceLabel,
+                sourceAccountId: snapshot.integration.sourceAccountId,
+                removedJson: writeJsonCounts(snapshot.counts),
+                removedRecords: recordCount,
+                retiredKeys: deletedKeys.count,
+                affectedAccountIdsJson: writeJsonArray(
+                  snapshot.affectedAccountIds
+                ),
+                status: "recorded",
+              },
+              select: { id: true },
+            });
+
+      return {
+        auditId: audit?.id ?? null,
+        userId: snapshot.integration.userId,
+        providerName: snapshot.integration.providerName,
+        instanceLabel: snapshot.integration.instanceLabel,
+        sourceAccountId: snapshot.integration.sourceAccountId,
+        counts: snapshot.counts,
+        recordCount,
+        retiredKeys: deletedKeys.count,
+        affectedAccountIds: snapshot.affectedAccountIds,
+      };
+    },
+    { timeout: 30_000 }
+  );
 }

@@ -52,6 +52,7 @@ import {
   loadAssertions,
   loadResolutionInput,
   reapEmptyAccounts,
+  retireKeysFromDeletedIntegrations,
   startResolutionRun,
   updateAccountFields,
   type AccountSummary,
@@ -101,14 +102,16 @@ interface Cluster {
  *
  * On `globalThis` for the same reason as `syncInFlight` in `sync-engine.ts`:
  * route modules are compiled separately and reloaded in dev, so a per-module
- * Set would let two concurrent requests each believe they hold the lock. It
+ * collection would let two concurrent requests each believe they hold the lock. It
  * carries the same accepted limitation — one process only, so two deployed
  * instances can still overlap.
  *
  * Keyed by user, because that is the scope of the pass. Two of one user's
  * integrations finishing a sync at the same moment must produce one resolution,
  * not two racing ones, and the guard here is what makes the caller-side
- * "resolve after every sync" wiring cheap enough to be unconditional.
+ * "resolve after every sync" wiring cheap enough to be unconditional. The value
+ * is the in-flight promise so a deletion can wait for it instead of being told
+ * its pass was discarded.
  *
  * An overlap that slips past this is degraded rather than corrupting: the
  * `(userId, kind, value)` unique is the real backstop, and `insertKeys` uses
@@ -116,11 +119,24 @@ interface Cluster {
  * the winner already holds.
  */
 const globalForIdentity = globalThis as unknown as {
-  identityResolveInFlight: Set<string> | undefined;
+  identityResolveInFlight: Map<string, Promise<ResolutionOutcome>> | undefined;
 };
-const inFlight: Set<string> =
-  globalForIdentity.identityResolveInFlight ?? new Set<string>();
+const inFlight: Map<string, Promise<ResolutionOutcome>> =
+  globalForIdentity.identityResolveInFlight instanceof Map
+    ? globalForIdentity.identityResolveInFlight
+    : new Map<string, Promise<ResolutionOutcome>>();
 globalForIdentity.identityResolveInFlight = inFlight;
+
+export interface ResolveIdentitiesOptions {
+  /**
+   * Wait for a pass already running for this user, then start another.
+   *
+   * Used after a deletion/withdrawal: the in-flight pass may have loaded the
+   * rows before they were removed, so piggy-backing on it would leave the
+   * derived data stale. Ordinary sync callers keep the cheaper discard.
+   */
+  waitForInFlight?: boolean;
+}
 
 function emptyCounts(): ResolutionRunCounts {
   return {
@@ -136,30 +152,51 @@ function emptyCounts(): ResolutionRunCounts {
  * Resolve every customer in one tenant onto a canonical account.
  *
  * @returns A `discarded` outcome, having written nothing at all, when a pass
- *   for this user is already running. The second caller is told rather than
- *   left to believe it did the work — and rather than being queued, because the
- *   pass it is waiting on reads the same rows it would have read.
+ *   for this user is already running and `waitForInFlight` is false. The second
+ *   caller is told rather than left to believe it did the work — and rather than
+ *   being queued, because the pass it is waiting on reads the same rows it
+ *   would have read. A deletion passes `waitForInFlight: true` instead, because
+ *   the running pass may predate the rows that were just removed.
  */
 export async function resolveIdentities(
   userId: string,
-  trigger: IdentityRunTrigger = "sync"
+  trigger: IdentityRunTrigger = "sync",
+  options: ResolveIdentitiesOptions = {}
 ): Promise<ResolutionOutcome> {
-  if (inFlight.has(userId)) {
-    return {
-      runId: null,
-      status: "discarded",
-      counts: emptyCounts(),
-      issues: [],
-    };
+  // A loop rather than a single check: after waiting, another caller may have
+  // started a new pass in the gap. The map is the per-process truth, and only
+  // the caller that installed a promise removes it.
+  for (;;) {
+    const running = inFlight.get(userId);
+    if (running === undefined) break;
+
+    if (options.waitForInFlight !== true) {
+      return {
+        runId: null,
+        status: "discarded",
+        counts: emptyCounts(),
+        issues: [],
+      };
+    }
+
+    try {
+      await running;
+    } catch {
+      // The failed pass recorded its own failed run. This caller's job is to
+      // start a pass against the current rows, so swallow it and re-check.
+    }
   }
-  inFlight.add(userId);
+
+  const promise = runResolution(userId, trigger);
+  inFlight.set(userId, promise);
 
   try {
-    return await runResolution(userId, trigger);
+    return await promise;
   } finally {
     // Must release even if something throws, or this user's resolution is
-    // wedged until the process restarts.
-    inFlight.delete(userId);
+    // wedged until the process restarts. Compare first: a queued waiter may
+    // already have installed the next pass.
+    if (inFlight.get(userId) === promise) inFlight.delete(userId);
   }
 }
 
@@ -175,7 +212,10 @@ async function runResolution(
     // Step 0, and not housekeeping. An account whose members were deleted with
     // their integration still claims its keys, and the unique on
     // `(userId, kind, value)` cannot tell a live claim from an abandoned one —
-    // so a stale shell would block the correct account from ever forming.
+    // so a stale shell would block the correct account from ever forming. Keys
+    // whose source integration is gone are retired for the same reason: no
+    // later step in this pass would remove them.
+    await retireKeysFromDeletedIntegrations(userId);
     counts.accountsReaped += (await reapEmptyAccounts(userId)).length;
 
     const customers = await loadResolutionInput(userId);

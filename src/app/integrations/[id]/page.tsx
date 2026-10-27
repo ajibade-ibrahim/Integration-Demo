@@ -5,7 +5,10 @@ import {
   supportedObjectsFor,
   unsupportedFunctionsFor,
 } from "@/core/capabilities";
-import { findIntegrationForUser } from "@/core/repositories/integration-repository";
+import {
+  findIntegrationForUser,
+  loadIntegrationDeletionPreview,
+} from "@/core/repositories/integration-repository";
 import { currentUserId } from "@/lib/current-user";
 import { functionRegistry, resolveScopes } from "@/core/registries/function-registry";
 import { providerRegistry } from "@/core/registries/provider-registry";
@@ -20,7 +23,6 @@ import { countMappings } from "@/core/repositories/mapping-repository";
 import { SyncPanel } from "./sync-panel";
 import { IdentityPanel } from "./identity-panel";
 import { DeleteButton } from "./delete-button";
-import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -63,23 +65,12 @@ export default async function IntegrationDetailPage({
   );
 
   // Counted so the delete confirmation can say what is actually at stake
-  // rather than a vague "and all its data". Every table that cascades off the
-  // integration belongs in this total — a count that quietly omits the catalog
-  // would understate the damage on exactly the screen that exists to state it.
-  const where = { where: { integrationId: integration.id } };
-  const recordCount = (
-    await Promise.all([
-      prisma.customer.count(where),
-      prisma.contact.count(where),
-      prisma.product.count(where),
-      prisma.offering.count(where),
-      prisma.feature.count(where),
-      prisma.entitlement.count(where),
-      prisma.agreement.count(where),
-      prisma.subscription.count(where),
-      prisma.agreementItem.count(where),
-    ])
-  ).reduce((sum, n) => sum + n, 0);
+  // rather than a vague "and all its data". The repository owns the list of
+  // cascading relations so this panel, the delete audit, and the actual removal
+  // cannot drift apart. Account counts distinguish profiles that survive on
+  // another connection's members from shells that will be reaped.
+  const deletionPreview = await loadIntegrationDeletionPreview(integration.id);
+  if (deletionPreview === undefined) notFound();
 
   let scopes: string[] = [];
   try {
@@ -298,7 +289,11 @@ export default async function IntegrationDetailPage({
         <DeleteButton
           integrationId={integration.id}
           label={integration.instanceLabel}
-          recordCount={recordCount}
+          isApiKey={isApiKey}
+          recordCount={deletionPreview.recordCount}
+          keyCount={deletionPreview.keyCount}
+          accountsRebuilt={deletionPreview.accountsRebuilt}
+          accountsRemoved={deletionPreview.accountsRemoved}
         />
       </section>
     </div>

@@ -33,6 +33,7 @@ import { PrismaClient } from "@prisma/client";
 import { bootstrap } from "../src/core/bootstrap";
 import { validateMappings } from "../src/core/field-mapper/field-mapper";
 import { findRetiredRules } from "../src/core/identity/mapping-retarget";
+import { parseFieldProvenance } from "../src/core/identity/provenance";
 import { objectsForFunction } from "../src/core/object-schema";
 import { functionRegistry } from "../src/core/registries/function-registry";
 import { getSyncHandler } from "../src/core/registries/handler-registry";
@@ -137,6 +138,41 @@ const unsyncable = integrations.flatMap((i) =>
 );
 report("integration functions that cannot sync", unsyncable.length);
 for (const entry of unsyncable) console.log(`         ${entry}`);
+
+const integrationIds = new Set(integrations.map((i) => i.id));
+const accounts = await prisma.customerAccount.findMany({
+  select: { id: true, fieldProvenance: true },
+});
+const staleProvenance = accounts.flatMap((account) => {
+  const fields = Object.entries(parseFieldProvenance(account.fieldProvenance))
+    .filter(([, entry]) => {
+      if (!integrationIds.has(entry.integrationId)) return true;
+      return (entry.alternatives ?? []).some(
+        (alternative) => !integrationIds.has(alternative.integrationId)
+      );
+    })
+    .map(([fieldName]) => fieldName);
+  return fields.length === 0
+    ? []
+    : [`${account.id}: ${fields.sort().join(", ")}`];
+});
+report(
+  "accounts with fields still citing a deleted connection",
+  staleProvenance.length,
+  " — run identity resolution"
+);
+for (const entry of staleProvenance.slice(0, 20)) {
+  console.log(`         ${entry}`);
+}
+
+const keys = await prisma.customerAccountKey.findMany({
+  select: { sourceIntegrationId: true },
+});
+report(
+  "identity keys still citing a deleted connection",
+  keys.filter((key) => !integrationIds.has(key.sourceIntegrationId)).length,
+  " — run identity resolution"
+);
 
 const cachePairs = await prisma.discoveredField.groupBy({
   by: ["functionName", "targetObject"],

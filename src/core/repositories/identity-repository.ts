@@ -27,7 +27,13 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { readJsonArray, readJsonObject, writeJsonArray, writeJsonObject } from "./json-column";
+import {
+  readJsonArray,
+  readJsonObject,
+  writeJsonArray,
+  writeJsonCounts,
+  writeJsonObject,
+} from "./json-column";
 import type { CrosswalkPair } from "../identity/crosswalk";
 import type { ProviderMetadata } from "../types/registry";
 import {
@@ -319,6 +325,45 @@ export async function loadAccountKeys(
   });
 
   return rows.map(toKeyRow);
+}
+
+/**
+ * Retire keys whose integration no longer exists.
+ *
+ * `CustomerAccountKey.sourceIntegrationId` has no foreign key on purpose: the
+ * key belongs to an account that may outlive the connection. The cost is that a
+ * deletion which happened before this cleanup existed — or a direct database
+ * operation — can leave a claim with no source behind it. Such a claim would
+ * keep matching new records forever, because resolution only adds and refreshes
+ * keys; it never prunes unoffered ones.
+ *
+ * Called at the start of every pass, so the next resolution after any deletion
+ * is also the repair for older ones. A key that is still legitimate is
+ * re-emitted by its source later in the same pass.
+ *
+ * @returns How many orphaned key rows were removed.
+ */
+export async function retireKeysFromDeletedIntegrations(
+  userId: string
+): Promise<number> {
+  const integrations = await prisma.integration.findMany({
+    where: { userId },
+    select: { id: true },
+  });
+
+  const { count } =
+    integrations.length === 0
+      ? await prisma.customerAccountKey.deleteMany({ where: { userId } })
+      : await prisma.customerAccountKey.deleteMany({
+          where: {
+            userId,
+            sourceIntegrationId: {
+              notIn: integrations.map((integration) => integration.id),
+            },
+          },
+        });
+
+  return count;
 }
 
 /**
@@ -1033,38 +1078,121 @@ export async function importCrosswalk(args: {
   };
 }
 
+export interface ImportedCrosswalkWithdrawal {
+  cleared: number;
+  retiredKeys: number;
+  auditId: string | null;
+}
+
 /**
  * Forget every imported pair naming one provider, for one integration.
  *
  * The undo. A crosswalk is human-supplied evidence the resolver will never
  * revise on its own, so a file pasted against the wrong integration would
  * otherwise keep joining the wrong companies on every pass.
+ *
+ * The keys go in the same transaction as the pairs. Waiting for the next
+ * resolution pass would leave the withdrawn reference matching for an interval,
+ * and "forget" that still joins is not an undo. Other providers' imported keys
+ * are untouched: their pairs are still on the records.
  */
 export async function clearImportedCrossRefs(args: {
   userId: string;
   integrationId: string;
   foreignProvider: string;
-}): Promise<number> {
-  const owned = await prisma.integration.count({
-    where: { id: args.integrationId, userId: args.userId },
-  });
-  if (owned !== 1) return 0;
-
-  const rows = await prisma.customer.findMany({
-    where: { integrationId: args.integrationId },
-    select: { id: true, importedCrossRefs: true },
-  });
-
-  let cleared = 0;
-  for (const row of rows) {
-    const merged = readJsonObject(row.importedCrossRefs);
-    if (!(args.foreignProvider in merged)) continue;
-    delete merged[args.foreignProvider];
-    await prisma.customer.update({
-      where: { id: row.id },
-      data: { importedCrossRefs: writeJsonObject(merged) },
+}): Promise<ImportedCrosswalkWithdrawal> {
+  return prisma.$transaction(async (tx) => {
+    const integration = await tx.integration.findFirst({
+      where: { id: args.integrationId, userId: args.userId },
+      select: {
+        providerName: true,
+        instanceLabel: true,
+        sourceAccountId: true,
+      },
     });
-    cleared += 1;
-  }
-  return cleared;
+    if (integration === null) {
+      return { cleared: 0, retiredKeys: 0, auditId: null };
+    }
+
+    const rows = await tx.customer.findMany({
+      where: { integrationId: args.integrationId },
+      select: { id: true, customerAccountId: true, importedCrossRefs: true },
+    });
+
+    const matching = rows.flatMap((row) => {
+      const merged = readJsonObject(row.importedCrossRefs);
+      return args.foreignProvider in merged ? [{ row, merged }] : [];
+    });
+
+    for (const { row, merged } of matching) {
+      delete merged[args.foreignProvider];
+      await tx.customer.updateMany({
+        where: { id: row.id, integrationId: args.integrationId },
+        data: { importedCrossRefs: writeJsonObject(merged) },
+      });
+    }
+
+    // `external_ref` values begin `<provider>:<scope>:<id>`, and the provider
+    // name is lowercased by `externalRefValue`. Restricting to the imported
+    // source matters: a mapped cross-reference with the same provider is a
+    // different claim and is not being forgotten.
+    const providerPrefix = `${args.foreignProvider.toLowerCase()}:`;
+    const keyAccounts = await tx.customerAccountKey.findMany({
+      where: {
+        userId: args.userId,
+        sourceIntegrationId: args.integrationId,
+        source: "imported_crosswalk",
+        value: { startsWith: providerPrefix },
+      },
+      select: { customerAccountId: true },
+      distinct: ["customerAccountId"],
+    });
+
+    const retired = await tx.customerAccountKey.deleteMany({
+      where: {
+        userId: args.userId,
+        sourceIntegrationId: args.integrationId,
+        source: "imported_crosswalk",
+        value: { startsWith: providerPrefix },
+      },
+    });
+
+    const cleared = matching.length;
+    if (cleared === 0 && retired.count === 0) {
+      return { cleared: 0, retiredKeys: 0, auditId: null };
+    }
+
+    const affectedAccountIds = [
+      ...new Set([
+        ...matching.flatMap(({ row }) =>
+          row.customerAccountId === null ? [] : [row.customerAccountId]
+        ),
+        ...keyAccounts.map((row) => row.customerAccountId),
+      ]),
+    ].sort();
+
+    const audit = await tx.identityWithdrawal.create({
+      data: {
+        userId: args.userId,
+        kind: "crosswalk_withdrawn",
+        integrationId: args.integrationId,
+        providerName: integration.providerName,
+        instanceLabel: integration.instanceLabel,
+        sourceAccountId: integration.sourceAccountId,
+        foreignProvider: args.foreignProvider,
+        removedJson: writeJsonCounts({ importedPairs: cleared }),
+        removedRecords: 0,
+        retiredKeys: retired.count,
+        affectedAccountIdsJson: writeJsonArray(affectedAccountIds),
+        status: "recorded",
+      },
+      select: { id: true },
+    });
+
+    return {
+      cleared,
+      retiredKeys: retired.count,
+      auditId: audit.id,
+    };
+  }, { timeout: 60_000 });
 }

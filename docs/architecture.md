@@ -364,9 +364,18 @@ offered it. That supports three distinct lifecycle rules:
 - **Re-keying to another account retires keys.** The old account's claims are
   deleted before the new credential can match anything. If the column was never
   populated, the keys' own account snapshots are enough to detect the move.
-- **Deleting a connection retires only that connection's keys.** Keys held by
-  surviving members of the account remain, and the empty account shell is reaped
-  by the next pass.
+- **Deleting a connection retires only that connection's keys, then reassesses
+  every account.** The deletion transaction removes the integration's keys;
+  a resolution pass observes the post-deletion records, rebuilds shared
+  accounts from their remaining members, recomputes field provenance, and reaps
+  empty shells. A deletion that arrives while another pass is running waits for
+  that pass and starts a fresh one, because the running pass may have loaded
+  rows the deletion then removed. The audit (`IdentityWithdrawal`) stores counts,
+  time and affected account ids only — never customer values.
+- **Explicit evidence withdrawal uses the same path.** Forgetting imported
+  crosswalk pairs deletes the affected `imported_crosswalk` keys in the same
+  transaction and runs the reassessment. It retires only the named provider's
+  imported keys, not mapped references or another provider's pairs.
 - **Absence does not retire.** `lastSeenAt` moves whenever a key is re-offered,
   but a key that simply stops being emitted stays put. Missing evidence is not
   deletion, and splitting an account on a transient omission would be worse than
@@ -422,7 +431,7 @@ separately:
 | Two refreshes are requested at once | One runs; the other is told it was **discarded**. Nothing is silently ignored. |
 | A worker crashes mid-refresh | Its lease expires; the run is marked **abandoned**, and a later worker starts a fresh run with a higher fencing token. |
 | A refresh fails completely | Everything already saved stays saved; the next scheduled refresh tries again. |
-| A connection is deleted | Its synced records go with it. If the provider could not be reached to revoke access, the deletion still completes and the failed revocation is recorded in the server log, so the provider key can be revoked by hand. |
+| A connection is deleted | Its synced records, mappings and identity keys go with it, shared accounts are rebuilt from surviving members, and empty accounts are removed. If the provider could not be reached to revoke access, the deletion still completes and the failed revocation is recorded in the server log, so the provider key can be revoked by hand. The audit records removal and whether reassessment finished. |
 
 The guiding rule is **fail small**. A problem with one record, one page, or one
 purpose fails only that scope, and reports exactly what happened — the
@@ -498,6 +507,7 @@ The short version:
 | The schedule | `src/core/sync/scheduler.ts` |
 | What counts as matching evidence | `src/core/identity/evidence.ts`; winner rules and losing values in `survivorship.ts`; provenance read compatibility in `provenance.ts`; address normalization in `normalize.ts` |
 | Which account a key belongs to, and when it is retired | `src/core/identity/source-account.ts`; source snapshots and freshness in `src/core/repositories/identity-repository.ts`; key cleanup on disconnect in `integration-repository.ts` |
+| What a deletion or withdrawal removes, and the audit left behind | `src/core/integrations/deletion.ts`; `src/core/identity/withdrawal.ts`; tombstones in `src/core/repositories/identity-withdrawal-repository.ts` |
 | The database schema | `prisma/schema.prisma` — described in [`data-model.md`](./data-model.md) |
 
 Tests are arranged in three layers: pure logic (`tests/unit`), the invariants

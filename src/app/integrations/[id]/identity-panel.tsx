@@ -43,8 +43,10 @@ export function IdentityPanel({
   );
   const [text, setText] = useState("");
   const [importing, setImporting] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [importResult, setImportResult] = useState<ImportSummary | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [withdrawNote, setWithdrawNote] = useState<string | null>(null);
 
   async function savePriority(): Promise<void> {
     setSavingPriority(true);
@@ -86,6 +88,7 @@ export function IdentityPanel({
     setImporting(true);
     setImportError(null);
     setImportResult(null);
+    setWithdrawNote(null);
     try {
       const response = await fetch("/api/identity/crosswalk", {
         method: "POST",
@@ -104,6 +107,48 @@ export function IdentityPanel({
       setImportError("Could not reach the server");
     } finally {
       setImporting(false);
+    }
+  }
+
+  async function withdrawCrosswalk(): Promise<void> {
+    setWithdrawing(true);
+    setImportError(null);
+    setWithdrawNote(null);
+    try {
+      const response = await fetch(
+        `/api/identity/crosswalk?integrationId=${integrationId}&foreignProvider=${foreignProvider}`,
+        { method: "DELETE" }
+      );
+      const body = (await response.json()) as {
+        cleared?: number;
+        retiredKeys?: number;
+        reassessed?: boolean;
+        error?: string;
+      };
+      if (!response.ok) {
+        setImportError(body.error ?? "Could not withdraw those pairs");
+        return;
+      }
+
+      setImportResult(null);
+      const cleared = body.cleared ?? 0;
+      const retired = body.retiredKeys ?? 0;
+      const cleanup =
+        body.reassessed === false
+          ? "Account cleanup did not finish; the next sync or account refresh will retry."
+          : "Accounts were re-resolved.";
+      setWithdrawNote(
+        cleared === 0 && retired === 0
+          ? "There were no imported pairs left to forget."
+          : cleared === 0
+            ? `Retired ${retired} key${retired === 1 ? "" : "s"} left by those pairs. ${cleanup}`
+            : `Forgot ${cleared} pair${cleared === 1 ? "" : "s"} and retired ${retired} key${retired === 1 ? "" : "s"}. ${cleanup}`
+      );
+      router.refresh();
+    } catch {
+      setImportError("Could not reach the server");
+    } finally {
+      setWithdrawing(false);
     }
   }
 
@@ -228,7 +273,12 @@ export function IdentityPanel({
             />
             <button
               type="button"
-              disabled={importing || text.trim() === "" || foreignProvider === ""}
+              disabled={
+                importing ||
+                withdrawing ||
+                text.trim() === "" ||
+                foreignProvider === ""
+              }
               onClick={() => void importCrosswalk()}
               className="rounded-lg border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >
@@ -249,26 +299,19 @@ export function IdentityPanel({
             <button
               type="button"
               title="Stops these pairs being supplied. Accounts they already merged stay merged — use “Not this company” on the Accounts tab to separate them."
-              disabled={importing || foreignProvider === ""}
-              onClick={() =>
-                void fetch(
-                  `/api/identity/crosswalk?integrationId=${integrationId}&foreignProvider=${foreignProvider}`,
-                  { method: "DELETE" }
-                )
-                  .then(() => fetch("/api/identity/resolve", { method: "POST" }))
-                  .then(() => {
-                    setImportResult(null);
-                    router.refresh();
-                  })
-              }
+              disabled={importing || withdrawing || foreignProvider === ""}
+              onClick={() => void withdrawCrosswalk()}
               className="text-xs text-slate-500 underline underline-offset-2 hover:text-slate-800 disabled:opacity-50"
             >
-              Forget imported pairs
+              {withdrawing ? "Forgetting…" : "Forget imported pairs"}
             </button>
           </div>
 
           {importError !== null && (
             <p className="mt-2 text-sm text-red-700">{importError}</p>
+          )}
+          {withdrawNote !== null && (
+            <p className="mt-2 text-sm text-slate-600">{withdrawNote}</p>
           )}
           {importResult !== null && <ImportReport result={importResult} />}
         </div>

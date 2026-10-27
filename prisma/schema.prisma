@@ -56,8 +56,9 @@ model User {
   integrations Integration[]
   drafts       IntegrationDraft[]
 
-  customerAccounts CustomerAccount[]
-  identityRuns     IdentityResolutionRun[]
+  customerAccounts    CustomerAccount[]
+  identityRuns        IdentityResolutionRun[]
+  identityWithdrawals IdentityWithdrawal[]
 }
 
 model Integration {
@@ -1556,7 +1557,7 @@ model IdentityResolutionRun {
   /// SyncRunStatus: running | success | partial | failed | discarded
   status String
 
-  /// IdentityRunTrigger: sync | scheduled | manual
+  /// IdentityRunTrigger: sync | scheduled | manual | deletion
   trigger String @default("sync")
 
   startedAt   DateTime  @default(now())
@@ -1574,6 +1575,62 @@ model IdentityResolutionRun {
   /// `startedAt` is indexed because it is both how runs are listed and the
   /// watermark the incremental path will filter `Customer.updatedAt` against.
   @@index([userId, startedAt])
+}
+
+/// A tombstone for identity-bearing data that was explicitly removed.
+///
+/// Deleting a connection removes its records, keys and field evidence, then
+/// re-runs resolution so surviving accounts are rebuilt from the members that
+/// remain. This row records that the removal happened without keeping any of
+/// the payloads: provider/label/account scope, when it happened, counts by
+/// table, and which opaque account ids were affected.
+///
+/// `integrationId` is deliberately **not** a relation. The audit has to outlive
+/// the integration it describes, and a cascade here would erase the explanation
+/// at the same moment as the thing being explained.
+///
+/// The same table covers explicit evidence withdrawal (currently imported
+/// crosswalk pairs), because the question "what stopped supplying identity
+/// evidence, and when?" is the same in both cases.
+model IdentityWithdrawal {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// IdentityWithdrawalKind: integration_deleted | crosswalk_withdrawn
+  kind String
+
+  /// Null only for a future withdrawal kind that is not tied to one connection.
+  integrationId String?
+  providerName  String
+  instanceLabel String?
+  /// The provider account scope at the moment of deletion, for diagnosis.
+  sourceAccountId String?
+  /// Set only for crosswalk_withdrawn.
+  foreignProvider String?
+
+  /// Counts by affected relation, via writeJsonCounts. Counts only: no customer,
+  /// contact, invoice or free-text field values are stored here.
+  removedJson String @default("{}")
+  /// The subset of `removedJson` that is a synced business record, pre-summed
+  /// so every reader does not have to know which relations count.
+  removedRecords Int @default(0)
+  retiredKeys    Int @default(0)
+
+  /// Opaque CustomerAccount ids touched by the removal. Enough to explain which
+  /// profiles were rebuilt or reaped, without carrying profile contents.
+  affectedAccountIdsJson String @default("[]")
+  accountsReassessed     Int @default(0)
+  accountsReaped         Int @default(0)
+
+  /// IdentityWithdrawalStatus: recorded | reassessed | reassessment_failed
+  status String @default("recorded")
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([userId, createdAt])
+  @@index([integrationId])
 }
 
 model SyncRun {

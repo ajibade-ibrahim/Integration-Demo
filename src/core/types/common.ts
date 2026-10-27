@@ -678,7 +678,12 @@ export function isIdentityEvidenceSource(
 }
 
 /** What started a resolution pass. */
-export const IDENTITY_RUN_TRIGGERS = ["sync", "scheduled", "manual"] as const;
+export const IDENTITY_RUN_TRIGGERS = [
+  "sync",
+  "scheduled",
+  "manual",
+  "deletion",
+] as const;
 
 export type IdentityRunTrigger = (typeof IDENTITY_RUN_TRIGGERS)[number];
 

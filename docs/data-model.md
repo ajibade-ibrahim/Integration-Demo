@@ -137,17 +137,19 @@ authorizations (which move no money) are deliberately not stored, that
 arithmetic would be wrong exactly when it looked plausible. All amounts are in
 the currency's smallest unit (cents, pence, yen) with no conversion anywhere.
 
-## Group 5 — Company matching (4 tables)
+## Group 5 — Company matching (5 tables)
 
-These four belong to the owner rather than to a connection, because they exist
-to join records *across* connections.
+These five belong to the owner rather than to a connection. Four exist to join
+records *across* connections; the fifth is the receipt for explicitly removing
+that evidence.
 
 | Table | What it holds |
 |---|---|
 | **CustomerAccount** | One combined company profile: the resolved name, domain, email, industry, type and creation date, plus **field provenance** naming the winning connection and source record, evidence key/value, observation time, and every losing value with its reason. Custom fields carry per-key provenance at `customFields.<name>`. Rebuilt from scratch on every matching pass, so it can never drift from its sources; old integration-id-only provenance still reads. |
-| **CustomerAccountKey** | The evidence that a company profile is "the same" as a record: each key it owns (an email address, a website domain, or an external reference), in both normalized and original form, with the integration, **provider account**, and **source record** that offered it, and when it was first/last seen. | `lastSeenAt` moves on every re-offer, not only when another column changes. The account/record snapshot is what lets a re-key or an explicit deletion retire exactly the old claims. |
+| **CustomerAccountKey** | The evidence that a company profile is "the same" as a record: each key it owns (an email address, a website domain, or an external reference), in both normalized and original form, with the integration, **provider account**, and **source record** that offered it, and when it was first/last seen. `lastSeenAt` moves on every re-offer, not only when another column changes. The account/record snapshot is what lets a re-key or an explicit deletion retire exactly the old claims. |
 | **IdentityAssertion** | A person's verdict that two customer records are the *same company*, or explicitly *not* one company, with an optional note. These outrank every automatic signal. |
 | **IdentityResolutionRun** | One execution of the matching pass: how long it took, how many profiles were created/merged/cleaned up, how many records were linked, and any issues raised. |
+| **IdentityWithdrawal** | The tombstone for an explicit removal: deleting a connection or forgetting imported crosswalk pairs. It keeps the provider, label, account scope, time, row counts, retired-key count, affected account ids, and whether the follow-up reassessment finished. It deliberately keeps no customer, contact, invoice or free-text values, and its integration id is not a foreign key so the receipt survives the integration. |
 
 Two safety details worth stating plainly:
 
@@ -205,7 +207,7 @@ differently.
 | If you delete… | What happens |
 |---|---|
 | The owner account | Everything: connections, records, rules, profiles, history. |
-| A connection | Its credential, its translation rules, and every record it synced. Nothing that came through other connections is touched. |
+| A connection | Its credential, translation rules, every record it synced, and the identity keys it supplied. Accounts that still have members from another connection are rebuilt from those members; accounts left empty are removed. Nothing that came through other connections is touched, and an `IdentityWithdrawal` receipt records counts and affected account ids without customer values. |
 | A customer record | Its contacts survive with the link cleared; its agreements, invoices and payments survive unlinked. |
 | A product | Its offerings survive, unlinked. |
 | An offering | Prices and references survive, unlinked. |
@@ -216,6 +218,12 @@ The pattern: the platform deletes something else only when that something
 means nothing on its own — an invoice line without its invoice, an agreement
 line without its agreement. Everything that stands on its own (a person, a
 bill, a payment) survives.
+
+Forgetting imported crosswalk pairs is narrower than deleting a connection: it
+removes the pairs naming one foreign provider and the keys they supplied, then
+reassesses. Accounts the pairs already joined are not split, because absence of
+evidence is not a verdict that two companies are different; use a **not this
+company** assertion for that.
 
 ### The connection status lifecycle
 
@@ -294,7 +302,8 @@ connection is deleted.
 | 25 | CustomerAccountKey | Company matching | The evidence a profile owns (email, domain, reference). |
 | 26 | IdentityAssertion | Company matching | A person's "same / not same company" verdict. |
 | 27 | IdentityResolutionRun | Company matching | One execution of the matching pass. |
-| 28 | SyncRun | Refresh history | One refresh attempt and its outcome. |
+| 28 | IdentityWithdrawal | Company matching | A deletion/withdrawal receipt with counts, not payloads. |
+| 29 | SyncRun | Refresh history | One refresh attempt and its outcome. |
 
 ---
 

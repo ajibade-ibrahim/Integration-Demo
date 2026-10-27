@@ -122,7 +122,7 @@ export async function createIntegrationFromDraft(args: {
   } catch (error) {
     // Undo the row, so a half-created integration does not become exactly the
     // litter this whole mechanism exists to prevent.
-    await deleteIntegration(integration.id).catch(() => {
+    await deleteIntegration(integration.id, { audit: false }).catch(() => {
       // Report the original failure, not a cleanup failure — but say so, since
       // this is the one path that can still leave a stray row behind.
       console.error(
