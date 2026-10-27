@@ -61,6 +61,27 @@ const LEGACY_EMAIL_CUSTOM_FIELDS = ["email", "primary_email"] as const;
 export type ForeignScopes = ReadonlyMap<string, string>;
 
 /**
+ * The account scope for a customer's own connection.
+ *
+ * Prefers the stored, addressable value. Token metadata remains a fallback for
+ * connections made before `Integration.sourceAccountId` existed; it is not the
+ * authority, because it is overwritten on a re-key while the keys emitted under
+ * the old account are still in the database.
+ *
+ * An empty string is a real answer — the provider's ids are global. Undefined
+ * means a tenant-scoped connection whose account is unknown, which must not
+ * emit a self-key.
+ */
+function scopeForCustomer(
+  customer: ResolutionCustomer
+): string | undefined {
+  const definition = providerRegistry.get(customer.providerName);
+  if (definition === undefined) return undefined;
+  if (customer.sourceAccountId !== null) return customer.sourceAccountId;
+  return externalIdScopeValue(definition, customer.providerMetadata);
+}
+
+/**
  * Work out which providers a cross-reference can safely name.
  *
  * @param customers Every customer in the tenant — the integrations they belong
@@ -74,10 +95,7 @@ export function buildForeignScopes(
   const byProvider = new Map<string, Map<string, string>>();
 
   for (const customer of customers) {
-    const definition = providerRegistry.get(customer.providerName);
-    if (definition === undefined) continue;
-
-    const scope = externalIdScopeValue(definition, customer.providerMetadata);
+    const scope = scopeForCustomer(customer);
     if (scope === undefined) continue;
 
     const seen = byProvider.get(customer.providerName) ?? new Map<string, string>();
@@ -115,6 +133,7 @@ export function buildEvidence(
 ): NewIdentityKey[] {
   const keys: NewIdentityKey[] = [];
   const seen = new Set<string>();
+  const sourceAccountId = scopeForCustomer(customer) ?? null;
 
   const push = (key: NewIdentityKey): void => {
     const dedupe = `${key.kind} ${key.value}`;
@@ -125,7 +144,8 @@ export function buildEvidence(
 
   const pushEmail = (
     raw: string | null,
-    source: NewIdentityKey["source"]
+    source: NewIdentityKey["source"],
+    sourceRecordId: string
   ): void => {
     const normalized = normalizeEmail(raw);
     if (normalized === undefined) return;
@@ -138,6 +158,8 @@ export function buildEvidence(
       emailClass: normalized.emailClass,
       source,
       sourceIntegrationId: customer.integrationId,
+      sourceAccountId,
+      sourceRecordId,
     });
   };
 
@@ -146,32 +168,30 @@ export function buildEvidence(
   // This record's own id, free of charge. It is what makes a crosswalk usable
   // at all: only the *other* side has to name an id, because Stripe has no idea
   // what its Metrifox id is.
-  const definition = providerRegistry.get(customer.providerName);
-  if (definition !== undefined) {
-    const scope = externalIdScopeValue(definition, customer.providerMetadata);
-    // `undefined` means a tenant-scoped provider whose scope we cannot read —
-    // HubSpot, whose portal id is not in the token response. It emits no
-    // self-key, which is correct rather than broken: `hubspot::12345` would
-    // merge company 12345 in one portal with a different company 12345 in
-    // another.
-    if (scope !== undefined) {
-      const value = externalRefValue({
-        providerName: customer.providerName,
-        scope,
-        externalId: customer.externalSourceId,
+  //
+  // `undefined` means a tenant-scoped provider whose account we cannot name.
+  // It emits no self-key, which is correct rather than broken:
+  // `hubspot::12345` would merge company 12345 in one portal with a different
+  // company 12345 in another.
+  if (sourceAccountId !== null) {
+    const value = externalRefValue({
+      providerName: customer.providerName,
+      scope: sourceAccountId,
+      externalId: customer.externalSourceId,
+    });
+    if (value !== undefined) {
+      push({
+        kind: "external_ref",
+        value,
+        rawValue: customer.externalSourceId,
+        // Not an address. Stored uniformly so the column is never null and a
+        // reader never has to ask which kinds classify.
+        emailClass: "corporate",
+        source: "self_reference",
+        sourceIntegrationId: customer.integrationId,
+        sourceAccountId,
+        sourceRecordId: customer.externalSourceId,
       });
-      if (value !== undefined) {
-        push({
-          kind: "external_ref",
-          value,
-          rawValue: customer.externalSourceId,
-          // Not an address. Stored uniformly so the column is never null and a
-          // reader never has to ask which kinds classify.
-          emailClass: "corporate",
-          source: "self_reference",
-          sourceIntegrationId: customer.integrationId,
-        });
-      }
     }
   }
 
@@ -211,15 +231,21 @@ export function buildEvidence(
       emailClass: "corporate",
       source,
       sourceIntegrationId: customer.integrationId,
+      sourceAccountId,
+      sourceRecordId: customer.externalSourceId,
     });
   }
 
   // --- email --------------------------------------------------------------
 
-  pushEmail(customer.email, "customer_email");
+  pushEmail(customer.email, "customer_email", customer.externalSourceId);
 
   for (const legacyKey of LEGACY_EMAIL_CUSTOM_FIELDS) {
-    pushEmail(customer.customFields[legacyKey] ?? null, "customer_custom_field");
+    pushEmail(
+      customer.customFields[legacyKey] ?? null,
+      "customer_custom_field",
+      customer.externalSourceId
+    );
   }
 
   // Contacts are the universal source: all five providers map `contact.email`,
@@ -232,8 +258,8 @@ export function buildEvidence(
   // address. The residual risk is a contractor whose personal address appears
   // under two firms; `distinct` is the remedy, and it is why domain ranks below
   // email rather than why either is dropped.
-  for (const email of customer.contactEmails) {
-    pushEmail(email, "contact_email");
+  for (const contact of customer.contactEmails) {
+    pushEmail(contact.email, "contact_email", contact.externalSourceId);
   }
 
   // --- domain: weakest, and only ever from the mapped column ---------------
@@ -253,6 +279,8 @@ export function buildEvidence(
       emailClass: "corporate",
       source: "customer_domain",
       sourceIntegrationId: customer.integrationId,
+      sourceAccountId,
+      sourceRecordId: customer.externalSourceId,
     });
   }
 

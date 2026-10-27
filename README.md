@@ -421,6 +421,38 @@ stripe customers list --limit 20   # find the id of "Tessellate Labs (UK)"
 Either way the account then shows two members with no address in common, which
 is the whole point of the `external_ref` key kind.
 
+#### Source accounts and key freshness
+
+A connection stores the provider account its credential points at: a Salesforce
+org id, a HubSpot portal id, a Chargebee site, or an empty scope for a provider
+whose ids are globally unique. HubSpot's portal is captured after the token
+exchange, because its exchange body does not carry one. The value is stored on
+the integration rather than recomputed during matching — matching needs the
+account a key *was emitted under*, not whatever the credential says now.
+
+Every `CustomerAccountKey` also records the account and the source record
+(customer or contact id) that offered it. That is what makes two lifecycle
+events possible without guessing:
+
+- **A re-key to a different account** deletes the integration's old keys before
+  the new credential is usable. If the old account was never stored, the keys'
+  own account snapshots are used to detect the move. The next matching pass
+  rebuilds the current account's keys.
+- **Deleting an integration** deletes the keys it supplied, while keys supplied
+  by surviving members stay. The empty account is reaped by the next pass.
+
+`lastSeenAt` moves every time a key is re-offered; a key that simply stops being
+offered is *not* retired. Absence is not deletion, and splitting a company
+because a provider temporarily omitted a field would be worse than a stale key.
+Connections made before the account column existed can be backfilled:
+
+```bash
+npm run identity:source-accounts            # dry run
+npm run identity:source-accounts -- --apply
+```
+
+The key's account snapshot fills in when the next matching pass re-offers it.
+
 > Already-connected integrations keep the mappings they were seeded with —
 > `seedMappingsIfEmpty` bails when any rule exists — so neither the
 > `crossRef.stripe` default nor the account-email one reaches a connection made
@@ -911,6 +943,13 @@ an active agreement, a close date on an open deal is a forecast, and a CRM
 create date is not an effective date. Those raw facts stay in
 `providerMetadata`; `status`, `effectiveDate` and `endDate` remain empty unless
 the provider actually states them.
+
+**A match key knows which account and record supplied it.** The provider tenant
+is stored on the integration, not recomputed from token metadata, and each key
+carries an account/record snapshot. A credential moved to another tenant
+therefore retires its old claims; a deleted integration retires only its own,
+leaving the other members' keys intact. `lastSeenAt` is evidence freshness, not
+a deletion signal.
 
 **Deletion proceeds even if revocation fails.** A provider outage must not
 strand an integration the user asked to remove. The unconfirmed revocation is

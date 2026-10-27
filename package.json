@@ -23,6 +23,7 @@
     "fixtures:gen": "node scripts/gen-fixtures.mjs",
     "fixtures:verify": "tsx scripts/verify-stripe-fixtures.mts",
     "users:add": "tsx scripts/add-users.mts",
+    "identity:source-accounts": "tsx scripts/backfill-source-accounts.mts",
     "mappings:retarget": "tsx scripts/retarget-account-email-mappings.mts",
     "worker": "tsx scripts/worker.ts"
   },

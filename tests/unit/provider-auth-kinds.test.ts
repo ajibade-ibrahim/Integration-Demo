@@ -6,7 +6,7 @@
  * must still be a registration error, not something that fails at connect time.
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bootstrap, resetBootstrapForTests } from "@/core/bootstrap";
 import {
   canRefresh,
@@ -19,6 +19,7 @@ import {
 } from "@/core/registries/provider-registry";
 import { buildAuthorizationRequest } from "@/core/oauth/oauth-service";
 import { connectHrefFor } from "@/core/providers/connect-url";
+import { fetchHubspotSourceAccountMetadata } from "@/core/providers/hubspot/api";
 import { metrifoxProvider } from "@/core/providers/metrifox/provider";
 import { organizationIdFromIdentityUrl } from "@/core/providers/salesforce/provider";
 import { stripeProvider } from "@/core/providers/stripe/provider";
@@ -151,13 +152,45 @@ describe("external id scope", () => {
 
   it("scopes HubSpot per tenant and emits nothing until the portal is known", () => {
     // Company `12345` exists in most portals and they are unrelated
-    // businesses. HubSpot's token response carries no hub_id — it is only
-    // available from /oauth/v1/access-tokens/{token}, which parseTokenResponse
-    // cannot call — so the honest answer today is no key at all.
+    // businesses. The exchange body carries no hub_id, so the portal is only
+    // known after the token-info lookup; absent that, no key at all is the
+    // honest answer.
     const hubspot = providerRegistry.require("hubspot");
     expect(hubspot.externalIdScope).toBe("tenant");
     expect(externalIdScopeValue(hubspot, {})).toBeUndefined();
     expect(externalIdScopeValue(hubspot, { hubId: "hub-1" })).toBe("hub-1");
+  });
+
+  it("captures HubSpot's portal id from its token-info endpoint", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ hub_id: 12345 }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(
+        fetchHubspotSourceAccountMetadata("access-token")
+      ).resolves.toEqual({ hubId: "12345" });
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/oauth/v1/access-tokens/access-token"),
+        expect.objectContaining({ headers: { Accept: "application/json" } })
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not invent a portal id when HubSpot's lookup fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 503 }))
+    );
+    try {
+      await expect(
+        fetchHubspotSourceAccountMetadata("access-token")
+      ).rejects.toThrow(/returned 503/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("scopes Salesforce by org id, never by instance host", () => {

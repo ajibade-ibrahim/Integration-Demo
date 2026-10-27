@@ -2,19 +2,16 @@
  * Accounts with no members left, and why deleting them is step 0 rather than
  * housekeeping.
  *
- * A `Customer` cascades away when its integration is deleted, leaving the
- * account behind still claiming its keys — and the unique on
- * `(userId, kind, value)` cannot tell an abandoned claim from a live one. So a
- * user who disconnects Stripe and connects Metrifox would find the new
- * customer unable to claim its own billing address, reported as contested by an
- * account that no longer has anything in it. There is no UI that could explain
- * that, and no action that could clear it.
+ * A `Customer` cascades away when its integration is deleted, leaving its
+ * account behind. The keys sourced from that integration are retired by
+ * `deleteIntegration` now, so the shell no longer blocks a replacement from
+ * claiming the same address — but the empty account itself is still a row with
+ * no owner in the user interface, and reaping it is what keeps the account list
+ * honest.
  *
  * The pass reaps twice, and the second one is not in the original plan. The
  * first clears shells left by a *previous* run; the second clears shells that
- * *this* run emptied by moving their last member out. Without it those claims
- * would stay until the next pass — usually blocking the very account the user
- * is waiting to see.
+ * *this* run emptied by moving their last member out.
  */
 
 import { beforeAll, describe, expect, it } from "vitest";
@@ -39,8 +36,8 @@ describe("a shell left by a deleted integration", () => {
     await tenant.customer("stripe", "cus_1", { email: "billing@acme.example" });
     await resolveIdentities(tenant.userId, "manual");
 
-    // The user disconnects Stripe. Its customer cascades away; the account it
-    // was on does not, and still holds the address.
+    // The user disconnects Stripe. Its customer cascades away, and the keys it
+    // supplied are retired with it; the empty account remains for the pass.
     await tenant.deleteConnection("stripe");
 
     // Then connects something else that knows the same company.

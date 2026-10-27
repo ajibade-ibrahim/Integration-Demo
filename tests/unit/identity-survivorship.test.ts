@@ -27,6 +27,7 @@ function member(
   return {
     integrationId: `int-${overrides.id}`,
     providerName: "mock",
+    sourceAccountId: null,
     identityPriority: 100,
     instanceLabel: "Mock",
     externalSourceId: `ext-${overrides.id}`,

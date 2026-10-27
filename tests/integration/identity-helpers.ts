@@ -16,6 +16,11 @@
 
 import { randomUUID } from "node:crypto";
 
+import {
+  externalIdScopeValue,
+  providerRegistry,
+} from "@/core/registries/provider-registry";
+import { deleteIntegration } from "@/core/repositories/integration-repository";
 import { writeJsonObject } from "@/core/repositories/json-column";
 import { parseFieldProvenance } from "@/core/identity/provenance";
 import type { FieldProvenanceEntry } from "@/core/types/common";
@@ -32,6 +37,11 @@ export interface ConnectionSpec {
    */
   key?: string;
   identityPriority?: number;
+  /**
+   * Stored source account. Omit to derive it from `metadata`; pass explicitly
+   * to model a connection whose stored account differs from stale metadata.
+   */
+  sourceAccountId?: string;
   /**
    * Token `providerMetadata`, which is where a tenant-scoped provider's scope
    * value lives. Omitting it is meaningful rather than lazy: a tenant-scoped
@@ -70,6 +80,15 @@ export async function makeIdentityTenant(connections: readonly ConnectionSpec[])
 
   const ids = new Map<string, string>();
 
+  function sourceAccountFor(spec: ConnectionSpec): string | null {
+    if (spec.sourceAccountId !== undefined) return spec.sourceAccountId;
+    if (spec.metadata === undefined) return null;
+
+    const provider = providerRegistry.get(spec.provider);
+    if (provider === undefined) return null;
+    return externalIdScopeValue(provider, spec.metadata) ?? null;
+  }
+
   for (const spec of connections) {
     const key = spec.key ?? spec.provider;
     const integration = await prisma.integration.create({
@@ -79,6 +98,7 @@ export async function makeIdentityTenant(connections: readonly ConnectionSpec[])
         status: "active",
         instanceLabel: `${spec.provider} — ${key}`,
         identityPriority: spec.identityPriority ?? 100,
+        sourceAccountId: sourceAccountFor(spec),
         functions: { create: [{ functionName: "identity" }] },
         ...(spec.metadata === undefined
           ? {}
@@ -167,9 +187,12 @@ export async function makeIdentityTenant(connections: readonly ConnectionSpec[])
     });
   }
 
-  /** Disconnect a provider, cascading its customers away — the reap scenario. */
+  /**
+   * Disconnect a provider the way the app does: customers cascade away and the
+   * integration's own keys are retired, leaving the account shell for the reap.
+   */
   async function deleteConnection(key: string): Promise<void> {
-    await prisma.integration.delete({ where: { id: integrationId(key) } });
+    await deleteIntegration(integrationId(key));
   }
 
   /**

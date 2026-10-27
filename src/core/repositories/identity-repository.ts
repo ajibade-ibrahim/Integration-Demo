@@ -51,6 +51,12 @@ export interface ResolutionCustomer {
   id: string;
   integrationId: string;
   providerName: string;
+  /**
+   * The provider account this connection's credential points at, or null when
+   * unknown. Prefer it to `providerMetadata` for scope: metadata is a fallback
+   * for connections made before the account was stored.
+   */
+  sourceAccountId: string | null;
   /** From `Integration.identityPriority` — lower wins a value conflict. */
   identityPriority: number;
   instanceLabel: string;
@@ -93,29 +99,29 @@ export interface ResolutionCustomer {
   importedCrossRefs: Record<string, string>;
 
   /**
-   * The integration token's `providerMetadata`, for the external-id scope.
+   * The integration token's `providerMetadata`.
    *
-   * Carried rather than looked up in the pass because scope is a property of
-   * *this connection* — HubSpot portal id, Salesforce org id — and two
-   * integrations of the same provider must not share one. Empty when the
-   * integration has no token, which correctly costs a tenant-scoped provider
-   * its self-key rather than emitting an unscoped one.
+   * Kept as a fallback for scope on connections made before
+   * `Integration.sourceAccountId` existed. New code reads the column; two
+   * integrations of the same provider must never share a tenant scope.
    */
   providerMetadata: ProviderMetadata;
 
   customerAccountId: string | null;
 
   /**
-   * Addresses of contacts that resolved to this customer.
+   * Contacts that resolved to this customer, with the record id that supplied
+   * each address.
    *
    * The universal key source: all five providers map `contact.email`, while
    * only two carry an account-level address. Contacts whose company could not
    * be resolved are excluded by construction — they are reached through this
    * customer's own `contacts` relation, so an unresolved contact has no path
    * into this list. That is the correct exclusion: a contact whose company is
-   * unknown is not evidence about any company.
+   * unknown is not evidence about any company. The id is what lets a withdrawn
+   * contact's keys be retired without touching the account's own address.
    */
-  contactEmails: string[];
+  contactEmails: Array<{ email: string; externalSourceId: string }>;
 }
 
 export interface IdentityKeyRow {
@@ -127,6 +133,8 @@ export interface IdentityKeyRow {
   emailClass: EmailClass;
   source: IdentityEvidenceSource;
   sourceIntegrationId: string;
+  sourceAccountId: string | null;
+  sourceRecordId: string | null;
 }
 
 /** A key to write. `id` is assigned by the database. */
@@ -137,6 +145,10 @@ export interface NewIdentityKey {
   emailClass: EmailClass;
   source: IdentityEvidenceSource;
   sourceIntegrationId: string;
+  /** The account that emitted it; `""` for a global provider, null if unknown. */
+  sourceAccountId: string | null;
+  /** Customer or contact external id that supplied the evidence. */
+  sourceRecordId: string;
 }
 
 export interface AssertionRow {
@@ -208,13 +220,15 @@ export async function loadResolutionInput(
           identityPriority: true,
           instanceLabel: true,
           lastSyncTimestamp: true,
-          // The scope segment of every self-key on this integration.
+          // The stored scope. The token metadata beside it is only a fallback
+          // for connections made before this column was populated.
+          sourceAccountId: true,
           token: { select: { providerMetadata: true } },
         },
       },
       contacts: {
         where: { email: { not: null } },
-        select: { email: true },
+        select: { email: true, externalSourceId: true },
         orderBy: { email: "asc" },
       },
     },
@@ -224,6 +238,7 @@ export async function loadResolutionInput(
     id: row.id,
     integrationId: row.integrationId,
     providerName: row.integration.providerName,
+    sourceAccountId: row.integration.sourceAccountId,
     identityPriority: row.integration.identityPriority,
     instanceLabel: row.integration.instanceLabel,
     externalSourceId: row.externalSourceId,
@@ -241,7 +256,11 @@ export async function loadResolutionInput(
       row.integration.token?.providerMetadata ?? "{}"
     ),
     customerAccountId: row.customerAccountId,
-    contactEmails: row.contacts.flatMap((c) => (c.email === null ? [] : [c.email])),
+    contactEmails: row.contacts.flatMap((c) =>
+      c.email === null
+        ? []
+        : [{ email: c.email, externalSourceId: c.externalSourceId }]
+    ),
   }));
 }
 
@@ -302,6 +321,51 @@ export async function loadAccountKeys(
   return rows.map(toKeyRow);
 }
 
+/**
+ * Delete the claims a specific source supplied.
+ *
+ * The source-account re-key and integration deletion paths use this to retire
+ * claims immediately, rather than waiting for the next whole-tenant pass to
+ * reap an empty account. At least one source filter is required: `deleteMany`
+ * with only `userId` would erase every key a tenant has, which is the exact
+ * opposite of a targeted withdrawal.
+ *
+ * A retired key can be re-added on the next pass if its source data is still
+ * present. That is correct for a transient withdrawal; a permanent one must
+ * also remove the record or integration, which is what the other callers do.
+ */
+export async function retireIdentityKeys(args: {
+  userId: string;
+  sourceIntegrationId?: string;
+  sourceAccountId?: string | null;
+  sourceRecordId?: string;
+}): Promise<number> {
+  if (
+    args.sourceIntegrationId === undefined &&
+    args.sourceAccountId === undefined &&
+    args.sourceRecordId === undefined
+  ) {
+    throw new Error("retireIdentityKeys requires a source filter");
+  }
+
+  const { count } = await prisma.customerAccountKey.deleteMany({
+    where: {
+      userId: args.userId,
+      ...(args.sourceIntegrationId === undefined
+        ? {}
+        : { sourceIntegrationId: args.sourceIntegrationId }),
+      ...(args.sourceAccountId === undefined
+        ? {}
+        : { sourceAccountId: args.sourceAccountId }),
+      ...(args.sourceRecordId === undefined
+        ? {}
+        : { sourceRecordId: args.sourceRecordId }),
+    },
+  });
+
+  return count;
+}
+
 function toKeyRow(row: {
   id: string;
   customerAccountId: string;
@@ -311,6 +375,8 @@ function toKeyRow(row: {
   emailClass: string;
   source: string;
   sourceIntegrationId: string;
+  sourceAccountId: string | null;
+  sourceRecordId: string | null;
 }): IdentityKeyRow {
   return {
     id: row.id,
@@ -321,6 +387,8 @@ function toKeyRow(row: {
     emailClass: row.emailClass as EmailClass,
     source: row.source as IdentityEvidenceSource,
     sourceIntegrationId: row.sourceIntegrationId,
+    sourceAccountId: row.sourceAccountId,
+    sourceRecordId: row.sourceRecordId,
   };
 }
 
@@ -658,20 +726,56 @@ async function insertKeys(
       userId: args.userId,
       OR: args.keys.map((key) => ({ kind: key.kind, value: key.value })),
     },
-    select: { kind: true, value: true, customerAccountId: true },
+    select: {
+      id: true,
+      kind: true,
+      value: true,
+      customerAccountId: true,
+      sourceAccountId: true,
+      sourceRecordId: true,
+    },
   });
 
   const holders = new Map(
-    held.map((row) => [`${row.kind} ${row.value}`, row.customerAccountId])
+    held.map((row) => [`${row.kind} ${row.value}`, row])
   );
 
   const contested: NewIdentityKey[] = [];
   const free: NewIdentityKey[] = [];
+  const reoffered: Array<{
+    row: (typeof held)[number];
+    key: NewIdentityKey;
+  }> = [];
 
   for (const key of args.keys) {
-    const holder = holders.get(`${key.kind} ${key.value}`);
-    if (holder === undefined) free.push(key);
-    else if (holder !== args.accountId) contested.push(key);
+    const row = holders.get(`${key.kind} ${key.value}`);
+    if (row === undefined) free.push(key);
+    else if (row.customerAccountId !== args.accountId) contested.push(key);
+    else reoffered.push({ row, key });
+  }
+
+  const seenAt = new Date();
+
+  // Every pass re-offers every key, so an unchanged run must still move the
+  // observation time. This is the one write an idempotent pass makes, and it
+  // is why `lastSeenAt` is not `@updatedAt`: freshness means "offered now",
+  // not "some other column on this row changed".
+  for (const { row, key } of reoffered) {
+    await tx.customerAccountKey.updateMany({
+      where: { id: row.id },
+      data: {
+        lastSeenAt: seenAt,
+        // Legacy keys written before the source was addressable are filled in
+        // when the same account re-offers them. A non-null source is first
+        // writer wins and never rewritten.
+        ...(row.sourceAccountId === null
+          ? { sourceAccountId: key.sourceAccountId }
+          : {}),
+        ...(row.sourceRecordId === null
+          ? { sourceRecordId: key.sourceRecordId }
+          : {}),
+      },
+    });
   }
 
   if (free.length === 0) return { contested, inserted: 0 };
@@ -686,6 +790,10 @@ async function insertKeys(
       emailClass: key.emailClass,
       source: key.source,
       sourceIntegrationId: key.sourceIntegrationId,
+      sourceAccountId: key.sourceAccountId,
+      sourceRecordId: key.sourceRecordId,
+      firstSeenAt: seenAt,
+      lastSeenAt: seenAt,
     })),
     skipDuplicates: true,
   });

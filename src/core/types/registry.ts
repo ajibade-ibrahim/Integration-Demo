@@ -88,6 +88,20 @@ export interface OAuthProviderAuth {
 
   /** Normalize a token response, capturing provider-specific metadata. */
   parseTokenResponse(json: unknown): ParsedTokenResponse;
+
+  /**
+   * Optional second step for facts the token response does not carry.
+   *
+   * HubSpot's tenant id is only available from an authenticated token-info
+   * endpoint, not from the exchange body. Returning it here puts it in the
+   * same metadata the account-scope hook reads, so it is captured once at
+   * connect time rather than guessed later. A failure must not fail the
+   * connection: the credential is still usable, it just cannot emit a scoped
+   * self-key until metadata names the account.
+   */
+  resolveTokenMetadata?(
+    accessToken: string
+  ): Promise<ProviderMetadata>;
 }
 
 /**

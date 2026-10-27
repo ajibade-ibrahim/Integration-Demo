@@ -95,6 +95,20 @@ model Integration {
   authorizationTimestamp DateTime?
   lastSyncTimestamp      DateTime?
 
+  /// The provider account this credential currently points at, as a stable
+  /// scope value: an org id, portal id, Chargebee site, or `""` for a provider
+  /// whose ids are globally unique.
+  ///
+  /// Stored rather than recomputed from token metadata on every match, because
+  /// an integration can be re-keyed to a different account. The value at the
+  /// time a key was emitted is what decides which account that key belongs to;
+  /// the current one is what decides which keys are retired on a re-key.
+  ///
+  /// `null` means the credential does not say which account it belongs to. A
+  /// tenant-scoped provider in that state emits no self-keys, rather than an
+  /// unscoped key that could merge two accounts.
+  sourceAccountId String?
+
   /// Set when token revocation failed during deletion, for admin follow-up.
   pendingTokenRevocation Boolean @default(false)
 
@@ -124,6 +138,7 @@ model Integration {
 
   @@index([userId])
   @@index([status])
+  @@index([providerName, sourceAccountId])
 }
 
 /// The functions one integration serves.
@@ -1450,11 +1465,33 @@ model CustomerAccountKey {
   source              String
   sourceIntegrationId String
 
+  /// The provider account that offered this key, captured when it was written.
+  ///
+  /// A re-key replaces the integration's account; this snapshot is what lets
+  /// the transition retire the old account's keys without touching another
+  /// connection's. `null` is a legacy key, or one from an integration whose
+  /// credential never named its account. `""` is the global-provider scope.
+  sourceAccountId String?
+
+  /// The provider record that offered the key: a customer or contact external
+  /// id. With `sourceIntegrationId` this makes the source addressable, so an
+  /// explicitly withdrawn record's claims can be retired rather than waiting
+  /// for an account to be reaped.
+  sourceRecordId String?
+
+  /// When this key was first offered and when it was last re-offered.
+  ///
+  /// `lastSeenAt` is written on every pass that re-offers the key, not by
+  /// Prisma's `@updatedAt`: a key is re-observed without its row otherwise
+  /// changing, and `skipDuplicates` used to leave both timestamps frozen at
+  /// first insertion. Freshness is evidence in its own right.
   firstSeenAt DateTime @default(now())
-  lastSeenAt  DateTime @updatedAt
+  lastSeenAt  DateTime @default(now())
 
   @@unique([userId, kind, value])
   @@index([customerAccountId])
+  @@index([sourceIntegrationId, sourceAccountId])
+  @@index([sourceRecordId])
 }
 
 /// A human's verdict on whether two customers are the same company. Outranks

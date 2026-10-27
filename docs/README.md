@@ -163,6 +163,12 @@ knowing:
 - **Blank beats wrong.** If the top-priority system simply has no industry on
   file, it does not blank the industry that another system supplied. Each detail
   is won by the highest-priority system that actually has something to say.
+- **A match remembers its source.** Each key records the provider account and
+  the customer or contact record that offered it, and when it was last seen.
+  Re-keying a connection to a different provider account retires the old
+  account's keys; disconnecting retires only that connection's keys. Simply
+  stopping to supply a key is not treated as deletion, because a temporary
+  omission must not split a company.
 
 ## What happens to your data
 
@@ -225,6 +231,7 @@ knowing:
 | **OAuth** | The "sign in and approve" style of connection: you approve access on the provider's own screen. No password is shared with this platform. |
 | **API key** | A long-lived password the provider issues. Used for systems that do not offer an approval screen. |
 | **Credential** | Whatever proves the connection is allowed in — an approved sign-in or an API key. Encrypted before storage. |
+| **Source account** | The provider-side tenant or account a credential points at — a Salesforce org, a HubSpot portal, a Chargebee site. Two connections with the same provider but different source accounts are not interchangeable. |
 | **Field mapping** | A translation rule: "take *this* field from the provider, optionally clean it up, and store it as *that* field of ours." |
 | **Transform** | The optional clean-up in a mapping rule — trim spaces, lowercase an email, turn a full web address into just the domain, or keep only the date. |
 | **Sync** (or **run**) | One refresh: fetch, translate, save, and report. |

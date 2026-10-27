@@ -10,6 +10,7 @@
  */
 
 import { unsupportedFunctionsFor } from "../capabilities";
+import { sourceAccountIdFromMetadata } from "../identity/source-account";
 import {
   functionNamesForProvider,
   resolveScopes,
@@ -194,6 +195,10 @@ export async function connectDraftWithApiKey(args: {
     const integration = await createIntegrationFromDraft({
       draft,
       at: new Date(),
+      sourceAccountId: sourceAccountIdFromMetadata(
+        provider.name,
+        proven.probed
+      ),
       storeCredential: (integrationId) =>
         saveToken(tokenFor(integrationId, provider.name, proven)),
     });
@@ -259,6 +264,10 @@ export async function connectWithApiKey(args: {
   }
 
   await saveToken(tokenFor(args.integrationId, provider.name, proven));
-  await finalizeConnection(integration, new Date());
+  await finalizeConnection(
+    integration,
+    new Date(),
+    sourceAccountIdFromMetadata(provider.name, proven.probed)
+  );
   return { ok: true, integrationId: integration.id };
 }

@@ -157,7 +157,7 @@ describe("three connections, one company", () => {
 });
 
 describe("a second pass over unchanged data", () => {
-  it("changes nothing, and says it changed nothing", async () => {
+  it("inserts nothing, and says it inserted nothing", async () => {
     const tenant = await converged();
     await resolveIdentities(tenant.userId, "manual");
 

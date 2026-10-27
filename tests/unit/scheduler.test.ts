@@ -20,6 +20,7 @@ function integration(
     identityPriority: 100,
     authorizationTimestamp: new Date(NOW - 48 * HOUR),
     lastSyncTimestamp: new Date(NOW - 1 * HOUR),
+    sourceAccountId: null,
     pendingTokenRevocation: false,
     createdAt: new Date(NOW - 48 * HOUR),
     ...overrides,

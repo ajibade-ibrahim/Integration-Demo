@@ -57,7 +57,7 @@ profiles, because they exist precisely to join records *across* connections.
 
 | Table | What it holds | Why it matters |
 |---|---|---|
-| **Integration** | One connected provider account: which system, your label for it, its health, how often it refreshes, and its priority. | This is the container. Deleting it removes everything that came through it. |
+| **Integration** | One connected provider account: which system, your label for it, its health, how often it refreshes, its priority, and the provider account/tenant scope the credential points at. | This is the container. Deleting it removes everything that came through it and retires the identity keys it alone supplied. The stored scope is `""` for a globally unique provider and null when the credential does not name an account. |
 | **IntegrationFunction** | One row per **purpose** the connection serves (Identity, Billing, …). | A connection can serve several purposes; the permissions requested are the combination of these rows. |
 | **OAuthToken** | The encrypted credential: the access token, the refresh token (for sign-in connections), its expiry, the permissions actually granted, and provider-specific extras the API needs later. | Exactly one per connection. Includes pasted API keys too — they are stored and encrypted the same way. |
 | **IntegrationDraft** | A half-finished connection setup, kept for 30 minutes. | Lets you retry a mistyped key without re-choosing the system and purposes. Deleted once the credential succeeds. |
@@ -145,7 +145,7 @@ to join records *across* connections.
 | Table | What it holds |
 |---|---|
 | **CustomerAccount** | One combined company profile: the resolved name, domain, email, industry, type and creation date, plus **field provenance** naming the winning connection and source record, evidence key/value, observation time, and every losing value with its reason. Custom fields carry per-key provenance at `customFields.<name>`. Rebuilt from scratch on every matching pass, so it can never drift from its sources; old integration-id-only provenance still reads. |
-| **CustomerAccountKey** | The evidence that a company profile is "the same" as a record: each key it owns (an email address, a website domain, or an external reference), in both normalized and original form, with the source it came from and when it was first/last seen. |
+| **CustomerAccountKey** | The evidence that a company profile is "the same" as a record: each key it owns (an email address, a website domain, or an external reference), in both normalized and original form, with the integration, **provider account**, and **source record** that offered it, and when it was first/last seen. | `lastSeenAt` moves on every re-offer, not only when another column changes. The account/record snapshot is what lets a re-key or an explicit deletion retire exactly the old claims. |
 | **IdentityAssertion** | A person's verdict that two customer records are the *same company*, or explicitly *not* one company, with an optional note. These outrank every automatic signal. |
 | **IdentityResolutionRun** | One execution of the matching pass: how long it took, how many profiles were created/merged/cleaned up, how many records were linked, and any issues raised. |
 

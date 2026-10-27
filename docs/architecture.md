@@ -348,6 +348,31 @@ evidence wins. Free email providers (gmail.com and the like) are refused as
 website evidence — otherwise every customer using a free mailbox would merge
 into one giant company.
 
+### Which account a key belongs to
+
+A key's value for a tenant-scoped provider carries a scope segment, and that
+scope is now a stored fact rather than a string recomputed from the latest token
+metadata. `Integration.sourceAccountId` records the org/portal/site (or `""`
+for a global provider), captured when the credential is established. HubSpot's
+portal id comes from its token-info endpoint because the exchange body omits it.
+A credential that cannot name its account leaves the column null and emits no
+self-key; an unscoped numeric id would merge unrelated tenants.
+
+Each `CustomerAccountKey` snapshots the account and the provider record that
+offered it. That supports three distinct lifecycle rules:
+
+- **Re-keying to another account retires keys.** The old account's claims are
+  deleted before the new credential can match anything. If the column was never
+  populated, the keys' own account snapshots are enough to detect the move.
+- **Deleting a connection retires only that connection's keys.** Keys held by
+  surviving members of the account remain, and the empty account shell is reaped
+  by the next pass.
+- **Absence does not retire.** `lastSeenAt` moves whenever a key is re-offered,
+  but a key that simply stops being emitted stays put. Missing evidence is not
+  deletion, and splitting an account on a transient omission would be worse than
+  a stale join. Age-based pruning, if ever added, must be a separately stated
+  policy.
+
 ### What the matcher will not do
 
 - **It never merges two already-combined companies on a guess.** If two
@@ -472,6 +497,7 @@ The short version:
 | Connection status rules | `src/core/repositories/integration-repository.ts` |
 | The schedule | `src/core/sync/scheduler.ts` |
 | What counts as matching evidence | `src/core/identity/evidence.ts`; winner rules and losing values in `survivorship.ts`; provenance read compatibility in `provenance.ts`; address normalization in `normalize.ts` |
+| Which account a key belongs to, and when it is retired | `src/core/identity/source-account.ts`; source snapshots and freshness in `src/core/repositories/identity-repository.ts`; key cleanup on disconnect in `integration-repository.ts` |
 | The database schema | `prisma/schema.prisma` — described in [`data-model.md`](./data-model.md) |
 
 Tests are arranged in three layers: pure logic (`tests/unit`), the invariants

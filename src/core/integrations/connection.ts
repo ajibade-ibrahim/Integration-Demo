@@ -14,6 +14,7 @@
  */
 
 import { unsupportedFunctionsFor } from "../capabilities";
+import { recordSourceAccount } from "../identity/source-account";
 import {
   createIntegration,
   deleteIntegration,
@@ -33,7 +34,8 @@ import { discardDraft, type IntegrationDraft } from "./draft-store";
  */
 export async function finalizeConnection(
   integration: Pick<IntegrationRecord, "id" | "providerName" | "functionNames">,
-  at: Date
+  at: Date,
+  sourceAccountId: string | null
 ): Promise<void> {
   const unsupported = unsupportedFunctionsFor(
     integration.functionNames,
@@ -44,6 +46,14 @@ export async function finalizeConnection(
       `${integration.providerName} cannot sync ${unsupported.join(", ")}; no handler is available`
     );
   }
+
+  // The credential is already stored by the caller. Recording the account here
+  // means a reconnect to a different tenant retires the old keys before the
+  // integration is usable again.
+  await recordSourceAccount({
+    integrationId: integration.id,
+    sourceAccountId,
+  });
 
   await markAuthorized(integration.id, at);
 
@@ -80,6 +90,8 @@ export async function createIntegrationFromDraft(args: {
   draft: IntegrationDraft;
   storeCredential: (integrationId: string) => Promise<void>;
   at: Date;
+  /** Account the new credential names, or null when it does not say. */
+  sourceAccountId: string | null;
 }): Promise<IntegrationRecord> {
   const { draft } = args;
 
@@ -106,7 +118,7 @@ export async function createIntegrationFromDraft(args: {
 
   try {
     await args.storeCredential(integration.id);
-    await finalizeConnection(integration, args.at);
+    await finalizeConnection(integration, args.at, args.sourceAccountId);
   } catch (error) {
     // Undo the row, so a half-created integration does not become exactly the
     // litter this whole mechanism exists to prevent.

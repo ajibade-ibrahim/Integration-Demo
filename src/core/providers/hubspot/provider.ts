@@ -8,6 +8,7 @@ import type {
   ParsedTokenResponse,
   ProviderDefinition,
 } from "../../types/registry";
+import { fetchHubspotSourceAccountMetadata } from "./api";
 
 export const HUBSPOT_PROVIDER_NAME = "hubspot";
 
@@ -101,6 +102,11 @@ export const hubspotProvider: ProviderDefinition = {
         metadata: {},
       };
     },
+
+    // The exchange body has no portal id, so ask the token-info endpoint once.
+    // Failure is deliberately non-fatal: a valid connection without a scoped
+    // self-key loses one join, while refusing it would lose the connection.
+    resolveTokenMetadata: fetchHubspotSourceAccountMetadata,
   },
 
   // Object ids are per-portal integers. Company `12345` exists in most portals
@@ -109,16 +115,13 @@ export const hubspotProvider: ProviderDefinition = {
   externalIdScope: "tenant",
 
   /**
-   * Undefined until the portal id is captured, and that is the safe state.
+   * The portal id, captured after the exchange by `resolveTokenMetadata`.
    *
-   * HubSpot's token response carries no `hub_id`; it is only available by
-   * calling `/oauth/v1/access-tokens/{token}` after the exchange, which
-   * `parseTokenResponse` cannot do — it is handed a parsed body, not a client.
-   * Adding that call belongs with the change that needs it.
-   *
-   * Until then no HubSpot company contributes its own id as an identity key.
-   * HubSpot still joins on domain, which it supplies for nearly every company,
-   * and on its contacts' emails.
+   * If that lookup failed or an older connection predates it, this is
+   * undefined and no HubSpot self-key is emitted. That is the safe state:
+   * `hubspot::12345` would merge two portals' unrelated companies. HubSpot
+   * still joins on domain, which it supplies for nearly every company, and on
+   * its contacts' emails.
    */
   tenantScopeValue(metadata) {
     return metadata["hubId"];

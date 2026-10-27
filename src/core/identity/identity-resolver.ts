@@ -21,7 +21,8 @@
  * 1. **Total.** Every customer ends with a non-null `customerAccountId`. A row
  *    with no usable key gets a singleton, rather than being left out.
  * 2. **Idempotent.** A second pass over unchanged data creates no account,
- *    moves no customer and writes no key.
+ *    moves no customer and inserts no key. It does refresh `lastSeenAt`, which
+ *    is the one write that records re-observation.
  * 3. **Order-independent.** Shuffling the input rows yields the same partition.
  *    This is what the canonical ordering in `loadResolutionInput` buys, and why
  *    `same` groups are processed as a unit rather than member by member — if

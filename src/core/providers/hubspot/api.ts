@@ -3,12 +3,51 @@
  */
 
 import type { RawRecord, TargetObject } from "../../types/common";
+import type { ProviderMetadata } from "../../types/registry";
 import { asArray, asRecord, asString } from "../http";
 
 /** Overridable so tests can point the client at a local msw server. */
 export function hubspotApiBase(): string {
   const base = process.env["HUBSPOT_API_BASE"];
   return base === undefined || base === "" ? "https://api.hubapi.com" : base;
+}
+
+/**
+ * HubSpot's token exchange does not name the portal.
+ *
+ * `/oauth/v1/access-tokens/{token}` does, and it is the only way to learn a
+ * tenant id that records' own ids are scoped by. The token is in the URL by
+ * HubSpot's design, so nothing here may log the URL or the response body:
+ * failures carry a status only.
+ */
+export async function fetchHubspotSourceAccountMetadata(
+  accessToken: string
+): Promise<ProviderMetadata> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${hubspotApiBase()}/oauth/v1/access-tokens/${encodeURIComponent(accessToken)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      }
+    );
+  } catch {
+    throw new Error("HubSpot source-account lookup failed");
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `HubSpot source-account lookup returned ${response.status}`
+    );
+  }
+
+  const body = asRecord(await response.json());
+  const hubId = body?.["hub_id"];
+  if (typeof hubId !== "number" && typeof hubId !== "string") return {};
+
+  const value = String(hubId).trim();
+  return value === "" ? {} : { hubId: value };
 }
 
 /**

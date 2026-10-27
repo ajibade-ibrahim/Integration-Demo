@@ -61,6 +61,8 @@ function emailKey(value: string, integrationId: string): NewIdentityKey {
     emailClass: "role",
     source: "customer_email",
     sourceIntegrationId: integrationId,
+    sourceAccountId: null,
+    sourceRecordId: "cus_1",
   };
 }
 
@@ -184,7 +186,9 @@ describe("loadResolutionInput", () => {
 
     const [loaded] = await loadResolutionInput(tenant.userId);
 
-    expect(loaded?.contactEmails).toEqual(["dana@acme.example"]);
+    expect(loaded?.contactEmails).toEqual([
+      { email: "dana@acme.example", externalSourceId: "ct-1" },
+    ]);
   });
 
   it("never returns another user's customers", async () => {
@@ -250,6 +254,8 @@ describe("findAccountsForKeys", () => {
           emailClass: "corporate",
           source: "customer_domain",
           sourceIntegrationId: tenant.integrationId,
+          sourceAccountId: null,
+          sourceRecordId: "cus_1",
         },
       ],
     });
@@ -453,6 +459,8 @@ describe("absorbAccount", () => {
         emailClass: "corporate",
         source: "customer_domain",
         sourceIntegrationId: tenant.integrationId,
+        sourceAccountId: null,
+        sourceRecordId: "cus_b",
       },
     });
 

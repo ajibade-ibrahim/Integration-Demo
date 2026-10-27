@@ -23,6 +23,11 @@ export interface IntegrationRecord {
   identityPriority: number;
   authorizationTimestamp: Date | null;
   lastSyncTimestamp: Date | null;
+  /**
+   * Stable provider account/tenant scope, or null when unknown. `""` means the
+   * provider's ids are global.
+   */
+  sourceAccountId: string | null;
   pendingTokenRevocation: boolean;
   createdAt: Date;
 }
@@ -37,6 +42,7 @@ interface RowWithFunctions {
   identityPriority: number;
   authorizationTimestamp: Date | null;
   lastSyncTimestamp: Date | null;
+  sourceAccountId: string | null;
   pendingTokenRevocation: boolean;
   createdAt: Date;
   functions: Array<{ functionName: string }>;
@@ -54,6 +60,7 @@ function toRecord(row: RowWithFunctions): IntegrationRecord {
     identityPriority: row.identityPriority,
     authorizationTimestamp: row.authorizationTimestamp,
     lastSyncTimestamp: row.lastSyncTimestamp,
+    sourceAccountId: row.sourceAccountId,
     pendingTokenRevocation: row.pendingTokenRevocation,
     createdAt: row.createdAt,
   };
@@ -316,9 +323,23 @@ export async function findStalePendingAuthorizations(
 /**
  * Delete an integration and everything hanging off it.
  *
- * Every child relation cascades at the schema level, so this one delete removes
- * functions, tokens, mappings, discovery cache, synced records, and sync runs.
+ * Every child relation cascades at the schema level, so the integration delete
+ * removes functions, tokens, mappings, discovery cache, synced records, and
+ * sync runs. Identity keys do **not** cascade: they belong to the account, not
+ * the integration, and are deliberately kept when one member disconnects.
+ *
+ * That is the right lifetime for keys a surviving member still supplies, but
+ * not for keys this integration alone supplied. They name a source that no
+ * longer exists, and until the next resolution pass they would keep matching
+ * new records to a company the user disconnected. Delete precisely those
+ * (`sourceIntegrationId`), leaving every other member's keys alone. Accounts
+ * are reaped by the next resolution pass when they are empty.
  */
 export async function deleteIntegration(id: string): Promise<void> {
-  await prisma.integration.delete({ where: { id } });
+  await prisma.$transaction([
+    prisma.customerAccountKey.deleteMany({
+      where: { sourceIntegrationId: id },
+    }),
+    prisma.integration.delete({ where: { id } }),
+  ]);
 }

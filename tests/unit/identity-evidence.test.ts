@@ -23,6 +23,7 @@ function customer(
   return {
     integrationId: `int-${overrides.id}`,
     providerName: "stripe",
+    sourceAccountId: null,
     identityPriority: 100,
     instanceLabel: "Stripe",
     externalSourceId: `cus_${overrides.id}`,
@@ -62,6 +63,54 @@ describe("self-reference", () => {
     expect(self?.value).toBe("stripe::cus_123");
     // The raw id is what a user recognises; the composed value never shows.
     expect(self?.rawValue).toBe("cus_123");
+  });
+
+  it("prefers the stored source account over stale token metadata", () => {
+    // Re-keying overwrites the token metadata; the stored column is what the
+    // keys were actually emitted under, and it wins.
+    const keys = buildEvidence(
+      customer({
+        id: "a",
+        providerName: "hubspot",
+        externalSourceId: "12345",
+        sourceAccountId: "portal-stored",
+        providerMetadata: { hubId: "portal-old" },
+      }),
+      NO_SCOPES
+    );
+
+    const self = keys.find((k) => k.source === "self_reference");
+    expect(self?.value).toBe("hubspot:portal-stored:12345");
+    expect(self?.sourceAccountId).toBe("portal-stored");
+    expect(self?.sourceRecordId).toBe("12345");
+  });
+
+  it("records the account and record on every key it offers", () => {
+    const keys = buildEvidence(
+      customer({
+        id: "a",
+        providerName: "hubspot",
+        externalSourceId: "12345",
+        sourceAccountId: "portal-1",
+        email: "billing@acme.example",
+        contactEmails: [
+          { email: "dana@acme.example", externalSourceId: "ct-1" },
+        ],
+      }),
+      NO_SCOPES
+    );
+
+    const email = keys.find((k) => k.value === "billing@acme.example");
+    const contact = keys.find((k) => k.value === "dana@acme.example");
+    expect(email).toMatchObject({
+      sourceAccountId: "portal-1",
+      sourceRecordId: "12345",
+    });
+    // A contact's address names the contact, not the company it belongs to.
+    expect(contact).toMatchObject({
+      sourceAccountId: "portal-1",
+      sourceRecordId: "ct-1",
+    });
   });
 
   it("is NOT emitted for a tenant-scoped provider with no scope value", () => {
@@ -304,7 +353,10 @@ describe("email keys", () => {
     const keys = buildEvidence(
       customer({
         id: "a",
-        contactEmails: ["dana@acme.example", "sam@acme.example"],
+        contactEmails: [
+          { email: "dana@acme.example", externalSourceId: "ct-1" },
+          { email: "sam@acme.example", externalSourceId: "ct-2" },
+        ],
       }),
       NO_SCOPES
     );
@@ -353,7 +405,9 @@ describe("email keys", () => {
       customer({
         id: "a",
         email: "billing@acme.example",
-        contactEmails: ["Billing@Acme.example"],
+        contactEmails: [
+          { email: "Billing@Acme.example", externalSourceId: "ct-1" },
+        ],
       }),
       NO_SCOPES
     );

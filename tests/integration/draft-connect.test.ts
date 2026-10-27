@@ -269,6 +269,7 @@ describe("connecting a draft", () => {
       createIntegrationFromDraft({
         draft,
         at: new Date(),
+        sourceAccountId: null,
         storeCredential: async () => {
           storedCredential = true;
         },
@@ -308,7 +309,7 @@ describe("connecting a draft", () => {
     });
 
     await expect(
-      finalizeConnection(integration, new Date())
+      finalizeConnection(integration, new Date(), null)
     ).rejects.toThrow(/cannot sync agreement/i);
 
     const after = await prisma.integration.findUniqueOrThrow({

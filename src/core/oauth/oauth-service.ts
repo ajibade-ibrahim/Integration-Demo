@@ -9,6 +9,10 @@
 
 import { unsupportedFunctionsFor } from "../capabilities";
 import {
+  recordSourceAccount,
+  sourceAccountIdFromMetadata,
+} from "../identity/source-account";
+import {
   functionRegistry,
   missingScopes,
   resolveScopes,
@@ -207,6 +211,10 @@ async function completeDraftCallback(
     const integration = await createIntegrationFromDraft({
       draft,
       at: new Date(),
+      sourceAccountId: sourceAccountIdFromMetadata(
+        provider.name,
+        parsed.metadata
+      ),
       storeCredential: (integrationId) =>
         saveToken({
           integrationId,
@@ -315,7 +323,11 @@ async function completeReconnectCallback(
       metadata: parsed.metadata,
     });
 
-    await finalizeConnection(integration, new Date());
+    await finalizeConnection(
+      integration,
+      new Date(),
+      sourceAccountIdFromMetadata(provider.name, parsed.metadata)
+    );
 
     return { ok: true, integrationId };
   } catch (error) {
@@ -362,12 +374,31 @@ async function exchangeCode(
   const json = await postForm(auth.tokenEndpoint, body);
   const parsed = auth.parseTokenResponse(json);
 
+  let metadata = parsed.metadata;
+  if (auth.resolveTokenMetadata !== undefined) {
+    try {
+      metadata = {
+        ...metadata,
+        ...(await auth.resolveTokenMetadata(parsed.accessToken)),
+      };
+    } catch (error) {
+      // The credential is valid; only the account id is missing. Losing the
+      // self-key costs a join, while refusing a good connection would be a
+      // much larger failure. Never log the token or a response body.
+      console.warn(
+        `[oauth] Could not resolve ${provider.name} source account: ${
+          error instanceof Error ? error.message : "unknown error"
+        }`
+      );
+    }
+  }
+
   return {
     accessToken: parsed.accessToken,
     refreshToken: parsed.refreshToken,
     expiresInSeconds: parsed.expiresInSeconds,
     grantedScopes: scopesFromResponse(json),
-    metadata: parsed.metadata,
+    metadata,
   };
 }
 
@@ -479,6 +510,28 @@ export async function refreshToken(
 
     const parsed = provider.auth.parseTokenResponse(json);
     const granted = scopesFromResponse(json);
+    let metadata = { ...stored.metadata, ...parsed.metadata };
+
+    // A connect-time token-info lookup may have failed. Try once more when
+    // this credential still cannot name its account; a refresh is otherwise
+    // the last chance to capture it without asking the user to reconnect.
+    if (
+      sourceAccountIdFromMetadata(provider.name, metadata) === null &&
+      provider.auth.resolveTokenMetadata !== undefined
+    ) {
+      try {
+        metadata = {
+          ...metadata,
+          ...(await provider.auth.resolveTokenMetadata(parsed.accessToken)),
+        };
+      } catch (error) {
+        console.warn(
+          `[oauth] Could not resolve ${provider.name} source account on refresh: ${
+            error instanceof Error ? error.message : "unknown error"
+          }`
+        );
+      }
+    }
 
     await saveToken({
       integrationId,
@@ -487,8 +540,25 @@ export async function refreshToken(
       refreshToken: parsed.refreshToken,
       expiresAt: new Date(Date.now() + parsed.expiresInSeconds * 1000),
       grantedScopes: granted.length > 0 ? granted : stored.grantedScopes,
-      metadata: { ...stored.metadata, ...parsed.metadata },
+      metadata,
     });
+
+    // Never let a bookkeeping failure turn a good refresh into "reconnect".
+    try {
+      await recordSourceAccount({
+        integrationId,
+        sourceAccountId: sourceAccountIdFromMetadata(
+          provider.name,
+          metadata
+        ),
+      });
+    } catch (error) {
+      console.warn(
+        `[oauth] Could not record ${provider.name} source account for ${integrationId}: ${
+          error instanceof Error ? error.message : "unknown error"
+        }`
+      );
+    }
 
     const refreshed = await findToken(integrationId);
     if (refreshed === undefined) throw new Error("Token vanished after refresh");
