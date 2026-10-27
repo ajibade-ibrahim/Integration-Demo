@@ -173,7 +173,7 @@ export interface AgreementPage {
 }
 
 /** Statuses that mean the agreement is currently in force. */
-const LIVE_STATUSES = ["trialing", "active", "past_due"];
+export const LIVE_AGREEMENT_STATUSES = ["trialing", "active", "past_due"] as const;
 
 /**
  * The includes every agreement read shares.
@@ -299,7 +299,7 @@ export async function loadAgreements(
       }),
       prisma.agreement.count({ where: scope }),
       prisma.agreement.count({
-        where: { ...scope, status: { in: LIVE_STATUSES } },
+        where: { ...scope, status: { in: [...LIVE_AGREEMENT_STATUSES] } },
       }),
       prisma.agreement.count({
         where: { ...scope, customerId: null, externalCustomerId: { not: null } },

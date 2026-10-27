@@ -201,6 +201,7 @@ knowing:
 | **Integrations** | Every connected system, its status, and its "Sync now" button |
 | **Integration detail** | Connection health, priority setting, cross-reference import, run history, and the mapping editor |
 | **Synced data** | Customers, Contacts, and the **Accounts** tab where records from different systems appear as one company |
+| **Account commercial view** | From an account: its next renewal, agreement-state counts, and invoice/payment state across all member records |
 | **Catalog** | Products, offerings, prices, features and entitlements |
 | **Agreements** | Subscriptions and contracts, with their lines, entitlements and discounts |
 | **Billing** | Invoices, their lines, and payments |

@@ -180,7 +180,7 @@ writes back: to the source systems (actions), or into the graph as new nodes
 |---|---|
 | 0 · Identity resolution and the event envelope | Identity resolution is built — evidence keys in strength order (cross-reference over email over domain), freemail refused as a domain key, human verdicts that outrank every automatic match. The event envelope is not; records are the unit, not events |
 | 1 · Materialize the graph | Partial — identity, catalog, agreement (subscription live) and billing are queryable; usage, cost and reliability are absent. Agreement was built generically from day one, exactly as the framework demands |
-| 2 · Parallel state dimensions | Partial — the per-record statuses exist and are never collapsed; no account-level derived views are computed |
+| 2 · Parallel state dimensions | Partial — the per-record statuses exist and are never collapsed; an account-level read model now presents agreement, invoice and payment states separately. Usage, cost and reliability account views are still absent |
 | 3–5 · Agents, recommendations, selective autonomy | Not in this codebase |
 
 The honest summary: this repository is the framework's Layer 01, and within it

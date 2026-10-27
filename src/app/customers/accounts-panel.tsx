@@ -28,6 +28,7 @@
  */
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type {
   FieldProvenanceEntry,
@@ -338,10 +339,18 @@ function AccountCard({
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-base font-semibold text-slate-900">{account.name}</h3>
-        <span className="text-xs text-slate-400">
-          {account.members.length} source
-          {account.members.length === 1 ? "" : "s"}
-        </span>
+        <div className="flex items-center gap-3">
+          <Link
+            href={`/customers/accounts/${account.id}`}
+            className="text-xs text-slate-500 underline underline-offset-2 hover:text-slate-800"
+          >
+            Commercial view
+          </Link>
+          <span className="text-xs text-slate-400">
+            {account.members.length} source
+            {account.members.length === 1 ? "" : "s"}
+          </span>
+        </div>
       </div>
 
       <dl className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">

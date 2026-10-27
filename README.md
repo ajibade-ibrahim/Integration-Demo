@@ -28,6 +28,11 @@ observable: catalog needs no customer, identity needs no price, and an agreement
 references both but syncs without either — keeping the row, retaining the
 provider's ids, and linking itself once the other functions are connected.
 
+Resolved accounts also have a commercial read model that reads across all of
+their member records: next renewal, agreement-status counts, and invoice and
+payment state. It deliberately keeps commercial and payment states separate and
+does not derive usage, margin, profitability or a health score.
+
 Providers come in two credential kinds. HubSpot, Salesforce and the mock are
 OAuth 2.0 authorization-code. Metrifox, Stripe and Chargebee authenticate with a
 static API key — no authorization server, no consent screen, no refresh — so
@@ -461,6 +466,26 @@ npm run identity:source-accounts -- --apply
 
 The key's account snapshot fills in when the next matching pass re-offers it.
 
+#### The account commercial view
+
+Every account on **Customers → Accounts** has a **Commercial view** link. It
+collects the account's member records once and reads their agreements, invoices
+and payments without a per-member query loop. An invoice belongs to the account
+when its customer is a member, or when its agreement's customer is; payments can
+also arrive through either of those paths.
+
+The page keeps the two state axes parallel rather than collapsing them into one
+account status:
+
+- **Commercial state** lists agreement status counts, how many are in force,
+  and the earliest next renewal among live subscriptions that are not already
+  scheduled to end.
+- **Payment state** lists invoice status counts and the payment/refund
+  movements, including failed and disputed payments.
+
+It covers commercial and payment context only. Usage, cost, reliability,
+communication, profitability and account health are not calculated or implied.
+
 > Already-connected integrations keep the mappings they were seeded with —
 > `seedMappingsIfEmpty` bails when any rule exists — so neither the
 > `crossRef.stripe` default nor the account-email one reaches a connection made
@@ -726,10 +751,11 @@ npm test                 # tsc --noEmit, then vitest
 The typecheck runs **first and gates the tests**. Vitest transpiles without
 typechecking, so a suite can pass green over a build that does not compile.
 
-68 files across three suites, and the split follows the layering rather than the
+83 files across three suites, and the split follows the layering rather than the
 subject area — `tests/unit/` is pure logic, `tests/property/` is the invariants
 that are tedious to argue by example, `tests/integration/` is handlers against
-mocked provider APIs plus the resolution pass against a real database.
+mocked provider APIs plus the resolution pass and account read model against a
+real database.
 
 - **Property tests** (fast-check) cover the invariants that carry real weight:
   scope isolation, provider filtering, mapping round-trip, target validation,

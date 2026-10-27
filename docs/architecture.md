@@ -382,6 +382,30 @@ offered it. That supports three distinct lifecycle rules:
   a stale join. Age-based pruning, if ever added, must be a separately stated
   policy.
 
+### The account's commercial view
+
+An account is also a useful read boundary for records that are not identity
+data. The account page collects every member customer id once, then reads
+agreements, invoices and payments in fixed queries scoped by those ids — no
+per-member fan-out. Invoices can be reached through their customer or through
+an agreement whose customer is a member; payments can additionally be reached
+through such an invoice. The result is the same commercial history whichever
+connection supplied the customer row.
+
+The page deliberately shows two parallel summaries rather than one account
+status:
+
+- **Commercial state** — counts of `Agreement.status`, the in-force count, and
+  the earliest next renewal (`Subscription.nextBillingAt`, falling back to
+  `currentPeriodEnd`) among live subscriptions not already scheduled to end.
+- **Payment state** — counts of `Invoice.status` and the recorded payment/refund
+  movements, including failed and disputed payments.
+
+The view states that it covers commercial and payment context only. It does not
+derive usage, cost, reliability, communication, profitability or a health score,
+and it does not merge the two state axes into a conclusion the source records do
+not state.
+
 ### What the matcher will not do
 
 - **It never merges two already-combined companies on a guess.** If two
