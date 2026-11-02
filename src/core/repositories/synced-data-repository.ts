@@ -58,6 +58,7 @@ export interface SyncedDataPage {
   totals: {
     customers: number;
     contacts: number;
+    accounts: number;
     /** Contacts that claimed a company we could not resolve. */
     unlinkedContacts: number;
   };
@@ -69,7 +70,7 @@ export async function loadSyncedData(
 ): Promise<SyncedDataPage> {
   const scope = { integration: { userId } };
 
-  const [customers, contacts, customerTotal, contactTotal, unlinked] =
+  const [customers, contacts, customerTotal, contactTotal, accountTotal, unlinked] =
     await Promise.all([
       prisma.customer.findMany({
         where: scope,
@@ -91,6 +92,7 @@ export async function loadSyncedData(
       }),
       prisma.customer.count({ where: scope }),
       prisma.contact.count({ where: scope }),
+      prisma.customerAccount.count({ where: { userId } }),
       prisma.contact.count({
         where: { ...scope, customerId: null, externalCustomerId: { not: null } },
       }),
@@ -125,6 +127,7 @@ export async function loadSyncedData(
     totals: {
       customers: customerTotal,
       contacts: contactTotal,
+      accounts: accountTotal,
       unlinkedContacts: unlinked,
     },
   };

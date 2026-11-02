@@ -75,7 +75,7 @@ export default async function SyncedDataPage({
               where those rows become one company.
             */}
             <Tab href="/customers?tab=accounts" active={showAccounts}>
-              Accounts
+              Accounts ({totals.accounts})
             </Tab>
           </div>
 
