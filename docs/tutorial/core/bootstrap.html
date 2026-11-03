@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Registration &amp; capability — Core Tutorial — Integration Platform</title>
+<meta name="description" content="How src/core registers functions, providers and handlers, and how the capability layer decides what can actually be connected.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html" class="active" aria-current="page">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Registration &amp; capability
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Subsystem</p>
+      <h1>Registration &amp; capability</h1>
+      <p><code>bootstrap.ts</code> is the one place where functions, providers and
+         handlers are declared. <code>capabilities.ts</code> asks the stricter
+         question the picker, connect API and integration page need: given a declared
+         pair, can this provider actually sync this function today?</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Role</dt>
+      <dd>Populate the registries, then filter declarations down to real capabilities.</dd>
+      <dt>Called by</dt>
+      <dd>Every entry point — routes, scripts and tests — before reading a registry.</dd>
+      <dt>Calls</dt>
+      <dd><code>registerProvider</code>, <code>registerFunction</code>,
+          <code>registerSyncHandler</code>, <code>registerFieldDiscovery</code>.</dd>
+      <dt>Key entry</dt>
+      <dd><code>bootstrap()</code>, <code>canSyncFunction()</code></dd>
+    </dl>
+
+    <h2>Key files</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">File</th><th scope="col">Responsibility</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>bootstrap.ts</code></td>
+              <td>All registrations, in one idempotent function. Also exports the
+                  function-name constants and <code>resetBootstrapForTests()</code>.</td></tr>
+          <tr><td><code>capabilities.ts</code></td>
+              <td><code>supportedObjectsFor()</code>, <code>canSyncFunction()</code> and
+                  <code>unsupportedFunctionsFor()</code> — the connectable set.</td></tr>
+          <tr><td><code>types/registry.ts</code></td>
+              <td>The definitions being registered: <code>FunctionDefinition</code>,
+                  <code>ProviderDefinition</code>, <code>SyncHandler</code>,
+                  <code>FieldDiscovery</code> and the credential union.</td></tr>
+          <tr><td><code>registries/*</code></td>
+              <td>The maps that hold the definitions. Details in
+                  <a href="registries.html">Registries</a>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>How it fits</h2>
+
+    <ul>
+      <li><strong>One call, once.</strong> A module-level guard makes
+          <code>bootstrap()</code> safe to call from every entry point. Calling it
+          twice is a no-op, not a duplicate-registration error.</li>
+      <li><strong>Providers first.</strong> HubSpot, Salesforce, Metrifox, Stripe,
+          Chargebee and Stigg register unconditionally. The Mock CRM registers only
+          when <code>isMockEnabled()</code> says the deployment opted in.</li>
+      <li><strong>Functions declare scopes.</strong> Each <code>FunctionDefinition</code>
+          carries a <code>scopesByProvider</code> map. Identity, Catalog, Agreement and
+          Billing have real entries; Support keeps declarations for the roadmap;
+          Usage and Communication are registered with an empty map.</li>
+      <li><strong>Handlers are the narrower claim.</strong> A function can be declared
+          for a provider without having a handler. <code>registerSyncHandler()</code>
+          records the implementation and its target objects, and rejects objects the
+          function does not own.</li>
+      <li><strong>Capability requires all three facts.</strong>
+          <code>canSyncFunction()</code> returns true only when a handler exists, it
+          declares at least one object, the provider is registered, and scope
+          resolution succeeds for the pair.</li>
+      <li><strong>The UI and the API agree.</strong>
+          <code>unsupportedFunctionsFor()</code> is what filters the picker and what
+          <code>finalizeConnection()</code> checks before creating a connection.</li>
+    </ul>
+
+    <h2>Rules worth knowing</h2>
+
+    <ul>
+      <li><strong>Declaration is not implementation.</strong> Scope declarations keep
+          consent and the roadmap honest; capability keeps an unbuilt pair out of the
+          connect flow. That is why “no system supports this yet” is a real state
+          rather than a connection that authorizes and then writes nothing.</li>
+      <li><strong>Registration is all-or-nothing per definition.</strong> Validation
+          runs before anything is written, so a rejected definition leaves the registry
+          untouched. Duplicate names throw.</li>
+      <li><strong>Handler objects are checked at registration.</strong> A handler that
+          claims an object its function does not write fails immediately, rather than
+          validating cleanly and silently writing nothing.</li>
+      <li><strong>Bootstrap order is not a dependency graph.</strong> The function does
+          not require providers to be registered before handlers; the checks that need
+          both happen later, at connect and mapping time.</li>
+    </ul>
+
+    <h2>Open this when…</h2>
+
+    <ul>
+      <li>You are adding a provider and need to know which registrations to add.</li>
+      <li>A provider or function is missing from the New integration picker.</li>
+      <li>The consent screen asks for the wrong scopes.</li>
+      <li>You see “already registered” or “claims objects the function does not write”.</li>
+      <li>A function is selectable but a sync finds no handler.</li>
+    </ul>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="index.html">← Core overview</a>
+      <a class="btn is-next" href="schemas.html">Object schemas →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

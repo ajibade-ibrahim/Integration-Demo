@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connection lifecycle — Core Tutorial — Integration Platform</title>
+<meta name="description" content="How src/core turns a draft and a proven credential into a connected integration: OAuth, API keys, mapping seeding and deletion.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html" class="active" aria-current="page">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Connection lifecycle
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Subsystem</p>
+      <h1>Connection lifecycle</h1>
+      <p>A connection is configured before it exists and created only after its
+         credential is proven. OAuth and API keys take different routes to that proof,
+         then converge on the same finalize step: store the credential, mark the
+         integration <code>active</code>, and seed its default mappings.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Role</dt>
+      <dd>Hold draft configuration, prove credentials, create connections and delete
+          them safely.</dd>
+      <dt>Called by</dt>
+      <dd>Connect routes, the OAuth callback, the API-key submit route and the delete
+          action.</dd>
+      <dt>Calls</dt>
+      <dd>Registries, token storage, mapping seeding, source-account capture and identity
+          reassessment.</dd>
+      <dt>Key entry</dt>
+      <dd><code>finalizeConnection()</code>, <code>connectWithApiKey()</code></dd>
+    </dl>
+
+    <h2>Key files</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">File</th><th scope="col">Responsibility</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>integrations/draft-store.ts</code></td>
+              <td>Table-backed, expiring draft of provider + functions. Nothing is
+                  persisted as an integration until a credential succeeds.</td></tr>
+          <tr><td><code>integrations/connection.ts</code></td>
+              <td><code>createIntegrationFromDraft()</code> and
+                  <code>finalizeConnection()</code> — the shared post-credential path,
+                  including mapping seeding.</td></tr>
+          <tr><td><code>integrations/deletion.ts</code></td>
+              <td><code>deleteIntegrationAndReassess()</code>: revoke where possible,
+                  delete records and keys, rebuild shared accounts, audit the removal.</td></tr>
+          <tr><td><code>oauth/oauth-service.ts</code></td>
+              <td><code>buildAuthorizationRequest</code>, <code>handleCallback</code>,
+                  <code>getValidToken</code>, <code>refreshToken</code>,
+                  <code>checkReauthorization</code>, <code>revokeTokens</code>.</td></tr>
+          <tr><td><code>oauth/state-store.ts</code></td>
+              <td>Single-use, expiring OAuth state keyed to a draft or integration.</td></tr>
+          <tr><td><code>oauth/crypto.ts</code></td>
+              <td>AES-256-GCM encryption for stored credentials; no built-in default
+                  key.</td></tr>
+          <tr><td><code>credentials/api-key-service.ts</code></td>
+              <td><code>connectDraftWithApiKey()</code> and
+                  <code>connectWithApiKey()</code>: probe the key, then finalize.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>How it fits</h2>
+
+    <ul>
+      <li><strong>A draft is not a connection.</strong> Provider and function choices are
+          held in an expiring table row. A rejected or abandoned attempt therefore leaves
+          no integration for the user to delete.</li>
+      <li><strong>OAuth starts with a state token.</strong>
+          <code>buildAuthorizationRequest()</code> resolves scopes for the selected
+          functions and records single-use state. The callback consumes that state,
+          exchanges the code, and captures the source account.</li>
+      <li><strong>An API key is proven before storage.</strong>
+          <code>connectDraftWithApiKey()</code> probes the provider, treats a failure as
+          “try again” rather than a partial connection, and never logs the key. The draft
+          survives so the user can re-paste without re-picking.</li>
+      <li><strong>Both routes converge.</strong> <code>finalizeConnection()</code>
+          refuses unsupported function/provider pairs, creates the integration row when
+          needed, stores the credential, marks it <code>active</code> and seeds default mappings.</li>
+      <li><strong>Seeding is what makes a connection useful.</strong> A connected
+          integration with no rules would sync nothing, so defaults are applied once and
+          never overwrite saved edits.</li>
+      <li><strong>Reconnecting preserves work.</strong> A new credential updates access
+          without discarding mappings, synced records or resolved accounts.</li>
+      <li><strong>Deletion is a reassessment, not just a delete.</strong> The deletion
+          path retires only the deleted connection's identity keys, rebuilds shared
+          accounts from surviving members, clears fields whose only source is gone, and
+          reaps empty profiles.</li>
+      <li><strong>The audit stores no customer values.</strong> A deletion or withdrawal
+          records provider, label, time, counts and affected account ids only.</li>
+    </ul>
+
+    <h2>Rules worth knowing</h2>
+
+    <ul>
+      <li><strong>Nothing is saved until the credential works.</strong> A canceled
+          approval or a mistyped key leaves no half-built connection behind.</li>
+      <li><strong>State is single-use and expiring.</strong> A callback without a state
+          the platform issued is refused, and two simultaneous callbacks with the same
+          state cannot both succeed.</li>
+      <li><strong>Credentials are encrypted at rest.</strong> There is deliberately no
+          development fallback key: a key that ships with the code is not protection.</li>
+      <li><strong>Revocation is best effort.</strong> Deletion completes even if the
+          provider cannot be reached; the failed revocation is logged so the key can be
+          revoked by hand.</li>
+      <li><strong>An API key belongs to the user's account.</strong> Deleting the
+          integration removes our copy but does not invalidate the key at the provider.</li>
+    </ul>
+
+    <h2>Open this when…</h2>
+
+    <ul>
+      <li>Creating an integration leaves an unexpected row, or a rejected key leaves
+          one.</li>
+      <li>The OAuth callback fails with an invalid or expired state.</li>
+      <li>A new integration syncs nothing because it has no mappings.</li>
+      <li>A reconnect is requested after adding a function that widens the scopes.</li>
+      <li>Deleting a connection leaves an account that should have been rebuilt or
+          removed.</li>
+    </ul>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="identity.html">← Identity resolution</a>
+      <a class="btn is-next" href="repositories.html">Repositories →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

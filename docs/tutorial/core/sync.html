@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sync — Core Tutorial — Integration Platform</title>
+<meta name="description" content="How src/core runs a refresh: orchestration, parent-first writes, relinking, leases, coverage, scheduling and discovery.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html" class="active" aria-current="page">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Sync
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Subsystem</p>
+      <h1>Sync</h1>
+      <p>A refresh is one pass: fetch, translate, save and report. <code>sync-engine.ts</code>
+         owns the invariants that hold for every provider — one run at a time, functions
+         in write order, parents before children, per-record failures that never abort
+         the run, and a durable account of what happened.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Role</dt>
+      <dd>Orchestrate a refresh, write mapped records, and record status and coverage.</dd>
+      <dt>Called by</dt>
+      <dd>The manual sync route and <code>runScheduledSyncs()</code>.</dd>
+      <dt>Calls</dt>
+      <dd>A provider handler, <code>applyMappings()</code>, the record writers,
+          <code>resolveAfterSync()</code>.</dd>
+      <dt>Key entry</dt>
+      <dd><code>executeSync()</code></dd>
+    </dl>
+
+    <h2>Key files</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">File</th><th scope="col">Responsibility</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>sync-engine.ts</code></td>
+              <td><code>executeSync()</code>: guard, credential, function order, handler
+                  call, mapping, writes, relink, result.</td></tr>
+          <tr><td><code>record-writer.ts</code></td>
+              <td>Per-object writers, external→internal association resolution, relink
+                  passes and the gated reconciliation of child lists.</td></tr>
+          <tr><td><code>lease.ts</code></td>
+              <td>Durable run lease: acquire, heartbeat, fencing token, close and
+                  <code>recoverExpiredSyncRuns()</code>.</td></tr>
+          <tr><td><code>coverage.ts</code></td>
+              <td>The acquisition report kept separately from write success: pages,
+                  records, completeness signals and unmapped objects.</td></tr>
+          <tr><td><code>scheduler.ts</code></td>
+              <td><code>isDue()</code>, <code>runScheduledSyncs()</code>,
+                  <code>expirePendingAuthorizations()</code>.</td></tr>
+          <tr><td><code>discovery-service.ts</code></td>
+              <td>Field discovery with registry lookup, credentials and a one-hour
+                  cache.</td></tr>
+          <tr><td><code>clock.ts</code></td>
+              <td>Injected timing, so retries and lease windows are asserted instantly
+                  in tests.</td></tr>
+          <tr><td><code>errors.ts</code></td>
+              <td>Shared error classes for provider HTTP, reauthorization, retryable
+                  failures and lease loss.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>How it fits</h2>
+
+    <ul>
+      <li><strong>The engine starts with a fast guard.</strong> An in-process
+          <code>Set</code> stops the common double-click; the database lease is the
+          cross-instance authority.</li>
+      <li><strong>A fresh credential comes first.</strong> <code>getValidToken()</code>
+          and <code>refreshToken()</code> renew OAuth credentials before paging; an API
+          key does not expire.</li>
+      <li><strong>Functions run in a fixed order.</strong>
+          <code>functionsInWriteOrder()</code> sorts identity → catalog → agreement →
+          billing. Later functions reference earlier ones, so this is what lets one
+          refresh fully connect everything.</li>
+      <li><strong>The handler fetches; the mapper translates; the writer saves.</strong>
+          The engine resolves the handler for <code>(function, provider)</code>, hands it
+          a session, then applies the function's rules to each yielded record.</li>
+      <li><strong>Parents are written before children.</strong> Each writer builds an
+          external→internal index and children resolve through it, falling back to a
+          database lookup for parents written by an earlier run.</li>
+      <li><strong>Relinking repairs earlier gaps.</strong> A child kept with a null link
+          is found again after later records arrive, so an agreement can link its
+          customer and offering without a second full sync.</li>
+      <li><strong>Status describes writes, coverage describes acquisition.</strong> A run
+          can be <code>success</code> with unverified coverage. The run row carries both
+          plus the mapping version each function used.</li>
+      <li><strong>Scheduling is a plain function.</strong> <code>isDue()</code> decides
+          which active integrations are due; <code>runScheduledSyncs()</code> runs them
+          and then triggers identity resolution for each affected owner.</li>
+    </ul>
+
+    <h2>Rules worth knowing</h2>
+
+    <ul>
+      <li><strong>Per-record failure never aborts the run.</strong> A rejected record is
+          reported with a reason and severity; the rest are written and the run finishes
+          <code>partial</code>. A run that found another live run is
+          <code>discarded</code>, not failed.</li>
+      <li><strong>An unresolved child is usually kept.</strong> It is written with a null
+          link and a warning, retaining the provider id so a later run links it. The
+          exceptions are an <code>agreementItem</code>, an
+          <code>agreementEntitlement</code>, an <code>agreementDiscount</code> and an
+          <code>invoiceLine</code>, whose parent arrived in the same payload and whose
+          foreign key is required.</li>
+      <li><strong>Only four lists are reconciled.</strong> Agreement lines,
+          agreement entitlements, agreement discounts and invoice lines can have entries
+          removed. Two gates protect that: the list must be mapped, and the provider must
+          have declared it complete — a page-capped list looks exactly like a shorter
+          one.</li>
+      <li><strong>Everything else is update-only.</strong> A record that stops arriving
+          stays until the connection is deleted. That is the known gap behind a removed
+          catalog feature lingering.</li>
+      <li><strong>The lease is fenced.</strong> Closing checks the owner, token and
+          expiry under the lock, so a paused old worker cannot overwrite a newer run or
+          advance <code>lastSyncTimestamp</code> after losing ownership.</li>
+      <li><strong>Resolution failure never fails the sync.</strong>
+          <code>resolveAfterSync()</code> logs and swallows it; the resolver is
+          idempotent, so the next pass covers the same rows.</li>
+    </ul>
+
+    <h2>Open this when…</h2>
+
+    <ul>
+      <li>A run reports <code>partial</code> and you need the per-record reason.</li>
+      <li>A child record has a null parent link.</li>
+      <li>Two syncs were requested at once and one was discarded.</li>
+      <li>A worker crashed and the run is stuck or abandoned.</li>
+      <li>A scheduled integration is not running when expected.</li>
+      <li>The field dropdown in the mapping editor is empty or stale.</li>
+    </ul>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="field-mapper.html">← Field mapping</a>
+      <a class="btn is-next" href="providers.html">Providers →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

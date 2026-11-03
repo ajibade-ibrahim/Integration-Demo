@@ -1,0 +1,234 @@
+/* ==========================================================================
+   Tutorials — layered on docs/diagrams/styles.css
+   Only tutorial-specific pieces live here; palette, topbar, shell, sidebar,
+   #toc, .lede, .btn, .callout, .matrix, .kbd and footer.foot come from the
+   diagrams stylesheet.
+   ========================================================================== */
+
+.tut-main { max-width: 920px; }
+
+.tut-crumbs {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+.tut-crumbs a { color: var(--ink-2); text-decoration: none; }
+.tut-crumbs a:hover { color: var(--ink-1); text-decoration: underline; }
+.tut-crumbs span[aria-hidden="true"] { margin: 0 6px; color: var(--ink-3); }
+
+.tut-kicker {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.tut-side-title {
+  margin: 0 0 8px;
+  padding: 0 11px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.tut-main h2 {
+  margin: 32px 0 10px;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+}
+.tut-main h3 {
+  margin: 22px 0 8px;
+  font-size: 15.5px;
+}
+.tut-main p,
+.tut-main li { max-width: 84ch; color: var(--ink-2); }
+.tut-main p { margin: 0 0 12px; }
+.tut-main ul,
+.tut-main ol { margin: 0 0 14px; padding-left: 22px; }
+.tut-main li { margin: 0 0 6px; }
+.tut-main li > code,
+.tut-main p > code { color: var(--ink-1); overflow-wrap: anywhere; }
+.tut-main strong { color: var(--ink-1); }
+.tut-main h2 code,
+.tut-main h3 code { font-size: 0.82em; }
+
+.tut-meta {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 0 0 26px;
+  padding: 16px 18px;
+  background: var(--surface-1);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-md);
+  font-size: 13.5px;
+}
+.tut-meta dt {
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.tut-meta dd { margin: 0; color: var(--ink-2); }
+.tut-meta dd code { color: var(--ink-1); }
+
+.tut-table {
+  margin: 0 0 22px;
+  overflow-x: auto;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+.tut-table table.matrix { margin: 0; }
+.tut-table table.matrix td,
+.tut-table table.matrix th { vertical-align: top; }
+.tut-table table.matrix td:first-child { white-space: nowrap; }
+.tut-table code { overflow-wrap: anywhere; }
+
+.tut-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+  margin: 0 0 26px;
+}
+.tut-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  background: var(--surface-1);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-md);
+  color: inherit;
+  text-decoration: none;
+}
+.tut-card:hover { border-color: var(--ink-3); }
+.tut-card:focus-visible { outline: 2px solid var(--a1); outline-offset: 2px; }
+.tut-card h2,
+.tut-card h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--ink-1);
+}
+.tut-card p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.tut-card .tut-pill { align-self: flex-start; margin-top: 2px; }
+.tut-card.is-planned {
+  background: var(--sunken);
+  border-style: dashed;
+  color: var(--ink-2);
+}
+.tut-card.is-planned h2,
+.tut-card.is-planned h3 { color: var(--ink-2); }
+
+.tut-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: var(--surface-1);
+}
+.tut-pill.is-ready { border-color: var(--a3); color: var(--a3); }
+.tut-pill.is-planned { border-style: dashed; color: var(--ink-3); }
+
+.tut-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+  margin: 0 0 24px;
+  padding: 0;
+  list-style: none;
+}
+.tut-flow li {
+  flex: 1 1 150px;
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-md);
+}
+.tut-flow .tut-flow-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink-1);
+}
+.tut-flow .tut-flow-owner {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.tut-prevnext {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  margin: 36px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--hair);
+}
+.tut-prevnext .btn { text-decoration: none; }
+.tut-prevnext .is-next { margin-left: auto; }
+
+.tut-code {
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  background: var(--sunken);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-md);
+  font: 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--ink-1);
+  tab-size: 2;
+}
+.tut-code code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  white-space: pre;
+}
+
+.tut-note {
+  margin: 0 0 22px;
+  padding: 12px 16px;
+  border-left: 3px solid var(--a3);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: var(--sunken);
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+.tut-note strong { color: var(--ink-1); }
+.tut-note p:last-child { margin-bottom: 0; }
+
+@media (max-width: 720px) {
+  .topbar { flex-wrap: wrap; gap: 8px 12px; padding: 10px 14px; }
+  .topbar .brand { flex: 1 1 100%; }
+  .pageswitch { flex-wrap: wrap; }
+  .shell { padding: 18px 14px 80px; }
+  .lede { padding: 18px 16px; }
+  .tut-main h2 { font-size: 17px; }
+}
+
+@media (max-width: 640px) {
+  .tut-meta { grid-template-columns: 1fr; gap: 2px; }
+  .tut-meta dd { margin-bottom: 8px; }
+  .tut-flow li { flex-basis: 100%; }
+}

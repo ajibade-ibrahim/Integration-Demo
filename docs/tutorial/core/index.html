@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Core module map — Integration Platform Tutorials</title>
+<meta name="description" content="A guided map of src/core: how registration, schemas, mapping, sync, providers, identity resolution, connections and repositories fit together.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html" class="active" aria-current="page">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span>Core
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Module map</p>
+      <h1>Core</h1>
+      <p><code>src/core</code> is the working engine: it decides what a connection may
+         do, fetches data from providers, translates it, writes records, and matches
+         companies across connections. The screens in <code>src/app</code> call into
+         it; it never calls back.</p>
+      <p>It has no <code>next/*</code> imports and no imports from <code>src/app</code>.
+         The same code therefore runs from a route handler, a script or a test with
+         no HTTP server involved.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Location</dt>
+      <dd><code>src/core/</code></dd>
+      <dt>Entry seam</dt>
+      <dd><code>bootstrap()</code> in <code>bootstrap.ts</code> — every entry point calls it first</dd>
+      <dt>Framework rule</dt>
+      <dd>No Next.js imports; persistence reaches the shared Prisma client in <code>src/lib</code></dd>
+      <dt>Read this first</dt>
+      <dd><a href="bootstrap.html">Registration &amp; capability</a>, then
+          <a href="schemas.html">Object schemas</a></dd>
+    </dl>
+
+    <h2>How the pieces fit</h2>
+
+    <p>A connection moves through four stages. Each stage has one owning subsystem,
+       which is the page to open when that part misbehaves.</p>
+
+    <ul class="tut-flow">
+      <li>
+        <span class="tut-flow-name">1. Connect</span>
+        <span class="tut-flow-owner"><a href="connections.html">Connection lifecycle</a></span>
+      </li>
+      <li>
+        <span class="tut-flow-name">2. Map</span>
+        <span class="tut-flow-owner"><a href="field-mapper.html">Field mapping</a></span>
+      </li>
+      <li>
+        <span class="tut-flow-name">3. Sync</span>
+        <span class="tut-flow-owner"><a href="sync.html">Sync</a> + <a href="providers.html">Providers</a></span>
+      </li>
+      <li>
+        <span class="tut-flow-name">4. Resolve</span>
+        <span class="tut-flow-owner"><a href="identity.html">Identity resolution</a></span>
+      </li>
+    </ul>
+
+    <h2>Subsystems</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th scope="col">Subsystem</th>
+            <th scope="col">What it owns</th>
+            <th scope="col">Open first</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row"><a href="bootstrap.html">Registration &amp; capability</a></th>
+            <td>The one place functions, providers and handlers are declared, and the
+                stricter check that decides what may actually be connected.</td>
+            <td><code>bootstrap.ts</code>, <code>capabilities.ts</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><a href="schemas.html">Object schemas</a></th>
+            <td>Every target a mapping rule may write to, plus the function/object
+                ownership and write order the sync depends on.</td>
+            <td><code>object-schema.ts</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><a href="registries.html">Registries</a></th>
+            <td>Name-keyed lookup for functions and providers, and
+                <code>(function, provider)</code>-keyed lookup for sync handlers and
+                field discoverers.</td>
+            <td><code>registries/function-registry.ts</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><a href="field-mapper.html">Field mapping</a></th>
+            <td>Validation, application and serialization of translation rules,
+                including transforms and the content hash that explains an older run.</td>
+            <td><code>field-mapper/field-mapper.ts</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><a href="sync.html">Sync</a></th>
+            <td>Refresh orchestration, parent-first writes, relinking, leases,
+                coverage, scheduling and field discovery.</td>
+            <td><code>sync/sync-engine.ts</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><a href="providers.html">Providers</a></th>
+            <td>The provider contract, the shared HTTP failure policy and one folder
+                per outside system.</td>
+            <td><code>providers/http.ts</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><a href="identity.html">Identity resolution</a></th>
+            <td>Matching customer records across connections onto one company profile,
+                with evidence, survivorship, provenance and human verdicts.</td>
+            <td><code>identity/identity-resolver.ts</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><a href="connections.html">Connection lifecycle</a></th>
+            <td>Drafts, OAuth, API keys, credential storage, mapping seeding and
+                deletion.</td>
+            <td><code>integrations/draft-store.ts</code></td>
+          </tr>
+          <tr>
+            <th scope="row"><a href="repositories.html">Repositories</a></th>
+            <td>Grouped data-access modules for connections, mappings, runs, synced
+                records, identity and the account read model.</td>
+            <td><code>repositories/</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Cross-cutting rules</h2>
+
+    <ul>
+      <li><strong>Purposes decide permissions.</strong> A function declares its scopes
+          per provider, and <code>resolveScopes()</code> returns the union for the
+          selected set. See <a href="registries.html">Registries</a>.</li>
+      <li><strong>Target paths are object-qualified.</strong> A rule writes to
+          <code>customer.domain</code>, never a bare <code>domain</code>, so a contact
+          field cannot land on a company. See <a href="schemas.html">Object schemas</a>.</li>
+      <li><strong>Order is load-bearing.</strong> Functions run
+          identity → catalog → agreement → billing, and each function writes parents
+          before children. See <a href="schemas.html">Object schemas</a> and
+          <a href="sync.html">Sync</a>.</li>
+      <li><strong>One bad record never aborts a refresh.</strong> Failures are recorded
+          per record with a reason, and the run reports <code>partial</code>. See
+          <a href="sync.html">Sync</a>.</li>
+      <li><strong>Provider code holds no orchestration.</strong> A provider folder knows
+          how to authenticate, page and interpret its own API; the engine decides when
+          to call it. See <a href="providers.html">Providers</a>.</li>
+      <li><strong>Persistence is concentrated, not exclusive.</strong> Most reads and
+          writes go through <code>repositories/</code>, but a few modules import the
+          Prisma client directly where a transaction spans many rows or a lease must be
+          fenced. See <a href="repositories.html">Repositories</a>.</li>
+    </ul>
+
+    <h2>Deep dives</h2>
+
+    <p>The subsystem pages explain what each area owns. These walkthroughs follow one
+       task through several of them, with the file to open at every step.</p>
+
+    <div class="tut-cards">
+      <a class="tut-card" href="trace-a-sync.html">
+        <h3>Trace a sync</h3>
+        <p>One credential-free Mock CRM identity sync, from the draft and consent
+           screen through <code>executeSync()</code>, the writers and the resolver.</p>
+        <span class="tut-pill">Deep dive</span>
+      </a>
+
+      <a class="tut-card" href="connect-flow.html">
+        <h3>Connect flow</h3>
+        <p>Both credential kinds from draft to authorized connection: OAuth consent,
+           API-key probing, encrypted storage, refresh, reconnect and re-key.</p>
+        <span class="tut-pill">Deep dive</span>
+      </a>
+
+      <a class="tut-card" href="identity-walkthrough.html">
+        <h3>Identity walkthrough</h3>
+        <p>The three-connection Acme example: evidence keys, account placement,
+           survivorship, provenance and the exact expected result.</p>
+        <span class="tut-pill">Deep dive</span>
+      </a>
+
+      <a class="tut-card" href="add-a-provider.html">
+        <h3>Add a provider</h3>
+        <p>A small API-key CRM: definition, handler, default mappings, optional
+           discovery and the bootstrap registrations that make it connectable.</p>
+        <span class="tut-pill">Deep dive</span>
+      </a>
+    </div>
+
+    <div class="tut-note">
+      <p><strong>Tip.</strong> The subsystem pages are short and self-contained. If you
+         are new, read <a href="bootstrap.html">Registration &amp; capability</a> first,
+         then <a href="schemas.html">Object schemas</a>; those two explain nearly every
+         other ordering decision in the core.</p>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

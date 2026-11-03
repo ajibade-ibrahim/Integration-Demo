@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tutorials — Integration Platform</title>
+<meta name="description" content="Static, browser-ready tutorials for the Integration Platform repository, starting with the src/core module map.">
+<link rel="stylesheet" href="../diagrams/styles.css">
+<link rel="stylesheet" href="tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../diagrams/index.html">Architecture</a>
+    <a href="../diagrams/data-model.html">Data model</a>
+    <a href="../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Tutorial contents">
+      <p class="tut-side-title">Tutorials</p>
+      <a href="index.html" class="active" aria-current="page">Overview</a>
+      <a href="core/index.html">Core module map</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <div class="lede">
+      <h1>Tutorials</h1>
+      <p>Short, code-level guides to this repository. Each tutorial maps one part of
+         the codebase: what it owns, which files to open first, and the rules that hold
+         the design together.</p>
+      <p>The first module is <a href="core/index.html"><code>src/core</code></a>. It is the
+         framework-free engine behind every connection, sync and company match. Later
+         modules will follow the same shape.</p>
+    </div>
+
+    <h2>Modules</h2>
+
+    <div class="tut-cards">
+      <a class="tut-card" href="core/index.html">
+        <h2>Core</h2>
+        <p>The domain engine: registries, object schemas, mapping, sync, providers,
+           identity resolution, connection lifecycle and repositories.</p>
+        <span class="tut-pill is-ready">Available</span>
+      </a>
+
+      <div class="tut-card is-planned">
+        <h2>App and UI</h2>
+        <p>Next.js pages, server components and the client pieces that render
+           integrations, synced data, catalog, agreements and billing.</p>
+        <span class="tut-pill is-planned">Planned</span>
+      </div>
+
+      <div class="tut-card is-planned">
+        <h2>API routes</h2>
+        <p>The mutation surface: creating connections, saving mappings, starting
+           syncs, recording verdicts and importing crosswalks.</p>
+        <span class="tut-pill is-planned">Planned</span>
+      </div>
+
+      <div class="tut-card is-planned">
+        <h2>Prisma data model</h2>
+        <p>The 28 tables, their cascade behaviour and the integration status
+           lifecycle, read from the schema rather than the prose.</p>
+        <span class="tut-pill is-planned">Planned</span>
+      </div>
+
+      <div class="tut-card is-planned">
+        <h2>Tests</h2>
+        <p>The unit, property and integration suites, the database fixture rules
+           and what each layer is allowed to assume.</p>
+        <span class="tut-pill is-planned">Planned</span>
+      </div>
+
+      <div class="tut-card is-planned">
+        <h2>Scripts and fixtures</h2>
+        <p>Seed, verification, migration and worker scripts, and the sandbox
+           fixtures they expect.</p>
+        <span class="tut-pill is-planned">Planned</span>
+      </div>
+    </div>
+
+    <h2>Core deep dives</h2>
+
+    <p>Four walkthroughs go beyond the module map and follow one task through the
+       files:</p>
+
+    <div class="tut-cards">
+      <a class="tut-card" href="core/trace-a-sync.html">
+        <h3>Trace a sync</h3>
+        <p>A credential-free Mock CRM sync, from draft to a resolved account.</p>
+        <span class="tut-pill">Deep dive</span>
+      </a>
+
+      <a class="tut-card" href="core/connect-flow.html">
+        <h3>Connect flow</h3>
+        <p>OAuth and API-key connections, from draft to encrypted credential.</p>
+        <span class="tut-pill">Deep dive</span>
+      </a>
+
+      <a class="tut-card" href="core/identity-walkthrough.html">
+        <h3>Identity walkthrough</h3>
+        <p>Three connections, one company, and the evidence keys behind the match.</p>
+        <span class="tut-pill">Deep dive</span>
+      </a>
+
+      <a class="tut-card" href="core/add-a-provider.html">
+        <h3>Add a provider</h3>
+        <p>The definition, handler and registrations needed for a new system.</p>
+        <span class="tut-pill">Deep dive</span>
+      </a>
+    </div>
+
+    <h2>How these pages work</h2>
+
+    <p>Every tutorial is a plain HTML page. There is no build step, no JavaScript and
+       no network access: open a page straight from disk, or serve the
+       <code>docs/</code> folder with any static server.</p>
+
+    <p>The pages share the look and navigation of the
+       <a href="../diagrams/index.html">architecture diagrams</a>. The diagrams remain
+       the place for the visual, whole-system view; these tutorials are the guided
+       route through the source files.</p>
+
+    <div class="tut-note">
+      <p><strong>Starting point.</strong> Read the
+         <a href="core/index.html">core module map</a> in order if you are new to the
+         repository. If you only need one area, the sidebar on each page lists every
+         subsystem directly.</p>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Identity resolution — Core Tutorial — Integration Platform</title>
+<meta name="description" content="How src/core matches customer records across connections onto one company profile, with evidence, survivorship, provenance and human verdicts.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html" class="active" aria-current="page">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Identity resolution
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Cross-integration subsystem</p>
+      <h1>Identity resolution</h1>
+      <p>One real company can arrive as a customer record from a CRM, another from
+         Stripe and another from a billing system. Resolution is the per-owner pass that
+         groups those unrelated rows into one <code>CustomerAccount</code>, keeping the
+         source records untouched and every field attributable.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Role</dt>
+      <dd>Partition one owner's customers into company profiles and reconcile their
+          fields.</dd>
+      <dt>Called by</dt>
+      <dd><code>resolveAfterSync()</code> after a refresh; deletion and crosswalk
+          withdrawal also trigger it.</dd>
+      <dt>Calls</dt>
+      <dd><code>evidence.ts</code>, <code>survivorship.ts</code>,
+          <code>identity-repository.ts</code>.</dd>
+      <dt>Key entry</dt>
+      <dd><code>resolveIdentities()</code></dd>
+    </dl>
+
+    <h2>Key files</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">File</th><th scope="col">Responsibility</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>identity-resolver.ts</code></td>
+              <td>The pass itself: load a tenant's customers, build evidence, assign
+                  accounts, apply assertions, report an outcome.</td></tr>
+          <tr><td><code>evidence.ts</code></td>
+              <td>Turns customer and contact fields into match keys; builds tenant-aware
+                  foreign scopes.</td></tr>
+          <tr><td><code>normalize.ts</code></td>
+              <td>Normalizes emails, domains and names before they become evidence.</td></tr>
+          <tr><td><code>free-email-domains.ts</code></td>
+              <td>Refuses consumer mailbox domains as website evidence.</td></tr>
+          <tr><td><code>survivorship.ts</code></td>
+              <td>Chooses each combined field: highest-priority non-null, earliest
+                  <code>createDate</code>, conflicts and losing values retained.</td></tr>
+          <tr><td><code>provenance.ts</code></td>
+              <td>Reads the stored record of which source supplied each displayed field.</td></tr>
+          <tr><td><code>source-account.ts</code></td>
+              <td>Captures and records the provider account a credential points at.</td></tr>
+          <tr><td><code>crosswalk.ts</code></td>
+              <td>Parses imported explicit pairs (<code>max 5000</code>) for cases names and
+                  emails cannot join.</td></tr>
+          <tr><td><code>assertions.ts</code></td>
+              <td>Human verdicts — <code>same</code> and <code>distinct</code> — and the
+                  canonical grouping of <code>same</code> pairs.</td></tr>
+          <tr><td><code>withdrawal.ts</code></td>
+              <td>Forgets imported crosswalk pairs and reassesses the affected accounts.</td></tr>
+          <tr><td><code>resolve-after-sync.ts</code></td>
+              <td>Runs the pass without ever failing the sync that preceded it.</td></tr>
+          <tr><td><code>mapping-retarget.ts</code></td>
+              <td>Pure decisions for a one-off migration of mapping defaults. Not runtime
+                  logic.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>How it fits</h2>
+
+    <ul>
+      <li><strong>Resolution is per owner, not per integration.</strong> A single
+          connection cannot see that the same company exists in three of them, so the
+          pass runs across all of an owner's records after a sync.</li>
+      <li><strong>Evidence has kinds and precedence.</strong> An explicit cross-reference
+          is strongest, then a shared company email, then a shared website domain, then a
+          shared contact email. Free mailbox domains are refused as domain evidence, or
+          every Gmail customer would become one company.</li>
+      <li><strong>Keys remember their source.</strong> A key records the provider
+          account, the customer or contact row that offered it, and when it was last
+          seen. That is what makes re-keying and deletion decidable without guessing.</li>
+      <li><strong>Assertions outrank inference.</strong> “Same company” and “not this
+          company” are read by the resolver and never written by it, so a human verdict
+          survives every later pass. <code>same</code> pairs are processed as a unit, not
+          one member at a time, which is what keeps the outcome independent of row
+          order.</li>
+      <li><strong>Survivorship is per field.</strong> The highest-priority connection
+          with a non-null value wins; a blank never beats a present value. Creation date
+          is the exception: the earliest reported date wins.</li>
+      <li><strong>Losing values are kept.</strong> Provenance names the winning source
+          record, field, value and observation time, and retains the losers with the
+          reason they lost — including ordinary priority losses, not only ties.</li>
+      <li><strong>The resolver never merges on a guess.</strong> If two accounts both claim
+          a customer's keys, it picks a home deterministically and reports the rest as
+          <code>key_claimed_elsewhere</code>; it does not re-parent anyone else.</li>
+      <li><strong>Absence does not retire a key.</strong> A key that stops being offered
+          stays put, because splitting a company on a temporary omission is worse than a
+          stale join. Deletion and explicit withdrawal are the retirement paths.</li>
+    </ul>
+
+    <h2>Rules worth knowing</h2>
+
+    <ul>
+      <li><strong>Total.</strong> Every customer ends with a non-null
+          <code>customerAccountId</code>; one with no usable key gets a singleton.</li>
+      <li><strong>Idempotent.</strong> A second pass over unchanged data creates no
+          account, moves no customer and inserts no key. It only refreshes
+          <code>lastSeenAt</code>.</li>
+      <li><strong>Order-independent.</strong> Shuffling the input rows yields the same
+          partition. That is why loading has a canonical order and <code>same</code>
+          groups are handled as a unit.</li>
+      <li><strong>A <code>distinct</code> verdict is never overridden by an inferred
+          key.</strong> It is the one input the resolver will not revise.</li>
+      <li><strong>Priority never changes membership.</strong> It decides whose version of
+          a field is displayed, not which records are grouped.</li>
+      <li><strong>Failure is contained.</strong> <code>resolveAfterSync()</code> logs and
+          swallows a resolver error; the sync already succeeded, and the next pass simply
+          retries.</li>
+    </ul>
+
+    <h2>Open this when…</h2>
+
+    <ul>
+      <li>Two records for the same company are not appearing under one account.</li>
+      <li>Two unrelated companies have been grouped together.</li>
+      <li>A combined field shows an unexpected source or value.</li>
+      <li>A human “same” or “not this company” verdict is not being honoured.</li>
+      <li>Deleting a connection or importing a crosswalk changed account membership.</li>
+      <li>The Accounts screen shows a field conflict.</li>
+    </ul>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="providers.html">← Providers</a>
+      <a class="btn is-next" href="connections.html">Connection lifecycle →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>
