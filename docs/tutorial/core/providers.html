@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Providers — Core Tutorial — Integration Platform</title>
+<meta name="description" content="How src/core defines provider plugs, shares one HTTP failure policy, and organizes one folder per outside system.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html" class="active" aria-current="page">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Providers
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Subsystem</p>
+      <h1>Providers</h1>
+      <p>Each outside system gets one folder under <code>providers/</code>. A provider
+         knows how to authenticate, page and interpret its own API; it holds no
+         orchestration and no direct database access. The engine decides when to call it,
+         and the shared HTTP client owns the failure policy every provider needs.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Role</dt>
+      <dd>Translate between one provider's API and the core's handler contract.</dd>
+      <dt>Called by</dt>
+      <dd>The sync engine, field discovery, OAuth service and API-key connect flow.</dd>
+      <dt>Calls</dt>
+      <dd><code>providers/http.ts</code> for requests; provider APIs over the network.</dd>
+      <dt>Key entry</dt>
+      <dd><code>provider.ts</code> and the per-function <code>*-handler.ts</code> files</dd>
+    </dl>
+
+    <h2>Key files</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">File</th><th scope="col">Responsibility</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>http.ts</code></td>
+              <td>Shared provider HTTP session and failure policy: 401 refresh once, 429
+                  bounded inline retry, 5xx run-level retry, other fails the run.</td></tr>
+          <tr><td><code>defaults-registry.ts</code></td>
+              <td>Suggested mappings keyed <code>(function, provider)</code>, applied only
+                  when a connection has no saved rules.</td></tr>
+          <tr><td><code>connect-url.ts</code></td>
+              <td><code>connectHrefFor()</code> and <code>draftConnectHrefFor()</code>,
+                  choosing the OAuth route or the API-key page.</td></tr>
+          <tr><td><code>&lt;provider&gt;/provider.ts</code></td>
+              <td>The <code>ProviderDefinition</code>: name, auth shape, endpoints, API
+                  base and tenant-scope hooks.</td></tr>
+          <tr><td><code>&lt;provider&gt;/api.ts</code></td>
+              <td>HTTP calls, pagination and response shapes for that provider.</td></tr>
+          <tr><td><code>&lt;provider&gt;/discovery.ts</code></td>
+              <td>The field list offered to the mapping editor, usually from the
+                  provider's own schema endpoint.</td></tr>
+          <tr><td><code>&lt;provider&gt;/defaults.ts</code></td>
+              <td>Default rules for each function the provider supports.</td></tr>
+          <tr><td><code>&lt;provider&gt;/*-handler.ts</code></td>
+              <td>One sync handler per function/provider pair, yielding raw records in the
+                  provider's shape.</td></tr>
+          <tr><td><code>&lt;provider&gt;/fixtures.ts</code></td>
+              <td>Deliberately awkward sample records used to exercise the handlers.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>How it fits</h2>
+
+    <ul>
+      <li><strong>The provider definition is the plug.</strong> It declares the
+          credential kind, endpoints, authorize/token hooks and external-id scope. The
+          registry validates the hooks required by that shape at startup.</li>
+      <li><strong>Two credential kinds, one contract.</strong> HubSpot, Salesforce and
+          the Mock CRM use OAuth authorization-code. Metrifox, Stripe, Chargebee and
+          Stigg use a static API key, each with a different header or auth scheme. The
+          difference is absorbed by the provider definition, not by a branch in the sync
+          loop.</li>
+      <li><strong>Handlers yield, they do not write.</strong> A handler pages the
+          provider and yields raw records plus a completeness signal. The engine maps and
+          writes them; the handler never imports the database.</li>
+      <li><strong>One HTTP policy is shared.</strong> <code>http.ts</code> refreshes on
+          401 and retries once, waits and retries the same request on 429 so pagination
+          resumes at the same cursor, and treats 5xx as retryable at the run level.
+          Everything else fails the run with what was already written kept.</li>
+      <li><strong>Discovery is optional.</strong> A provider without a registered
+          discoverer yields an empty list; the mapping editor falls back to free-text
+          entry rather than failing.</li>
+      <li><strong>Defaults are a starting point.</strong> They are seeded when a
+          connection is authorized, so it can sync immediately. A saved rule set is never
+          overwritten by defaults.</li>
+      <li><strong>Connect URLs follow the credential kind.</strong>
+          <code>connectHrefFor()</code> sends an API-key integration to its paste page
+          and an OAuth integration to its start route. Draft links use a distinct shape
+          so a draft id cannot be mistaken for an integration id.</li>
+    </ul>
+
+    <h2>Rules worth knowing</h2>
+
+    <ul>
+      <li><strong>Adding a provider is extending, not rebuilding.</strong> A new folder
+          plus registrations in <code>bootstrap.ts</code>; no route, UI or engine change
+          as long as the credential kind already exists.</li>
+      <li><strong>Interpretation belongs in the handler.</strong> A transform formats;
+          a handler decides what an unknown enum, boolean or status means. That is where
+          the unknown-value policy is visible and tested.</li>
+      <li><strong>Provider folders are testable without a database.</strong> They have
+          no Prisma imports, which is what lets the integration suite run them against
+          mocked provider APIs.</li>
+      <li><strong>Practice providers are opt-in.</strong> The Mock CRM and the in-app
+          Metrifox fake are served over real HTTP so the real client code runs unchanged,
+          but only when a deployment enables them.</li>
+    </ul>
+
+    <h2>Open this when…</h2>
+
+    <ul>
+      <li>You are adding a provider or a new function to an existing provider.</li>
+      <li>A sync fails on pagination, rate limiting, authentication or a 5xx.</li>
+      <li>The mapping editor's field suggestions are wrong or empty.</li>
+      <li>A reconnect sends the user to the wrong route.</li>
+      <li>A provider value lands with the wrong meaning rather than the wrong format.</li>
+    </ul>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="sync.html">← Sync</a>
+      <a class="btn is-next" href="identity.html">Identity resolution →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

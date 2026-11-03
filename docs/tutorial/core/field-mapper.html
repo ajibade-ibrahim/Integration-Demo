@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field mapping — Core Tutorial — Integration Platform</title>
+<meta name="description" content="How src/core validates, applies and serializes translation rules, applies transforms, and versions a mapping for each sync run.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html" class="active" aria-current="page">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Field mapping
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Subsystem</p>
+      <h1>Field mapping</h1>
+      <p>A translation rule says: take <em>this</em> provider field, optionally clean it
+         up, and store it as <em>that</em> field of ours. The mapper validates those
+         rules, applies them to one raw record, and gives each rule set a content
+         version so an older sync run stays explainable after an edit.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Role</dt>
+      <dd>Validate rule sets, apply them to provider records, and version the mapping.</dd>
+      <dt>Called by</dt>
+      <dd>The mapping editor and save route; <code>executeSync()</code> during every
+          refresh.</dd>
+      <dt>Calls</dt>
+      <dd><code>object-schema.ts</code> for valid targets; <code>transforms.ts</code> for
+          clean-up.</dd>
+      <dt>Key entry</dt>
+      <dd><code>validateMappings()</code>, <code>applyMappings()</code>,
+          <code>mappingVersionFor()</code></dd>
+    </dl>
+
+    <h2>Key files</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">File</th><th scope="col">Responsibility</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>field-mapper.ts</code></td>
+              <td><code>validateMappings</code>, <code>readPath</code>,
+                  <code>applyMappings</code>, <code>requestedSourcePaths</code>,
+                  <code>serializeMappings</code>, <code>deserializeMappings</code>.</td></tr>
+          <tr><td><code>transforms.ts</code></td>
+              <td><code>none</code>, <code>trim</code>, <code>lowercase</code>,
+                  <code>domainFromUrl</code> and <code>dateOnly</code>. Exports the
+                  host-extraction helper identity resolution also uses.</td></tr>
+          <tr><td><code>mapping-version.ts</code></td>
+              <td><code>mappingVersionFor()</code> and
+                  <code>MAPPING_RULE_VERSION</code> — the <code>v1-&lt;sha256&gt;</code>
+                  identity of a rule set.</td></tr>
+          <tr><td><code>types/mapping.ts</code></td>
+              <td><code>FieldMappingRule</code>, <code>FieldMappingConfig</code>,
+                  <code>MappedRecord</code>, violations and serialized shapes.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>How it fits</h2>
+
+    <ul>
+      <li><strong>Validation is function-scoped.</strong>
+          <code>validateMappings(functionName, rules)</code> checks every rule and
+          reports every violation at once. A rule targeting an object the function does
+          not write is refused rather than saved and silently ignored.</li>
+      <li><strong>Targets resolve through the schema.</strong> Built-in fields,
+          <code>customFields.&lt;key&gt;</code> and
+          <code>crossRef.&lt;provider&gt;</code> are all resolved by
+          <code>resolveTargetField()</code>, so the mapper never keeps a second list.</li>
+      <li><strong>Application reads one raw record.</strong>
+          <code>applyMappings()</code> walks each rule, reads the provider path, applies
+          the transform and writes the target. A rule whose source is absent yields a
+          blank value, not a missing field, so records keep a stable shape.</li>
+      <li><strong>Absent sources are visible to providers.</strong>
+          <code>requestedSourcePaths()</code> tells a handler which provider fields the
+          current rules actually ask for. Handlers use it to skip whole passes — for
+          example, Stripe's catalog handler does not fan out per-product feature
+          requests when no feature field is mapped.</li>
+      <li><strong>Transforms format; they do not interpret.</strong> Trim, lowercase,
+          extract a domain, keep a date. Mapping one provider vocabulary onto another
+          belongs in a handler, where an unknown value can have an explicit policy
+          instead of a hidden guess.</li>
+      <li><strong>Versions are content-addressed.</strong> The version is computed from
+          the rules themselves, not row ids or insertion order, so reordering rules
+          does not create a new version. <code>MAPPING_RULE_VERSION</code> is folded in
+          and bumped when a deploy changes what a rule means.</li>
+      <li><strong>The run records the version before fetching.</strong> The snapshot is
+          written to the sync run before the first provider request and never
+          recomputed, so editing the mapping during a refresh affects the next run, not
+          the one already paging.</li>
+    </ul>
+
+    <h2>Rules worth knowing</h2>
+
+    <ul>
+      <li><strong>Object qualification is the safety property.</strong> Without it, a
+          contact rule could validate against a customer record and write the wrong
+          shape.</li>
+      <li><strong>Defaults are seeded, never enforced.</strong> A connection can sync
+          immediately because defaults are pre-filled, but
+          <code>seedMappingsIfEmpty</code> refuses to overwrite rules a user saved.</li>
+      <li><strong>Two transforms must not diverge.</strong>
+          <code>domainFromUrl</code> is exported because identity resolution needs the
+          same host extraction. A second implementation would silently fail to join
+          records rather than error.</li>
+      <li><strong>Serialization is explicit.</strong> Rules are stored as a serialized
+          config with a schema version; <code>deserializeMappings()</code> is the
+          matching read path.</li>
+    </ul>
+
+    <h2>Open this when…</h2>
+
+    <ul>
+      <li>A mapping save is refused and you need the exact violation.</li>
+      <li>A synced value is blank or has the wrong shape.</li>
+      <li>A provider pass is skipped because no rule asked for its fields.</li>
+      <li>You need to explain which rules an older run used.</li>
+      <li>You are adding a transform and need to know whether it belongs here or in a
+          handler.</li>
+    </ul>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="registries.html">← Registries</a>
+      <a class="btn is-next" href="sync.html">Sync →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

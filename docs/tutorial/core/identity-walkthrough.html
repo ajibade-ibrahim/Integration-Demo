@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Identity walkthrough — Core Tutorial — Integration Platform</title>
+<meta name="description" content="Walk identity resolution end to end with the three-connection Acme example: evidence keys, account placement, survivorship and provenance.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html" class="active" aria-current="page">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Identity walkthrough
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Deep dive</p>
+      <h1>Identity walkthrough</h1>
+      <p>Three systems describe the same company. Resolution turns them into three
+         customer rows, keeps those rows untouched, and produces one combined
+         account. This walkthrough uses the exact fixture behind
+         <code>tests/integration/identity-resolution.test.ts</code>, so every
+         intermediate key and final count is assertable.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Entry</dt>
+      <dd><code>resolveIdentities(userId, trigger)</code></dd>
+      <dt>Scope</dt>
+      <dd>One owner — all their connections at once</dd>
+      <dt>Triggered by</dt>
+      <dd>After sync, manually, or after a deletion or withdrawal</dd>
+      <dt>Invariants</dt>
+      <dd>Total, idempotent, order-independent</dd>
+      <dt>Regression test</dt>
+      <dd><code>tests/integration/identity-resolution.test.ts</code></dd>
+    </dl>
+
+    <h2>The input</h2>
+
+    <p>One tenant has three connections and four customers. Priorities are all
+       different, so every field has an unambiguous winner and the run raises no
+       issues.</p>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">Connection</th><th scope="col">Priority</th><th scope="col">Record</th><th scope="col">Values supplied</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Stripe</td>
+            <td>10</td>
+            <td><code>cus_1</code> — Acme</td>
+            <td>Name <em>Acme Corp</em>, email <code>billing@acme.example</code>,
+                created 2023-04-01</td>
+          </tr>
+          <tr>
+            <td>HubSpot (<code>portal-1</code>)</td>
+            <td>50</td>
+            <td><code>12345</code> — Acme</td>
+            <td>Name <em>Acme Manufacturing Inc</em>, domain
+                <code>acme.example</code>, industry Manufacturing, type customer,
+                created 2019-01-15</td>
+          </tr>
+          <tr>
+            <td>HubSpot contact</td>
+            <td>50</td>
+            <td><code>hs-c-1</code></td>
+            <td><code>Billing@Acme.example</code> — mixed case on purpose</td>
+          </tr>
+          <tr>
+            <td>Metrifox (<code>acct-9</code>)</td>
+            <td>100</td>
+            <td><code>m-1</code> — Acme</td>
+            <td>Name <em>Acme</em>, email <code>billing@acme.example</code></td>
+          </tr>
+          <tr>
+            <td>Stripe</td>
+            <td>10</td>
+            <td><code>cus_2</code> — Northwind</td>
+            <td><code>ap@northwind.example</code> — must stay separate</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Step 1: load and scope</h2>
+
+    <p><code>loadResolutionInput()</code> returns every customer in a canonical
+       order: priority, provider name, instance label, then record id. That chain
+       ends in a unique column, so input order cannot decide the result.</p>
+
+    <p><code>buildForeignScopes()</code> decides which provider ids a
+       cross-reference may safely name. A provider qualifies only when every
+       connection of that provider resolves to the same scope value:</p>
+
+    <ul>
+      <li>Stripe is <code>global</code>, so its scope segment is empty.</li>
+      <li>HubSpot is <code>tenant</code>; metadata carries
+          <code>hubId: "portal-1"</code>.</li>
+      <li>Metrifox is <code>tenant</code>; metadata carries
+          <code>accountId: "acct-9"</code>.</li>
+    </ul>
+
+    <p>Two HubSpot portals, or two Metrifox accounts, would make that provider's
+       foreign references ambiguous and drop them. A self-key is unaffected: it
+       knows exactly which connection it came from.</p>
+
+    <h2>Step 2: build evidence</h2>
+
+    <p><code>buildEvidence()</code> is pure and fail-closed. A key it cannot build
+       correctly is not built at all, because a wrong key merges companies while a
+       missing key only costs a join.</p>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">Kind</th><th scope="col">Source</th><th scope="col">Why</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>external_ref</code></td><td>Self id, plus mapped and imported cross-references</td><td>Strongest; a hard id is not a guess</td></tr>
+          <tr><td><code>email</code></td><td>Customer email, legacy custom fields, linked contact emails</td><td>Universal; every provider maps a contact email</td></tr>
+          <tr><td><code>domain</code></td><td>The mapped <code>domain</code> column only</td><td>Weakest; never harvested from an email host</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Emails are trimmed and lowercased, and plus-tags are stripped. Dots are
+       preserved, because collapsing them is Gmail-specific and would merge two
+       different people at other providers. Free mailbox hosts are classified as
+       <code>freemail</code>: they may still be an email key, but they never become a
+       domain key.</p>
+
+    <p>This fixture indexes exactly seven keys:</p>
+
+    <pre class="tut-code"><code>domain:acme.example
+email:ap@northwind.example
+email:billing@acme.example
+external_ref:hubspot:portal-1:12345
+external_ref:metrifox:acct-9:m-1
+external_ref:stripe::cus_1
+external_ref:stripe::cus_2</code></pre>
+
+    <p>There is one <code>email:billing@acme.example</code> though three records
+       supplied it: Stripe's own field, the HubSpot contact (after normalization)
+       and Metrifox. The first occurrence keeps the strongest source label; the
+       other two collapse into it.</p>
+
+    <h2>Step 3: cluster and place</h2>
+
+    <p>Clustering applies human <code>same</code> assertions before any key is
+       looked up. A <code>same</code> group pools its evidence and is placed as one
+       unit, not member by member. Without that, whichever member happened to be
+       processed first would choose the home for the group, and the result would
+       depend on row order.</p>
+
+    <p>Each cluster then reads fresh matches from the database:</p>
+
+    <ol>
+      <li><strong>Find accounts by key.</strong> Any existing account holding one of
+          the cluster's keys is a candidate.</li>
+      <li><strong>Apply <code>distinct</code> vetoes.</strong> An account the user
+          has ruled out is dropped, and the shared key is reported as
+          <code>blocked_by_assertion</code> — once per customer/account pair, not
+          once per key.</li>
+      <li><strong>Drop self-key tautologies.</strong> A record's own id says “this
+          record is itself”; it is evidence for other records naming that id, never
+          a reason to move this one.</li>
+      <li><strong>Choose a winner.</strong> Strongest key kind, then oldest account,
+          then smallest id. The chain ends in a unique column, so it cannot tie.</li>
+      <li><strong>Create, attach or absorb.</strong> A cluster with no candidates
+          creates an account from its first member. Otherwise the member moves to
+          the winner; a singleton account it already held is absorbed, carrying its
+          keys over. Populated accounts are never merged.</li>
+    </ol>
+
+    <p>In this fixture the Acme Stripe record (priority 10) is processed before
+       HubSpot (50) and Metrifox (100), so it creates the Acme account and indexes
+       its self-key and email. HubSpot then matches that account on the contact's
+       normalized email and joins. Metrifox matches on the same email and joins.
+       Northwind's email matches nothing and gets its own account. The two Stripe
+       records have equal priority, so their relative order comes from the unique id
+       and has no effect: they share no key.</p>
+
+    <p>File: <code>src/core/identity/identity-resolver.ts</code>, plus
+       <code>assertions.ts</code> and <code>evidence.ts</code>.</p>
+
+    <h2>Step 4: survivorship</h2>
+
+    <p>After placement, <code>recomputeAccountFields()</code> rebuilds every account
+       from its final membership. The rule that matters most: <strong>a null is not
+       an opinion.</strong> Each field is contested only among the members that
+       actually supply it.</p>
+
+    <ul>
+      <li><strong>Name and email</strong> go to Stripe (priority 10):
+          <em>Acme Corp</em> and <code>billing@acme.example</code>.</li>
+      <li><strong>Industry, domain and type</strong> go to HubSpot (priority 50),
+          because Stripe supplies none of them. A whole-row implementation would
+          have blanked all three the moment Stripe was ranked first.</li>
+      <li><strong>Creation date</strong> goes to HubSpot's 2019 value under the
+          <code>earliest</code> policy. Stripe saw the company in 2023, but it
+          demonstrably existed in 2019; rank would produce a date known to be
+          wrong.</li>
+      <li><strong>Empty strings</strong> count as no value, so a blank from a
+          high-ranked source cannot beat a real value from a lower one.</li>
+    </ul>
+
+    <p>Survivorship never decides membership. It receives the members it is told
+       about and returns values; changing a priority changes what an account
+       reports, never who is in it.</p>
+
+    <p>File: <code>src/core/identity/survivorship.ts</code>.</p>
+
+    <h2>Step 5: provenance</h2>
+
+    <p>Each winning field carries a source-evidence entry: integration, provider,
+       instance label, customer id, external id, evidence key and value, and
+       observation time. Losers are retained in <code>alternatives</code> with the
+       reason they lost — even when the priorities are unequal and no conflict
+       issue is raised.</p>
+
+    <p>When two members at <em>equal priority</em> supply different values, the run
+       raises <code>field_conflict</code>. The value is still deterministic, but the
+       issue tells the user that the tiebreak was alphabetical rather than
+       meaningful. <code>earliest</code> fields raise no conflict: there is nothing
+       to prefer when the rule is “the oldest one”.</p>
+
+    <p>File: <code>src/core/identity/provenance.ts</code> reads both the current
+       provenance shape and the older bare-integration-id shape.</p>
+
+    <h2>Step 6: the result</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">Observable</th><th scope="col">Expected</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Grouping</td><td><code>[["12345", "cus_1", "m-1"], ["cus_2"]]</code></td></tr>
+          <tr><td>Accounts created</td><td>2</td></tr>
+          <tr><td>Customers linked</td><td>4</td></tr>
+          <tr><td>Keys indexed</td><td>7</td></tr>
+          <tr><td>Run status</td><td><code>success</code>, no issues</td></tr>
+          <tr><td>Second pass</td><td>0 created, 0 moved, 0 keys; only <code>lastSeenAt</code> refreshes</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>What can go wrong</h2>
+
+    <ul>
+      <li><strong><code>key_claimed_elsewhere</code></strong> — two accounts hold
+          one address and only a human can settle it. The pass picks a home and
+          does not re-parent anyone else.</li>
+      <li><strong><code>blocked_by_assertion</code></strong> — a shared key was
+          vetoed by a <code>distinct</code> verdict. The report names the key and
+          the customer it would have joined.</li>
+      <li><strong><code>field_conflict</code></strong> — two equally ranked sources
+          disagree on a field. The value is chosen deterministically; the issue
+          says the preference was not actually expressed.</li>
+      <li><strong><code>key_race_lost</code></strong> — a concurrent pass inserted
+          the key between the lookup and the write. It resolves itself next pass
+          and is not shown to the user.</li>
+      <li><strong><code>discarded</code></strong> — a pass was already running for
+          this owner. No run row is written; the owning pass will finish the work.</li>
+    </ul>
+
+    <h2>Checkpoints</h2>
+
+    <ul>
+      <li><code>npx vitest run tests/unit/identity-evidence.test.ts</code> — the
+          key emission table above, including the mixed-case normalization.</li>
+      <li><code>npx vitest run tests/unit/identity-survivorship.test.ts</code> —
+          null never wins, per-field composition, earliest date and provenance
+          alternatives.</li>
+      <li><code>npx vitest run tests/unit/identity-assertions.test.ts</code> —
+          <code>same</code> grouping and <code>distinct</code> vetoes.</li>
+      <li><code>npx vitest run tests/integration/identity-resolution.test.ts</code>
+          — the exact three-connection fixture and the two final groupings. Needs
+          <code>TEST_DATABASE_URL</code>.</li>
+    </ul>
+
+    <div class="tut-note">
+      <p><strong>The asymmetry to remember.</strong> A missed merge costs one
+         <code>same</code> assertion. A false merge has no user-facing undo. Every
+         ambiguous decision in the resolver therefore errs toward leaving records
+         apart.</p>
+    </div>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="connect-flow.html">← Connect flow</a>
+      <a class="btn is-next" href="add-a-provider.html">Add a provider →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

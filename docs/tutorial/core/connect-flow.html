@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect flow — Core Tutorial — Integration Platform</title>
+<meta name="description" content="Follow both credential kinds from draft to authorized integration: OAuth consent and callback, API-key probing, finalize, credential storage, reconnect and re-key.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html" class="active" aria-current="page">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Connect flow
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Deep dive</p>
+      <h1>Connect flow</h1>
+      <p>Both credential kinds take the same shape: configure a draft, prove a
+         credential, then create the integration. OAuth proves it with a consent
+         screen and a code exchange; an API key proves it with a probe. Everything
+         after that proof — the row, the encrypted credential, the authorized
+         status, the default mappings — is shared.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>OAuth providers</dt>
+      <dd>HubSpot, Salesforce, Mock CRM</dd>
+      <dt>API-key providers</dt>
+      <dd>Metrifox, Stripe, Chargebee, Stigg</dd>
+      <dt>Shared finish</dt>
+      <dd><code>finalizeConnection()</code></dd>
+      <dt>Draft lifetime</dt>
+      <dd>30 minutes, table-backed</dd>
+      <dt>Credential storage</dt>
+      <dd>AES-256-GCM in <code>oauth/crypto.ts</code></dd>
+    </dl>
+
+    <h2>The shared shape</h2>
+
+    <ul class="tut-flow">
+      <li>
+        <span class="tut-flow-name">1. Draft</span>
+        <span class="tut-flow-owner">Provider + functions, no row</span>
+      </li>
+      <li>
+        <span class="tut-flow-name">2. Prove</span>
+        <span class="tut-flow-owner">Consent or key probe</span>
+      </li>
+      <li>
+        <span class="tut-flow-name">3. Create</span>
+        <span class="tut-flow-owner">Row + encrypted credential</span>
+      </li>
+      <li>
+        <span class="tut-flow-name">4. Finalize</span>
+        <span class="tut-flow-owner">Authorized + seeded mappings</span>
+      </li>
+    </ul>
+
+    <p>The draft is the design decision that makes failed attempts cheap. A draft
+       is a row in its own table, not an <code>Integration</code>: provider,
+       functions, label and an expiry. It survives a rejected credential so the
+       user can retry without re-picking, and it is consumed only after a real
+       integration exists.</p>
+
+    <p>File: <code>src/core/integrations/draft-store.ts</code>, created by
+       <code>POST /api/integrations</code>.</p>
+
+    <h2>OAuth: draft to authorized</h2>
+
+    <h3>1. Build the authorization request</h3>
+
+    <p>The start route accepts a <code>draftId</code> for a first connect or an
+       <code>integrationId</code> for a reconnect. It checks that the URL's
+       provider segment matches the stored record, then calls
+       <code>buildAuthorizationRequest()</code>:</p>
+
+    <ul>
+      <li><code>resolveScopes()</code> unions the scopes of every selected function
+          for that provider. Adding a function later widens the requirement, which
+          is why <code>checkReauthorization()</code> exists.</li>
+      <li><code>issueState()</code> creates a single-use, expiring state token whose
+          subject is either the draft or the existing integration.</li>
+      <li>The provider's own <code>buildAuthorizeParams()</code> hook supplies the
+          quirks, and the browser is redirected to the consent screen.</li>
+    </ul>
+
+    <p>Files: <code>src/app/api/oauth/[provider]/start/route.ts</code>,
+       <code>src/core/oauth/oauth-service.ts</code>,
+       <code>src/core/oauth/state-store.ts</code>.</p>
+
+    <h3>2. Handle the callback</h3>
+
+    <p>The callback route calls <code>handleCallback()</code>. State is validated
+       and consumed before the authorization code is used, so a mismatched or
+       replayed state discards the code unexchanged.</p>
+
+    <ul>
+      <li><strong>First connect.</strong> The draft branch checks the provider and
+          capability again, exchanges the code, and calls
+          <code>createIntegrationFromDraft()</code>. The draft is discarded only
+          after the integration and credential are written.</li>
+      <li><strong>Reconnect.</strong> The existing row is updated, not recreated.
+          A provider denial or failed exchange sets <code>error</code> and keeps
+          the row, its mappings and its synced records. Deleting would lose data
+          that a reconnect is supposed to preserve.</li>
+      <li><strong>Granted scopes.</strong> The provider's response is recorded when
+          it names scopes. Otherwise the requested scopes are used. Recording the
+          grant rather than the request is what makes a later coverage check
+          meaningful.</li>
+    </ul>
+
+    <p>File: <code>src/core/oauth/oauth-service.ts</code>.</p>
+
+    <h2>API key: paste, probe, create</h2>
+
+    <p>An API-key provider has no authorization server, so the draft connect URL
+       points to <code>/integrations/new/connect?draft=…</code> instead. The submit
+       route is <code>POST /api/integrations/connect</code>, body-only and
+       <code>no-store</code>: a key in a query string would land in logs, history
+       and the <code>Referer</code> header.</p>
+
+    <p><code>connectDraftWithApiKey()</code> performs three checks in order:</p>
+
+    <ol>
+      <li><strong>Local shape.</strong> <code>validateKeyShape()</code> rejects an
+          empty value or whitespace before any network call. It deliberately does
+          not guess a provider's key format; a false rejection is worse than a
+          round trip.</li>
+      <li><strong>A real probe.</strong> <code>probeCredential()</code> makes the
+          cheapest authenticated request the provider offers. A
+          <code>401</code>/<code>403</code> must throw
+          <code>InvalidApiKeyError</code>; anything else is an ordinary failure and
+          is reported as retryable.</li>
+      <li><strong>Create and finalize.</strong> Only a proven key reaches
+          <code>createIntegrationFromDraft()</code>. The draft stays intact on a
+          rejected key, so the user can paste again.</li>
+    </ol>
+
+    <p>The stored token has no expiry: <code>NON_EXPIRING_AT</code> plus
+       <code>metadata.authKind = "apiKey"</code> keeps it off the refresh path. The
+       metadata also keeps a non-secret prefix and last four characters so a user
+       can recognise which key is connected.</p>
+
+    <p>Files: <code>src/core/credentials/api-key-service.ts</code>,
+       <code>src/core/providers/&lt;provider&gt;/provider.ts</code>,
+       <code>src/app/api/integrations/connect/route.ts</code>.</p>
+
+    <h2>The shared finish</h2>
+
+    <p><code>finalizeConnection()</code> is the only post-credential path:</p>
+
+    <ol>
+      <li>Refuses any function/provider pair without a handler. This is the last
+          guard before a connection can exist but never sync.</li>
+      <li>Records the source account. For a global provider the scope value is
+          deliberately empty; for a tenant-scoped provider it must name the
+          account, or no self-key is emitted.</li>
+      <li>Marks the integration <code>active</code>.</li>
+      <li>Seeds default mappings with <code>seedMappingsIfEmpty()</code> — only
+          when the function has no saved rules.</li>
+    </ol>
+
+    <p>File: <code>src/core/integrations/connection.ts</code>.</p>
+
+    <h3>Why defaults matter</h3>
+
+    <p>A connection with no rules would authorize successfully and then write
+       nothing. Seeding is what makes “connected” mean “able to sync now”. It is
+       also why reconnecting is safe: seeding never overwrites a user's edits.</p>
+
+    <h2>Credential storage and refresh</h2>
+
+    <ul>
+      <li><strong>Encryption.</strong> Credentials are encrypted with AES-256-GCM
+          and stored as <code>v1.&lt;iv&gt;.&lt;tag&gt;.&lt;ciphertext&gt;</code>.
+          Every write uses a fresh IV, and a tampered payload fails to decrypt
+          rather than returning garbage.</li>
+      <li><strong>No fallback key.</strong> <code>TOKEN_ENCRYPTION_KEY</code> must
+          be present and decode to 32 bytes. A key committed to the code is not
+          protection.</li>
+      <li><strong>Proactive refresh.</strong> <code>getValidToken()</code> refreshes
+          five minutes before expiry. A provider that omits a new refresh token on
+          refresh keeps the stored one.</li>
+      <li><strong>Mid-run refresh.</strong> OAuth handlers receive
+          <code>refreshAccessToken</code> so a 401 on page 40 costs one request, not
+          the whole run. API-key handlers do not: a 401 there is terminal and
+          becomes a reconnect prompt.</li>
+      <li><strong>Coverage.</strong> <code>checkReauthorization()</code> compares
+          the stored grant with the scopes the current function set needs, and
+          names the uncovered functions so the UI can say “reconnect to add
+          Support”.</li>
+    </ul>
+
+    <p>Files: <code>src/core/oauth/crypto.ts</code>,
+       <code>src/core/oauth/oauth-service.ts</code>,
+       <code>src/core/repositories/token-repository.ts</code>.</p>
+
+    <h2>Reconnect and re-key</h2>
+
+    <p>Reconnecting is intentionally different from connecting for the first time.
+       The integration may already hold edited mappings, synced records and resolved
+       accounts, so the failure policy flips:</p>
+
+    <ul>
+      <li><strong>OAuth reconnect failure</strong> sets the status to
+          <code>error</code>. Nothing is deleted.</li>
+      <li><strong>API-key re-key rejection</strong> sets <code>error</code> and
+          keeps the row. A transient probe failure changes nothing, because it is
+          not evidence about the key.</li>
+      <li><strong>API-key re-key success</strong> saves the new credential, records
+          the source account, and re-runs <code>finalizeConnection()</code>.</li>
+    </ul>
+
+    <p>File: <code>src/core/credentials/api-key-service.ts</code>.</p>
+
+    <h2>Failure matrix</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">Situation</th><th scope="col">What happens</th><th scope="col">What survives</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Draft expires</td><td>Refused with “start it again” (410 on the OAuth start route)</td><td>Nothing — there was never an integration</td></tr>
+          <tr><td>User denies consent</td><td>Callback reports the denial</td><td>The draft, until its TTL</td></tr>
+          <tr><td>State missing or replayed</td><td>Callback refuses before using the code</td><td>Everything; no credential is stored</td></tr>
+          <tr><td>Unsupported function/provider</td><td>Refused before the draft or at finalize</td><td>Nothing connected</td></tr>
+          <tr><td>API key rejected (401/403)</td><td>“Provider rejected that key”</td><td>The draft, so the user can re-paste</td></tr>
+          <tr><td>Provider unreachable during probe</td><td>502 with retryable true</td><td>The draft; the verdict is “try again”</td></tr>
+          <tr><td>Credential save fails</td><td>Created row rolled back</td><td>The draft, unless discard already ran</td></tr>
+          <tr><td>Reconnect denied</td><td>Status becomes <code>error</code></td><td>The row, mappings, records and accounts</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Checkpoints</h2>
+
+    <ul>
+      <li><code>npx vitest run tests/unit/oauth-crypto.test.ts</code> — encryption,
+          state single-use and expiry, with no database.</li>
+      <li><code>npx vitest run tests/integration/draft-connect.test.ts</code> —
+          accepted and rejected keys, draft preservation, replay prevention and
+          re-keying. Needs <code>TEST_DATABASE_URL</code>.</li>
+      <li><code>npx vitest run tests/unit/provider-auth-kinds.test.ts</code> — the
+          registration rules for both credential shapes.</li>
+      <li>Walk the Mock CRM flow in the browser; every redirect and the final
+          <code>?connected=1</code> landing are the OAuth branch above.</li>
+      <li>Inspect <code>Integration</code>, <code>IntegrationDraft</code>,
+          <code>OAuthToken</code> and <code>FieldMapping</code> rows in Prisma Studio
+          before and after a failed attempt.</li>
+    </ul>
+
+    <div class="tut-note">
+      <p><strong>The invariant.</strong> If the credential is not proven, there is
+         nothing to delete. Every failure path is designed to preserve that.</p>
+    </div>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="trace-a-sync.html">← Trace a sync</a>
+      <a class="btn is-next" href="identity-walkthrough.html">Identity walkthrough →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

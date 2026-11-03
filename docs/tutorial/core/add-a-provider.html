@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add a provider — Core Tutorial — Integration Platform</title>
+<meta name="description" content="Extend src/core with a new provider: definition, sync handler, defaults, optional discovery and the bootstrap registrations that make it connectable.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html" class="active" aria-current="page">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Add a provider
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Deep dive</p>
+      <h1>Add a provider</h1>
+      <p>A provider is a folder plus a few registrations. If the credential kind
+         already exists, no route, page or engine branch changes: the sync loop reads
+         the definition and the handler from the registries. This walkthrough adds a
+         small API-key CRM that syncs Identity.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Template</dt>
+      <dd><code>providers/metrifox/</code> — API key, identity only</dd>
+      <dt>OAuth template</dt>
+      <dd><code>providers/mock/</code> — full OAuth, fixtures, no network</dd>
+      <dt>New files</dt>
+      <dd><code>provider.ts</code>, <code>identity-handler.ts</code>,
+          <code>defaults.ts</code>, optional <code>discovery.ts</code></dd>
+      <dt>Registration</dt>
+      <dd><code>bootstrap.ts</code> and <code>defaults-registry.ts</code></dd>
+      <dt>Contract</dt>
+      <dd><code>types/registry.ts</code></dd>
+    </dl>
+
+    <h2>First, decide the facts</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">Decision</th><th scope="col">Why it cannot be deferred</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Credential kind</td>
+            <td>OAuth needs authorize/token hooks and env credentials. An API key needs a header, a paste page and a probe. The union is discriminated, so the compiler forces the choice.</td>
+          </tr>
+          <tr>
+            <td><code>externalIdScope</code></td>
+            <td><code>global</code> means an id names one record everywhere. <code>tenant</code> means it only makes sense inside one account, and then <code>tenantScopeValue</code> is required.</td>
+          </tr>
+          <tr>
+            <td>Functions</td>
+            <td>Each function needs a handler and a default rule set. Identity is the smallest useful start: two objects, one handler.</td>
+          </tr>
+          <tr>
+            <td>Objects</td>
+            <td>A handler may only claim objects its function owns. A catalog handler cannot declare <code>customer</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>For this walkthrough: provider <code>acme</code>, API key, tenant-scoped,
+       Identity only, objects <code>customer</code> and <code>contact</code>.</p>
+
+    <h2>Step 1: the definition</h2>
+
+    <p>Create <code>src/core/providers/acme/provider.ts</code>. The probe is the
+       important half: a rejected key must throw <code>InvalidApiKeyError</code>, and
+       any other failure must remain an ordinary error so the UI can offer a retry.</p>
+
+    <pre class="tut-code"><code>import { InvalidApiKeyError } from "../../credentials/errors";
+import type {
+  ApiKeyProviderAuth,
+  ProviderDefinition,
+  ProviderMetadata,
+} from "../../types/registry";
+
+export const ACME_PROVIDER_NAME = "acme";
+export const ACME_IDENTITY_SCOPES = ["customers:read", "contacts:read"] as const;
+
+const acmeAuth: ApiKeyProviderAuth = {
+  kind: "apiKey",
+  header: "Authorization",
+
+  instructions:
+    "In Acme, open Settings → API and create a read-only key. Paste it below.",
+  placeholder: "acme_live_…",
+
+  validateKeyShape(key: string): string | undefined {
+    if (key.trim() === "") return "Paste your Acme API key.";
+    if (/\s/.test(key)) return "Paste just the key value.";
+    return undefined;
+  },
+
+  async probeCredential(key: string): Promise&lt;ProviderMetadata&gt; {
+    const response = await fetch("https://api.acme.example/v1/me", {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      throw new InvalidApiKeyError("Acme rejected the key");
+    }
+    if (!response.ok) {
+      // Status only — a body may echo the request.
+      throw new Error(`Acme probe returned ${response.status}`);
+    }
+
+    const me = (await response.json()) as { workspaceId?: string };
+    return me.workspaceId === undefined
+      ? {}
+      : { workspaceId: me.workspaceId };
+  },
+};
+
+export const acmeProvider: ProviderDefinition = {
+  name: ACME_PROVIDER_NAME,
+  label: "Acme",
+  description: "A CRM with companies and contacts.",
+  auth: acmeAuth,
+  externalIdScope: "tenant",
+  tenantScopeValue: (metadata) => metadata["workspaceId"],
+};</code></pre>
+
+    <p>If <code>tenantScopeValue</code> returns <code>undefined</code>, resolution
+       emits no self-key for that connection. That is the fail-closed behaviour:
+       losing a join is recoverable; merging two tenants' company 12345 is not.</p>
+
+    <h2>Step 2: the handler</h2>
+
+    <p>Create <code>src/core/providers/acme/identity-handler.ts</code>. Use
+       <code>createProviderSession()</code> so 401, 429 and 5xx behaviour is the same
+       as every other provider. Do not import Prisma here.</p>
+
+    <pre class="tut-code"><code>import type { RawRecord, TargetObject } from "../../types/common";
+import type {
+  ExternalRefs,
+  HandlerContext,
+  SourcePage,
+  SyncHandler,
+} from "../../types/registry";
+import { asString, createProviderSession } from "../http";
+
+interface CompaniesPage {
+  companies: RawRecord[];
+  next?: string;
+}
+
+interface PeoplePage {
+  people: RawRecord[];
+  next?: string;
+}
+
+const SESSION = {
+  authHeaders: (key: string): Record&lt;string, string&gt; => ({
+    Authorization: `Bearer ${key}`,
+  }),
+  credentialNoun: "API key",
+} as const;
+
+export const acmeIdentityHandler: SyncHandler = {
+  objects: ["customer", "contact"],
+
+  async *fetchPages(ctx: HandlerContext): AsyncIterable&lt;SourcePage&gt; {
+    const session = createProviderSession(ctx, "Acme", SESSION);
+
+    let url: string | undefined = "https://api.acme.example/v1/companies";
+    while (url !== undefined) {
+      const body = (await session.getJson(url)) as CompaniesPage;
+      yield { object: "customer", records: body.companies };
+      url = body.next;
+    }
+
+    url = "https://api.acme.example/v1/people";
+    while (url !== undefined) {
+      const body = (await session.getJson(url)) as PeoplePage;
+      yield { object: "contact", records: body.people };
+      url = body.next;
+    }
+  },
+
+  externalIdOf(record: RawRecord): string | undefined {
+    return asString(record["id"]);
+  },
+
+  externalRefsOf(record: RawRecord, object: TargetObject): ExternalRefs {
+    if (object !== "contact") return {};
+    return { customer: asString(record["companyId"]) };
+  },
+};</code></pre>
+
+    <p>Customers <em>must</em> be yielded before contacts, because the writer
+       resolves a contact's link through the customer index. If a provider returns
+       both shapes together, buffer the contacts and flush them after the last
+       customer page — that is what Metrifox does.</p>
+
+    <h2>Step 3: default mappings</h2>
+
+    <p>Create <code>src/core/providers/acme/defaults.ts</code>. Every rule must
+       validate against the object schema; a broken default fails the connect, not
+       just the first sync. Seeds are applied only when the function has no rules.</p>
+
+    <pre class="tut-code"><code>import type { FieldMappingRule } from "../../types/mapping";
+
+export const acmeIdentityDefaults: FieldMappingRule[] = [
+  { sourceFieldPath: "name", targetObject: "customer", targetFieldPath: "name", transform: "none" },
+  { sourceFieldPath: "website", targetObject: "customer", targetFieldPath: "domain", transform: "domainFromUrl" },
+  { sourceFieldPath: "industry", targetObject: "customer", targetFieldPath: "industry", transform: "none" },
+  { sourceFieldPath: "createdAt", targetObject: "customer", targetFieldPath: "createDate", transform: "dateOnly" },
+  { sourceFieldPath: "name", targetObject: "contact", targetFieldPath: "name", transform: "none" },
+  { sourceFieldPath: "email", targetObject: "contact", targetFieldPath: "email", transform: "lowercase" },
+];</code></pre>
+
+    <p>Register the set in <code>providers/defaults-registry.ts</code>:</p>
+
+    <pre class="tut-code"><code>import { acmeIdentityDefaults } from "./acme/defaults";
+import { ACME_PROVIDER_NAME } from "./acme/provider";
+
+const DEFAULTS = {
+  // ...existing entries
+  [`identity:${ACME_PROVIDER_NAME}`]: acmeIdentityDefaults,
+};</code></pre>
+
+    <h2>Step 4: discovery (optional)</h2>
+
+    <p>Field discovery is what fills the mapping editor's source dropdown. It is
+       optional: without one, the editor falls back to free-text paths. If the
+       provider has a schema endpoint, add <code>discovery.ts</code> returning
+       <code>DiscoveredFieldDef[]</code> for each object; the result is cached for
+       an hour. Metrifox uses a hybrid: static fields plus keys sampled from one live
+       page.</p>
+
+    <h2>Step 5: register</h2>
+
+    <p>Add the provider import and registration to
+       <code>src/core/bootstrap.ts</code>:</p>
+
+    <pre class="tut-code"><code>import {
+  acmeProvider,
+  ACME_IDENTITY_SCOPES,
+  ACME_PROVIDER_NAME,
+} from "./providers/acme/provider";
+import { acmeIdentityHandler } from "./providers/acme/identity-handler";
+import { acmeFieldDiscovery } from "./providers/acme/discovery";
+
+// --- providers ---
+registerProvider(acmeProvider);</code></pre>
+
+    <p>Scopes are added to the <em>existing</em> Identity registration, not a new
+       one. Find its <code>scopesByProvider</code> map and add the provider entry:</p>
+
+    <pre class="tut-code"><code>scopesByProvider: scopeMap([
+  // ...existing providers
+  [ACME_PROVIDER_NAME, ACME_IDENTITY_SCOPES],
+]),</code></pre>
+
+    <p>Then register the handler, and the discoverer if you built one:</p>
+
+    <pre class="tut-code"><code>registerSyncHandler(IDENTITY_FUNCTION, ACME_PROVIDER_NAME, acmeIdentityHandler);
+registerFieldDiscovery(IDENTITY_FUNCTION, ACME_PROVIDER_NAME, acmeFieldDiscovery);</code></pre>
+
+    <p>Do not register a second Identity function: one definition serves every
+       provider, and <code>scopesByProvider</code> carries the per-provider scopes.
+       Registering the same name twice throws.</p>
+
+    <h2>Step 6: prove it</h2>
+
+    <ul>
+      <li><strong>Capability.</strong> <code>canSyncFunction("identity",
+          "acme")</code> must be true and <code>supportedObjectsFor</code> must
+          return <code>["customer", "contact"]</code>.</li>
+      <li><strong>Defaults.</strong> <code>validateMappings("identity", …)</code>
+          must return no violations — the shipped-defaults test does this for every
+          handler pair automatically.</li>
+      <li><strong>Handler.</strong> Add an MSW-backed integration test that yields a
+          customer page and a contact page, then asserts the contact's link
+          resolves.</li>
+      <li><strong>Sync.</strong> Add an end-to-end sync test if the provider has a
+          non-obvious pagination or association rule.</li>
+      <li><strong>Full suite.</strong> <code>npm test</code> runs typecheck and every
+          test; <code>npm run test:unit</code> is the fast loop.</li>
+    </ul>
+
+    <p>Useful existing tests to copy from:</p>
+
+    <ul>
+      <li><code>tests/unit/capability-truth.test.ts</code> — capability and object
+          coverage.</li>
+      <li><code>tests/unit/provider-auth-kinds.test.ts</code> — registration rules
+          for both credential kinds.</li>
+      <li><code>tests/unit/provider-defaults.test.ts</code> — every default set
+          validates.</li>
+      <li><code>tests/integration/metrifox-handler.test.ts</code> — an API-key
+          handler over a mocked API.</li>
+    </ul>
+
+    <h2>If you are adding a function instead</h2>
+
+    <p>A function is a purpose, not a provider. The change is wider because it
+       reaches the record model:</p>
+
+    <ol>
+      <li>Add the target objects to <code>object-schema.ts</code>, including field
+          kinds and any <code>readOnly</code> associations.</li>
+      <li>Add the objects to <code>FUNCTION_OBJECTS</code> and the function to
+          <code>FUNCTION_WRITE_ORDER</code>.</li>
+      <li>Register the function with <code>dataModels</code> and
+          <code>scopesByProvider</code>.</li>
+      <li>Add a writer branch in <code>writeRecordsForFunction()</code>, parents
+          before children.</li>
+      <li>Add handlers per provider and default mappings per handler pair.</li>
+      <li>Teach survivorship and the data model only if the new objects need it;
+          Identity is the only function with cross-connection resolution today.</li>
+    </ol>
+
+    <h2>Gotchas</h2>
+
+    <ul>
+      <li><strong>No Prisma in a provider folder.</strong> The folder talks HTTP and
+          returns raw records; the engine writes. That separation is what keeps
+          handler tests database-free.</li>
+      <li><strong>Ids must be stable.</strong> A synthesized id built from a
+          mutable field duplicates every record on the next sync. Metrifox's
+          synthesized contact id is deliberately derived from stable parts.</li>
+      <li><strong><code>SourcePage.complete</code> is a promise.</strong> Set it only
+          when the list is whole for every parent yielded in this run. An
+          incomplete fan-out must fail instead; otherwise reconciliation deletes
+          live rows.</li>
+      <li><strong>Probe errors are a policy, not a message.</strong>
+          <code>InvalidApiKeyError</code> means “the user must fix the key”;
+          anything else means “try again”. Swapping them misleads the user.</li>
+      <li><strong>Scopes cannot be empty.</strong> <code>resolveScopes()</code>
+          throws on an empty list and the picker filters the provider out, even for
+          an API-key provider that never transmits them.</li>
+      <li><strong>Register the defaults.</strong> A handler with no seeded rules
+          connects and then refuses to sync with “No field mappings configured”.</li>
+    </ul>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="identity-walkthrough.html">← Identity walkthrough</a>
+      <a class="btn is-next" href="index.html">Back to core overview →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

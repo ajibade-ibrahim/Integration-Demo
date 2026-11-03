@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repositories — Core Tutorial — Integration Platform</title>
+<meta name="description" content="Inventory of src/core/repositories: the grouped data-access modules behind connections, mappings, sync runs, synced records and identity.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html" class="active" aria-current="page">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Repositories
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Subsystem</p>
+      <h1>Repositories</h1>
+      <p>Most of the core's database access is grouped here by subject. Repositories keep
+         Prisma queries and owner scoping out of the orchestration code, and give the
+         identity pass a single audited place where the <code>userId</code> filter has to
+         be present.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Role</dt>
+      <dd>Grouped reads and writes for connections, credentials, mappings, runs, synced
+          records and identity.</dd>
+      <dt>Called by</dt>
+      <dd>Sync, connection lifecycle, identity resolution, mapping editor and the pages.</dd>
+      <dt>Calls</dt>
+      <dd><code>src/lib/prisma.ts</code> and <code>json-column.ts</code> helpers.</dd>
+      <dt>Key entry</dt>
+      <dd>The repository matching the subject you are changing</dd>
+    </dl>
+
+    <h2>Inventory</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">Group</th><th scope="col">Files</th><th scope="col">What it owns</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Connections &amp; credentials</td>
+            <td><code>integration-repository.ts</code>, <code>token-repository.ts</code>,
+                <code>user-repository.ts</code></td>
+            <td>Integration rows and status, schedules, source account; encrypted tokens
+                and non-expiring keys; the single owner account.</td>
+          </tr>
+          <tr>
+            <td>Mappings &amp; discovery</td>
+            <td><code>mapping-repository.ts</code>,
+                <code>discovered-field-repository.ts</code></td>
+            <td>Saved rules per function, seeding defaults, retargeting; the cached field
+                list used by the mapping editor.</td>
+          </tr>
+          <tr>
+            <td>Sync runs</td>
+            <td><code>sync-run-repository.ts</code></td>
+            <td>Run history, status, record counts, issues, coverage and mapping-version
+                snapshots.</td>
+          </tr>
+          <tr>
+            <td>Synced records</td>
+            <td><code>synced-data-repository.ts</code>, <code>catalog-repository.ts</code>,
+                <code>agreement-repository.ts</code>, <code>billing-repository.ts</code></td>
+            <td>Read models and queries for customers/contacts, catalog, agreements and
+                billing.</td>
+          </tr>
+          <tr>
+            <td>Identity</td>
+            <td><code>identity-repository.ts</code>,
+                <code>identity-withdrawal-repository.ts</code></td>
+            <td>Customers, accounts, evidence keys, assertions and resolution runs;
+                deletion and withdrawal tombstones.</td>
+          </tr>
+          <tr>
+            <td>Account read model</td>
+            <td><code>account-commercial-repository.ts</code></td>
+            <td>The commercial view across an account's member records: agreement counts,
+                next renewal, invoice and payment state.</td>
+          </tr>
+          <tr>
+            <td>Helpers</td>
+            <td><code>json-column.ts</code></td>
+            <td>Typed read/write helpers for JSON array, object, count and scope-list
+                columns.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>How it fits</h2>
+
+    <ul>
+      <li><strong>Owner scoping is enforced in query conditions.</strong> Connections,
+          records, combined profiles and mappings belong to one owner; every read and
+          write carries that owner in its <code>where</code> clause.</li>
+      <li><strong>Identity has one guarded module.</strong>
+          <code>identity-repository.ts</code> is the only repository that touches the
+          identity tables, and the only place the <code>userId</code> filter has to be
+          audited.</li>
+      <li><strong>Repositories are grouped by subject, not by table.</strong> A single
+          file can cover a read model plus its related child queries, which keeps a page
+          or a pass from stitching together several repositories.</li>
+      <li><strong>JSON columns go through helpers.</strong> <code>json-column.ts</code>
+          centralizes the parse/serialize rules for arrays, objects, counts and scope
+          lists, so a malformed column is handled the same way everywhere.</li>
+      <li><strong>Some writes intentionally bypass repositories.</strong>
+          <code>sync/record-writer.ts</code> uses the Prisma client directly for its
+          batched, parent-first writes; <code>sync/lease.ts</code> for the transaction
+          that fences a run; <code>oauth/state-store.ts</code> and
+          <code>integrations/draft-store.ts</code> for their short-lived rows; and
+          <code>identity/source-account.ts</code> when recording a tenant scope.</li>
+      <li><strong>Transactions are where the invariant is.</strong> Mapping saves and
+          deletions replace or remove related rows inside one transaction, so a partial
+          save cannot leave a rule set or an account in an impossible state.</li>
+    </ul>
+
+    <h2>Rules worth knowing</h2>
+
+    <ul>
+      <li><strong>Do not repeat the “repositories are the only Prisma importer”
+          claim.</strong> It is not true in the current code; the direct importers are
+          listed above and are deliberate.</li>
+      <li><strong>Owner conditions are not optional.</strong> A repository function
+          without an owner filter is a cross-tenant bug, not a shortcut.</li>
+      <li><strong>Read models are shaped for their callers.</strong> The account
+          commercial repository returns a page ready for the account view; it does not
+          expose raw tables for the page to join.</li>
+      <li><strong>Identity tables have one door.</strong> Adding a query against them
+          elsewhere duplicates the owner audit and is the mistake the split exists to
+          prevent.</li>
+    </ul>
+
+    <h2>Open this when…</h2>
+
+    <ul>
+      <li>You need to know where a table is read or written.</li>
+      <li>A page shows another owner's data or misses rows for the current owner.</li>
+      <li>A transaction leaves a partial mapping or a half-deleted integration.</li>
+      <li>You are adding a read model and need the right grouping.</li>
+      <li>A JSON column fails to parse or loses a value.</li>
+    </ul>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="connections.html">← Connection lifecycle</a>
+      <a class="btn is-next" href="index.html">Back to core overview →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

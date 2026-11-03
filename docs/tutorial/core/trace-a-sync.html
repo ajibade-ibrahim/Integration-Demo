@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trace a sync — Core Tutorial — Integration Platform</title>
+<meta name="description" content="Follow one credential-free Mock CRM identity sync from draft and consent through executeSync, the record writers, and identity resolution.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html" class="active" aria-current="page">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Trace a sync
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Deep dive</p>
+      <h1>Trace a sync</h1>
+      <p>One complete identity sync through the built-in Mock CRM. It needs no
+         external credentials, so every step is observable: the draft, the consent
+         screen, the token exchange, the refresh, the writers, and the identity pass
+         that turns the resulting rows into company profiles.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Provider</dt>
+      <dd>Mock CRM — a full OAuth and sync implementation backed by fixtures</dd>
+      <dt>Functions</dt>
+      <dd><code>identity</code> only</dd>
+      <dt>Starts at</dt>
+      <dd><code>POST /api/integrations</code></dd>
+      <dt>Core entry</dt>
+      <dd><code>executeSync()</code> in <code>sync/sync-engine.ts</code></dd>
+      <dt>Verifies in</dt>
+      <dd><code>SyncRun</code>, <code>Customer</code>, <code>Contact</code>,
+          <code>CustomerAccount</code></dd>
+    </dl>
+
+    <h2>Before you start</h2>
+
+    <p>The Mock CRM is opt-in. It registers only when
+       <code>ENABLE_MOCK_PROVIDER</code> is <code>"true"</code>, and its authorize,
+       token and revoke endpoints are routes inside this app. Add these values to
+       <code>.env</code> before starting the dev server:</p>
+
+    <pre class="tut-code"><code>ENABLE_MOCK_PROVIDER="true"
+MOCK_CLIENT_ID="mock-client-id"
+MOCK_CLIENT_SECRET="mock-client-secret"
+APP_BASE_URL="http://localhost:3000"
+
+# base64 of 32 random bytes — generate one with the command below
+TOKEN_ENCRYPTION_KEY="..."
+DATABASE_URL="postgresql://..."</code></pre>
+
+    <p>Generate a key, build the schema, seed the demo user, and start the app:</p>
+
+    <pre class="tut-code"><code>node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+npm install
+npm run db:push
+npm run seed
+npm run dev</code></pre>
+
+    <p class="tut-note"><strong>The demo sign-in.</strong> The seed creates
+       <code>demo@integration-demo.local</code>. Its password is printed once, or is
+       whatever you put in <code>DEMO_USER_PASSWORD</code>. The mock client id and
+       secret can be any non-empty strings; the mock token endpoint does not check
+       them.</p>
+
+    <h2>1. Draft the connection</h2>
+
+    <p>The New integration page posts the pair the user chose. No
+       <code>Integration</code> row is created yet:</p>
+
+    <pre class="tut-code"><code>POST /api/integrations
+{ "providerName": "mock", "functionNames": ["identity"] }</code></pre>
+
+    <p><code>createDraft()</code> in <code>integrations/draft-store.ts</code> stores
+       the choice in an expiring row — 30 minutes — and returns a
+       <code>connectUrl</code>. The response carries a <em>draft</em>, not an
+       integration, because an abandoned attempt must leave nothing to clean up.</p>
+
+    <p>File to open: <code>src/app/api/integrations/route.ts</code>. It calls
+       <code>bootstrap()</code> first, rejects unknown functions, then asks
+       <code>unsupportedFunctionsFor()</code> whether this provider can actually
+       sync Identity.</p>
+
+    <h2>2. Consent shows exactly the identity scopes</h2>
+
+    <p><code>draftConnectHrefFor("mock", draftId)</code> sends the browser to
+       <code>/api/oauth/mock/start?draftId=…</code>. That route:</p>
+
+    <ul>
+      <li>loads the draft and insists the URL's provider segment matches it;</li>
+      <li>calls <code>buildAuthorizationRequest()</code>, which runs
+          <code>resolveScopes(["identity"], "mock")</code>;</li>
+      <li>issues a single-use OAuth state token keyed to the draft;</li>
+      <li>redirects to the mock's own authorize route with
+          <code>client_id</code>, <code>redirect_uri</code>, the unioned scopes and
+          <code>state</code>.</li>
+    </ul>
+
+    <p>Identity on Mock declares three scopes: companies read, contacts read, and
+       schema read. The mock consent screen renders exactly that list. Approving it
+       sends <code>code</code> and <code>state</code> to
+       <code>/api/oauth/mock/callback</code>.</p>
+
+    <p>Files: <code>src/app/api/oauth/[provider]/start/route.ts</code>,
+       <code>src/core/oauth/oauth-service.ts</code>,
+       <code>src/app/api/oauth/mock/authorize/route.ts</code>.</p>
+
+    <h2>3. The callback creates the row and stores the credential</h2>
+
+    <p><code>handleCallback()</code> validates and consumes the state
+       <em>before</em> touching the code. It then exchanges the code at the mock
+       token endpoint, which returns a 15-minute access token, a refresh token, and
+       an echoed scope list.</p>
+
+    <p>Tracing a first-time connect:</p>
+
+    <ol>
+      <li><code>completeDraftCallback()</code> re-checks that the pair is
+          syncable and resolves the requested scopes.</li>
+      <li><code>createIntegrationFromDraft()</code> creates the
+          <code>Integration</code> row, stores the encrypted token, and calls
+          <code>finalizeConnection()</code>.</li>
+      <li><code>finalizeConnection()</code> records the source account, marks the
+          row <code>active</code>, and seeds
+          <code>mockIdentityDefaults</code>.</li>
+      <li>The draft and state are discarded. The browser lands on the integration
+          page with <code>?connected=1</code>.</li>
+    </ol>
+
+    <p>The seeded rules are the reason a fresh connection can sync immediately.
+       They map company name, website → domain, industry, creation date, lifecycle
+       stage and one custom field; for contacts they map first name, email, job
+       title and phone.</p>
+
+    <p>Files: <code>src/core/oauth/oauth-service.ts</code>,
+       <code>src/core/integrations/connection.ts</code>,
+       <code>src/core/providers/mock/defaults.ts</code>.</p>
+
+    <h2>4. Sync starts</h2>
+
+    <p><strong>Sync now</strong> posts to
+       <code>/api/integrations/{id}/sync</code>. The route checks ownership, status
+       <code>active</code> and the capability set, then calls
+       <code>executeSync(id, { trigger: "manual" })</code>. Add
+       <code>?wait=1</code> to run inline; scripts and tests use that form.</p>
+
+    <p>The engine takes the in-process guard, acquires the durable lease and its
+       <code>SyncRun</code>, then snapshots the mapping rules <em>before</em> the
+       first provider request. The snapshot's content hash is recorded on the run,
+       so a mapping edit during this refresh cannot change half of it.</p>
+
+    <p>File: <code>src/core/sync/sync-engine.ts</code>, then
+       <code>src/core/sync/lease.ts</code>.</p>
+
+    <h2>5. The handler yields companies, then contacts</h2>
+
+    <p><code>mockIdentityHandler</code> paginates the fixtures three records at a
+       time. It yields every customer page first, then every contact page, because
+       the writer resolves a contact's company from the index built by the customer
+       pass.</p>
+
+    <p>There are 11 companies and 23 people. The awkward records are deliberate:</p>
+
+    <ul>
+      <li><code>p-018</code> has a malformed email;</li>
+      <li><code>p-019</code> points at a company that does not exist;</li>
+      <li><code>p-020</code> has no company at all.</li>
+    </ul>
+
+    <p>File: <code>src/core/providers/mock/identity-handler.ts</code> and
+       <code>fixtures.ts</code>.</p>
+
+    <h2>6. The mapper applies the seeded rules</h2>
+
+    <p><code>applyMappings()</code> walks the snapshot for each record. The rule set
+       is function-scoped: a contact rule cannot write a customer field. A missing
+       source path produces <code>null</code>, not a dropped key, so every mapped
+       record has a stable shape.</p>
+
+    <p><code>requestedSourcePaths()</code> groups the mapped provider paths by
+       target object. The mock ignores the map — its fixture universe is small — but
+       the real handlers use it to skip whole provider passes.</p>
+
+    <p>File: <code>src/core/field-mapper/field-mapper.ts</code>.</p>
+
+    <h2>7. Writers persist parents before children</h2>
+
+    <p><code>writeRecordsForFunction("identity", …)</code> calls
+       <code>writeCustomers()</code>, then <code>writeContacts()</code> with the
+       customer index.</p>
+
+    <ul>
+      <li><strong>Customers</strong> upsert on <code>(integrationId,
+          externalSourceId)</code>. A malformed customer email is warned about and
+          nulled, because a company's identity is its name and external id.</li>
+      <li><strong>Contacts</strong> require a name and reject a malformed email —
+          the record is refused, and the run continues. A missing company link is
+          kept with a warning, and the provider id is retained for a later relink.</li>
+      <li><strong>Relinking</strong> runs after the writes, so a child stranded by
+          an earlier run can find a parent that has now arrived.</li>
+    </ul>
+
+    <p>File: <code>src/core/sync/record-writer.ts</code>.</p>
+
+    <h2>8. The run closes with counts and coverage</h2>
+
+    <p>Any rejected record makes the run <code>partial</code>; the writes that
+       succeeded are kept. The close writes record counts, per-record issues,
+       coverage and the mapping versions, and only advances
+       <code>lastSyncTimestamp</code> when the lease is still held.</p>
+
+    <p>Expect <strong>11 customers</strong> and <strong>22 contacts</strong>:
+       <code>p-018</code> was rejected. The run is <strong>partial</strong> for the
+       same reason.</p>
+
+    <h2>9. Identity resolution groups the result</h2>
+
+    <p>The sync route calls <code>resolveAfterSync(userId, "sync")</code> unless the
+       run was discarded. That pass is per owner, not per integration. It retires
+       keys from deleted connections, reaps empty accounts, loads every customer in
+       a canonical order, builds evidence, places each record, then recomputes each
+       account's fields.</p>
+
+    <p>With one Mock CRM connection, each company still has a distinct self-key, so
+       the expected result is <strong>11 accounts</strong>. Contacts do not merge
+       companies; they contribute email evidence to the company they are linked to.
+       The convergent fixtures (<code>c-009</code> through <code>c-011</code>) only
+       join when a Stripe or Metrifox connection supplies the matching email or
+       domain.</p>
+
+    <p>Files: <code>src/core/identity/resolve-after-sync.ts</code>,
+       <code>src/core/identity/identity-resolver.ts</code>.</p>
+
+    <h2>What you should see</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">Observable</th><th scope="col">Expected</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Integration status</td><td><code>active</code></td></tr>
+          <tr><td>Customer count</td><td>11</td></tr>
+          <tr><td>Contact count</td><td>22</td></tr>
+          <tr><td>Sync run status</td><td><code>partial</code> — <code>p-018</code> rejected for a malformed email</td></tr>
+          <tr><td>Contact <code>p-019</code></td><td>Stored with a null customer and a warning</td></tr>
+          <tr><td>Contact <code>p-020</code></td><td>Stored with a null customer and no warning</td></tr>
+          <tr><td>Linked contacts</td><td>20 — the other two are <code>p-019</code> and <code>p-020</code></td></tr>
+          <tr><td>Accounts</td><td>11</td></tr>
+          <tr><td>Second sync</td><td>Same counts, no duplicate rows; still partial while <code>p-018</code> remains malformed</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Checkpoints</h2>
+
+    <ul>
+      <li>Open the integration's mapping page before syncing: the seeded rules
+          should already be filled in.</li>
+      <li>Open the run history: the rejected issue should name
+          <code>p-018</code> and the email field.</li>
+      <li>Open Customers: 11 accounts, with contacts attached to their companies.</li>
+      <li>Run <code>npm run db:studio</code> and compare the
+          <code>SyncRun</code>, <code>Customer</code>, <code>Contact</code> and
+          <code>CustomerAccount</code> tables.</li>
+      <li>Sync again: counts repeat because upserts count as writes, but no rows
+          are duplicated and no accounts are recreated.</li>
+    </ul>
+
+    <div class="tut-note">
+      <p><strong>Why the run is not <code>success</code>.</strong> A rejected record
+         is data the user needs to know about, even when every other record wrote
+         cleanly. <code>partial</code> is the honest status, not a failure of the
+         sync.</p>
+    </div>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="index.html">← Core overview</a>
+      <a class="btn is-next" href="connect-flow.html">Connect flow →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

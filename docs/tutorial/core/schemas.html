@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Object schemas — Core Tutorial — Integration Platform</title>
+<meta name="description" content="How src/core defines mapping targets, field kinds, function ownership and the write order that the sync engine relies on.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html" class="active" aria-current="page">Object schemas</a>
+      <a href="registries.html">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Object schemas
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Subsystem</p>
+      <h1>Object schemas</h1>
+      <p><code>object-schema.ts</code> is the composed registry of every internal record
+         a mapping rule may target. It also records which function owns each object and
+         the order those objects must be written in — facts the validator, the mapping
+         UI, the sync engine and identity resolution all read from the same place.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Role</dt>
+      <dd>One source of truth for target fields, object ownership and write order.</dd>
+      <dt>Called by</dt>
+      <dd>Mapping validation, the mapping editor, record validation and survivorship.</dd>
+      <dt>Calls</dt>
+      <dd><code>providerRegistry</code> to validate <code>crossRef.&lt;provider&gt;</code> paths.</dd>
+      <dt>Key entry</dt>
+      <dd><code>OBJECT_SCHEMAS</code>, <code>objectsForFunction()</code>,
+          <code>functionsInWriteOrder()</code></dd>
+    </dl>
+
+    <h2>Key files</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">File</th><th scope="col">Responsibility</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>object-schema.ts</code></td>
+              <td>Composes the per-object schemas; defines <code>FieldDefinition</code>,
+                  <code>FUNCTION_OBJECTS</code>, <code>FUNCTION_WRITE_ORDER</code>,
+                  custom-field limits and <code>resolveTargetField()</code>.</td></tr>
+          <tr><td><code>identity-schema.ts</code></td>
+              <td><code>customer</code> and <code>contact</code> fields, plus the objects
+                  that accept a <code>crossRef.&lt;provider&gt;</code> path.</td></tr>
+          <tr><td><code>catalog-schema.ts</code></td>
+              <td><code>product</code>, <code>offering</code>, <code>price</code>,
+                  <code>feature</code> and <code>entitlement</code>.</td></tr>
+          <tr><td><code>agreement-schema.ts</code></td>
+              <td><code>agreement</code>, <code>subscription</code>,
+                  <code>agreementItem</code>, <code>agreementEntitlement</code> and
+                  <code>agreementDiscount</code>.</td></tr>
+          <tr><td><code>billing-schema.ts</code></td>
+              <td><code>invoice</code>, <code>invoiceLine</code> and <code>payment</code>.</td></tr>
+          <tr><td><code>price-format.ts</code></td>
+              <td>Money and recurrence formatting shared by the pages and read models.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>How it fits</h2>
+
+    <ul>
+      <li><strong>A field definition is a contract.</strong> Each
+          <code>FieldDefinition</code> carries a name, human label, <code>kind</code>
+          (string, email, date, enum, number, boolean), and optional
+          <code>required</code>, <code>maxLength</code>, <code>enumValues</code>,
+          <code>readOnly</code> and <code>conflictPolicy</code>.</li>
+      <li><strong>Targets are object-qualified.</strong> A rule writes to
+          <code>customer.domain</code>, not <code>domain</code>. A flat namespace would
+          let <code>contact.email</code> validate against a customer record.</li>
+      <li><strong>Read-only fields are excluded from the editor.</strong>
+          <code>associatedCustomerId</code> and <code>associatedProductId</code> are
+          derived from the provider's own foreign id by the sync engine, so mapping a
+          provider id into them would write our internal UUIDs into the wrong slot.</li>
+      <li><strong>Extras have a bounded shape.</strong>
+          <code>customFields.&lt;key&gt;</code> accepts 1–100 alphanumeric/underscore
+          characters, with at most 50 custom fields per record and a 1000-character
+          value limit.</li>
+      <li><strong>Cross-references are checked against the registry.</strong>
+          <code>crossRef.&lt;provider&gt;</code> is valid only on a
+          <code>CROSS_REF_OBJECTS</code> target and only when that provider is
+          registered — which means <code>bootstrap()</code> must have run.</li>
+      <li><strong>Ownership is separate from the object list.</strong>
+          <code>FUNCTION_OBJECTS</code> says which function may write which object;
+          <code>FUNCTION_WRITE_ORDER</code> says the order functions must run in.</li>
+      <li><strong>Inside a function, parents come first.</strong> Identity writes
+          customer then contact; catalog writes product → offering → price → feature →
+          entitlement; agreement and billing follow the same rule. The engine reads
+          this order instead of hardcoding a sequence.</li>
+      <li><strong>Conflict policy is per field.</strong> The default is
+          <code>highestPriority</code>: the highest-ranked connection supplying a
+          non-null value wins. <code>createDate</code> uses <code>earliest</code>,
+          because an earlier sighting is evidence the company existed earlier.</li>
+    </ul>
+
+    <h2>Rules worth knowing</h2>
+
+    <ul>
+      <li><strong>Four consumers, one definition.</strong> Validation, the target
+          dropdown, sync record validation and survivorship read the same schemas, so
+          they cannot drift.</li>
+      <li><strong>Adding an object is a multi-file change.</strong> A new target needs a
+          schema entry, membership in <code>FUNCTION_OBJECTS</code>, the handler's
+          declared objects and a writer branch. Missing any one of them produces either
+          a refused mapping or a sync that silently writes nothing.</li>
+      <li><strong>Function names are literals here on purpose.</strong>
+          <code>bootstrap.ts</code> imports every provider, and providers reach the
+          schema, so importing the constants back would close a cycle. Unit tests pin
+          the registered functions against this map.</li>
+      <li><strong>Unknown functions still have an order.</strong>
+          <code>functionsInWriteOrder()</code> sorts unknown names last and preserves
+          their relative order; a function with no objects cannot be anyone's parent.</li>
+    </ul>
+
+    <h2>Open this when…</h2>
+
+    <ul>
+      <li>The mapping editor does not offer a target field you expected.</li>
+      <li>A mapping validates but writes nothing.</li>
+      <li>You are adding a field, an object or a whole function.</li>
+      <li>A parent link is null after the first sync.</li>
+      <li>You need to know which function owns a particular table.</li>
+    </ul>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="bootstrap.html">← Registration &amp; capability</a>
+      <a class="btn is-next" href="registries.html">Registries →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>

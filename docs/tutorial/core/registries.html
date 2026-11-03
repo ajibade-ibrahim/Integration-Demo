@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Registries — Core Tutorial — Integration Platform</title>
+<meta name="description" content="How src/core stores functions, providers, sync handlers and field discoverers, and how scope resolution works.">
+<link rel="stylesheet" href="../../diagrams/styles.css">
+<link rel="stylesheet" href="../tutorial.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">Integration Platform <span>/ Tutorials</span></div>
+  <nav class="pageswitch" aria-label="Pages">
+    <a href="../../diagrams/index.html">Architecture</a>
+    <a href="../../diagrams/data-model.html">Data model</a>
+    <a href="../../diagrams/revenue-graph.html">Revenue graph</a>
+    <a href="../index.html" aria-current="page">Tutorial</a>
+  </nav>
+  <div class="spacer"></div>
+</header>
+
+<div class="shell">
+
+  <aside class="sidebar">
+    <nav id="toc" aria-label="Core tutorial contents">
+      <p class="tut-side-title">Core</p>
+      <a href="index.html">Overview</a>
+      <a href="bootstrap.html">Registration &amp; capability</a>
+      <a href="schemas.html">Object schemas</a>
+      <a href="registries.html" class="active" aria-current="page">Registries</a>
+      <a href="field-mapper.html">Field mapping</a>
+      <a href="sync.html">Sync</a>
+      <a href="providers.html">Providers</a>
+      <a href="identity.html">Identity resolution</a>
+      <a href="connections.html">Connection lifecycle</a>
+      <a href="repositories.html">Repositories</a>
+      <p class="tut-side-title">Deep dives</p>
+      <a href="trace-a-sync.html">Trace a sync</a>
+      <a href="connect-flow.html">Connect flow</a>
+      <a href="identity-walkthrough.html">Identity walkthrough</a>
+      <a href="add-a-provider.html">Add a provider</a>
+    </nav>
+  </aside>
+
+  <main id="main" class="tut-main">
+
+    <p class="tut-crumbs">
+      <a href="../index.html">Tutorials</a><span aria-hidden="true">/</span><a href="index.html">Core</a><span aria-hidden="true">/</span>Registries
+    </p>
+
+    <div class="lede">
+      <p class="tut-kicker">Subsystem</p>
+      <h1>Registries</h1>
+      <p>The registries are the core's extension points. Functions and providers live in
+         name-keyed maps; sync handlers and field discoverers live in maps keyed by
+         <code>(function, provider)</code>. Scope resolution — the rule the product is
+         built around — also lives here.</p>
+    </div>
+
+    <dl class="tut-meta">
+      <dt>Role</dt>
+      <dd>Hold registered definitions and answer lookups without letting callers mutate
+          them.</dd>
+      <dt>Called by</dt>
+      <dd><code>bootstrap()</code> writes; the sync engine, connect flows, mapping
+          editor and capability layer read.</dd>
+      <dt>Calls</dt>
+      <dd><code>object-schema.ts</code> for function object ownership.</dd>
+      <dt>Key entry</dt>
+      <dd><code>resolveScopes()</code>, <code>requireSyncHandler()</code>,
+          <code>providerRegistry</code></dd>
+    </dl>
+
+    <h2>Key files</h2>
+
+    <div class="tut-table">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">File</th><th scope="col">Responsibility</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>registry.ts</code></td>
+              <td>Generic <code>Registry&lt;T&gt;</code>: name validation, duplicate
+                  rejection and defensive copying on read and write.</td></tr>
+          <tr><td><code>function-registry.ts</code></td>
+              <td><code>registerFunction()</code>, <code>resolveScopes()</code>,
+                  <code>missingScopes()</code>, <code>scopesAreCovered()</code> and the
+                  function/provider lookup helpers.</td></tr>
+          <tr><td><code>provider-registry.ts</code></td>
+              <td><code>registerProvider()</code> validation, <code>requireOAuth()</code>,
+                  <code>canRefresh()</code>, credential resolution and tenant-scope
+                  helpers.</td></tr>
+          <tr><td><code>handler-registry.ts</code></td>
+              <td>Sync handler and field discovery registration, keyed
+                  <code>function:provider</code>; rejects objects the function does not
+                  own.</td></tr>
+          <tr><td><code>types/registry.ts</code></td>
+              <td><code>FunctionDefinition</code>, <code>ProviderDefinition</code>,
+                  <code>ProviderAuth</code>, <code>SyncHandler</code>,
+                  <code>FieldDiscovery</code>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>How it fits</h2>
+
+    <ul>
+      <li><strong>The generic registry guards its map.</strong> It validates names,
+          rejects duplicates, and lets each registry supply a clone-on-read function;
+          function definitions are cloned on the way in and out, while provider
+          definitions are served as registered. A failed registration leaves every
+          existing entry untouched.</li>
+      <li><strong>Functions carry their own scope map.</strong>
+          <code>FunctionDefinition.scopesByProvider</code> is the mechanism behind
+          “purposes first, permissions second”: each function declares what each
+          provider would need.</li>
+      <li><strong><code>resolveScopes()</code> unions the selected set.</strong> Given
+          several functions and one provider, it returns the union of their declared
+          scopes and nothing else. It throws when a function is unregistered or declares
+          no scopes for that provider.</li>
+      <li><strong>Granted scopes are compared, not assumed.</strong>
+          <code>missingScopes()</code> and <code>scopesAreCovered()</code> let a
+          reconnect prompt surface a genuine gap instead of a mid-sync 403.</li>
+      <li><strong>Providers have two credential shapes.</strong>
+          <code>ProviderAuth</code> is a discriminated union: OAuth authorization-code
+          and static API key. Registration validates the hooks each shape requires.</li>
+      <li><strong>Tenant scoping is validated.</strong> A provider whose external ids
+          are tenant-scoped must supply a <code>tenantScopeValue</code> hook;
+          <code>externalIdScope</code> must be <code>global</code> or
+          <code>tenant</code>.</li>
+      <li><strong>Handlers are keyed by function and provider.</strong>
+          <code>registerSyncHandler()</code> also checks that every declared object is
+          one the function owns, so a catalog handler cannot claim customers.</li>
+      <li><strong>Discovery is registered the same way.</strong> A field discoverer is
+          optional; a provider without one yields an empty list and the mapping editor
+          falls back to free-text entry.</li>
+    </ul>
+
+    <h2>Rules worth knowing</h2>
+
+    <ul>
+      <li><strong>Bootstrap before lookup.</strong> A registry read before
+          <code>bootstrap()</code> sees an empty map. That applies to cross-reference
+          validation too, because it consults the provider registry.</li>
+      <li><strong>Registration failures are loud and early.</strong> Missing auth, a
+          tenant-scoped provider without a scope hook, a handler with no objects or a
+          handler claiming a foreign object all throw at startup rather than at sync
+          time.</li>
+      <li><strong>Scopes belong to a pair, not a provider.</strong> Holding them per
+          <code>(function, provider)</code> is what lets HubSpot's request widen when
+          Support is added while Salesforce's <code>api</code> scope stays the same.</li>
+      <li><strong>Do not mutate a returned provider definition.</strong> Provider
+          entries are served as registered; function entries are cloned. Either way,
+          treat what you get back as read-only.</li>
+    </ul>
+
+    <h2>Open this when…</h2>
+
+    <ul>
+      <li>The connect flow requests the wrong permissions.</li>
+      <li>You need to know why a function/provider pair is offered or filtered out.</li>
+      <li>A reconnect prompt says the granted scopes no longer cover the selection.</li>
+      <li>You are registering a new provider and need the required auth hooks.</li>
+      <li>A handler or discoverer is not found at sync or mapping time.</li>
+    </ul>
+
+    <div class="tut-prevnext">
+      <a class="btn" href="schemas.html">← Object schemas</a>
+      <a class="btn is-next" href="field-mapper.html">Field mapping →</a>
+    </div>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <p>Companion to <a href="../../diagrams/index.html">the architecture diagrams</a> ·
+     plain-language documentation in <a href="../../README.md">docs/README.md</a> ·
+     engineering guide in <a href="../../../README.md">README.md</a>.</p>
+</footer>
+
+</body>
+</html>
