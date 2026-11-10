@@ -238,7 +238,7 @@
                 <th scope="row">Agreement<span class="sub">agreement · subscription · items · entitlements · discounts</span></th>
                 <td><span class="chip">crm.objects.deals.read</span><span class="chip">crm.schemas.deals.read</span></td>
                 <td><span class="chip">api</span><span class="chip">refresh_token</span></td>
-                <td><span class="chip">orders:read</span><span class="chip">subscriptions:read</span></td>
+                <td><span class="chip">customers:read</span><span class="chip">subscriptions:read</span></td>
                 <td><span class="chip">subscriptions:read</span></td>
                 <td><span class="chip">subscriptions:read</span><span class="chip">subscription_entitlements:read</span><span class="chip">features:read</span><span class="chip">item_entitlements:read</span></td>
                 <td><span class="chip">subscriptions:read</span></td>
@@ -246,7 +246,8 @@
               </tr>
               <tr>
                 <th scope="row">Billing<span class="sub">invoice · invoiceLine · payment</span></th>
-                <td class="none">—</td><td class="none">—</td><td class="none">—</td>
+                <td class="none">—</td><td class="none">—</td>
+                <td><span class="chip">customers:read</span><span class="chip">subscriptions:read</span></td>
                 <td><span class="chip">invoices:read</span><span class="chip">invoice_payments:read</span><span class="chip">charges:read</span><span class="chip">refunds:read</span></td>
                 <td><span class="chip">invoices:read</span><span class="chip">transactions:read</span></td>
                 <td class="none">—</td>
@@ -287,8 +288,9 @@
         request widens by three scopes; Salesforce's does not move, because its coarse <code>api</code>
         scope already spans Case. Both are true at once only because scopes are held per
         <em>(function, provider)</em> pair rather than per function. Tick <b>Billing</b> and the
-        offer narrows to Stripe and Chargebee — the CRMs and Metrifox declare no billing scopes and
-        drop out, so the flow is blocked rather than silently degraded.</p>
+        offer is Stripe, Chargebee and Metrifox — Metrifox declares customer and subscription
+        reads and writes invoice summaries only, while the CRMs and Stigg declare no billing
+        scopes and drop out, so the flow is blocked rather than silently degraded.</p>
       <p class="fig-note">The same pair keys three more things: the <b>sync handler</b>, the
         <b>field discovery</b>, and the <b>default mappings</b>. Mock CRM only registers when
         <code>ENABLE_MOCK_PROVIDER=true</code>.</p>

@@ -89,8 +89,8 @@ Three consequences worth remembering:
 |---|---|---|
 | **Identity** | Ready | HubSpot, Salesforce, Metrifox, Stripe, Chargebee, Stigg, Mock CRM |
 | **Catalog** | Ready | Stripe, Chargebee, Stigg |
-| **Agreement** | Ready on four systems | Stripe, Chargebee, Stigg, HubSpot (deals and line items) |
-| **Billing** | Ready | Stripe, Chargebee |
+| **Agreement** | Ready on five systems | Stripe, Chargebee, Stigg, HubSpot (deals and line items), Metrifox (subscriptions and effective entitlements) |
+| **Billing** | Ready | Stripe, Chargebee; Metrifox (invoice summaries only — its API exposes no invoice lines or payment list) |
 | **Support** | Not selectable yet | No handler; scope declarations remain for the roadmap |
 | **Usage** | Not selectable yet | No handler; scope declarations remain for the roadmap |
 | **Communication** | Not selectable yet | No handler; scope declarations remain for the roadmap |

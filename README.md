@@ -19,9 +19,11 @@ provider** so the whole thing runs with no credentials — plus **catalog**
 (products, the offerings that price them, prices, and the features each
 offering carries), **agreement** (subscriptions, their lines, the entitlements
 they confer and the discounts on them on **Stripe**, **Chargebee** and
-**Stigg**; deals and their line items on **HubSpot**), and **billing**
+**Stigg**; subscriptions and their effective entitlements on **Metrifox**;
+deals and their line items on **HubSpot**), and **billing**
 (invoices, their lines and the payments against them) on **Stripe** and
-**Chargebee**.
+**Chargebee**, and invoice summaries only on **Metrifox** — its public API
+exposes no invoice-line read and no payment list.
 
 The four functions are independent by design, and that independence is
 observable: catalog needs no customer, identity needs no price, and an agreement
@@ -88,9 +90,9 @@ refuses to start without a real one.
 ## The credential-free walkthrough
 
 1. **New integration** → select **Identity**. Selecting **Billing** now offers
-   Stripe and Chargebee, while **Usage** and **Support** are still honestly
-   empty — functions with no provider support are represented rather than
-   hidden.
+   Stripe, Chargebee and Metrifox, while **Usage** and **Support** are still
+   honestly empty — functions with no provider support are represented rather
+   than hidden.
 2. Pick **Mock CRM**. On the consent screen, confirm the scopes shown are
    exactly the identity scopes — no `billing.invoices.read`, no ticket scopes.
    This is the core feature made visible.
@@ -263,10 +265,12 @@ nothing, and it refuses to run against a key without `_test_` in it.
 Then, continuing the walkthrough with **Catalog** and **Agreement** added to the
 integration:
 
-1. `/integrations/[id]/mapping?function=agreement` shows **five** sections —
-   Agreement, Subscription, Agreement item, Agreement entitlement and Agreement
-   discount — and no Customer, Contact, Product or Offering. Five tables, because
-   the mapping layer addresses one table per target object.
+1. `/integrations/[id]/mapping?function=agreement` shows the objects Stripe's
+   handler actually writes — Agreement, Subscription and Line item — and no
+   Customer, Contact, Product or Offering. Five tables exist for the function,
+   but the editor narrows to the handler's declared coverage, so the entitlement
+   and discount sections this provider never writes are not offered. The same
+   filter leaves HubSpot with Agreement and Line item.
 2. **Sync now** → the run reports `{ agreement: 11, subscription: 11 }` and a
    `partial` status. The warnings are the point: one subscription carries four
    priced lines, and one names a customer that was rejected.
@@ -346,7 +350,9 @@ is created, so this walkthrough reads what the provider produced rather than
 what we seeded.
 
 1. `/integrations/[id]/mapping?function=billing` shows **three** sections —
-   Invoice, Invoice line and Payment.
+   Invoice, Invoice line and Payment. On a Metrifox integration the same page
+   shows only **Invoice**: the public API has no invoice-line read and no
+   payment list, so the other two sections would hold rules that never write.
 2. **Sync now** → the run reports `{ invoice: n, invoiceLine: n, payment: n }`.
    `n` is whatever the sandbox actually holds, which is the point: the totals on
    an invoice are **stated by the provider, never computed**, so our numbers
@@ -365,6 +371,14 @@ what we seeded.
    reconciled object on this function: a line the invoice no longer has is
    deleted, behind two gates, because a line list truncated by a page bound looks
    exactly like a shorter invoice.
+
+> **Metrifox billing is invoice-only.** Its public API exposes no invoice-line
+> read and no payment list, so a Metrifox invoice has no expandable detail and
+> the run reports invoices alone. Amounts arrive in standard units and are
+> converted to integer minor units using the currency exponent — USD 2, JPY 0,
+> KWD 3 — with the raw figures kept in `providerMetadata`. Credit notes stay
+> negative, and draft invoices are ignored rather than written as number-less,
+> not-yet-issued bills.
 
 ### The identity walkthrough — one company out of three rows
 
@@ -767,7 +781,8 @@ real database.
   `Retry-After`, 401 → refresh → retry, SOQL construction, and field discovery
   against mocked HubSpot and Salesforce APIs, plus one file per commercial
   function per provider — catalog, agreement and billing for Stripe and
-  Chargebee, agreement for Stigg and HubSpot deals — and the writers behind them.
+  Chargebee, agreement and invoice-only billing for Metrifox, agreement for
+  Stigg, and HubSpot deals — and the writers behind them.
 - Tests that need a database run inside a dedicated Postgres schema built by
   `tests/global-setup.ts` and named by `TEST_DATABASE_URL`; the dev database
   is never touched. That schema is dropped and recreated on every run, so the
@@ -1039,7 +1054,8 @@ either, and a reader must not "fix" the redundancy by summing lines.
   are registered so the New integration page can show the real roadmap, but the
   capability layer disables them and no provider is offered for them.
   `agreement` and `billing` are no longer on this list: Stripe and Chargebee
-  both ship handlers for all three commercial functions.
+  both ship handlers for all three commercial functions, and Metrifox ships
+  identity, agreement and invoice-only billing.
 - **Salesforce declares `agreement` scopes but ships no agreement handler.**
   The scopes are there because the canonical model insists one agreement covers
   a sales-led order form and a self-serve subscription alike, and declaring a

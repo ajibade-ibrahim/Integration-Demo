@@ -44,23 +44,25 @@ describe("what a provider can actually sync", () => {
     expect(syncableProviderNamesForFunction("agreement")).toEqual([
       "chargebee",
       "hubspot",
+      "metrifox",
       "stigg",
       "stripe",
     ]);
     // The mock declares billing scopes but has no billing handler.
     expect(syncableProviderNamesForFunction("billing")).toEqual([
       "chargebee",
+      "metrifox",
       "stripe",
     ]);
   });
 
   it("lists only providers that can serve the whole function set", () => {
-    // Identity is built everywhere; agreement is built on four of those
-    // providers. The intersection is the four, not the seven identity
+    // Identity is built everywhere; agreement is built on five of those
+    // providers. The intersection is the five, not the seven identity
     // providers and not the seven agreement scope declarations.
     expect(
       syncableProviderNamesForFunctions(["identity", "agreement"])
-    ).toEqual(["chargebee", "hubspot", "stigg", "stripe"]);
+    ).toEqual(["chargebee", "hubspot", "metrifox", "stigg", "stripe"]);
   });
 
   it("reports each handler's real object coverage, not the function roadmap", () => {
@@ -88,6 +90,18 @@ describe("what a provider can actually sync", () => {
       "agreementEntitlement",
       "agreementDiscount",
     ]);
+    // Metrifox writes four: no discount, because no documented
+    // per-subscription discount source exists.
+    expect(supportedObjectsFor("agreement", "metrifox")).toEqual([
+      "agreement",
+      "subscription",
+      "agreementItem",
+      "agreementEntitlement",
+    ]);
+    // Metrifox billing writes one object. Its public API has no invoice-line
+    // read and no payment list, so those two are unsupported rather than empty
+    // pages the writer could reconcile against.
+    expect(supportedObjectsFor("billing", "metrifox")).toEqual(["invoice"]);
   });
 
   it("has no objects for a pair with no handler", () => {

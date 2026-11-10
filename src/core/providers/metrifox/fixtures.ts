@@ -442,3 +442,308 @@ export const METRIFOX_CONTACT_FIELDS: DiscoveredFieldDef[] = [
   { path: "customer_id", label: "Customer ID (association)", type: "string" },
   { path: "customer_key", label: "Customer key", type: "string" },
 ];
+
+/**
+ * The agreement's own fields, as the handler yields them.
+ *
+ * Synthesized paths are labelled so nobody hunts for them in the API reference.
+ * The raw inputs (`starts_at`, `ends_at`, `plan_name`, …) are listed beside
+ * their synthesized forms so a user can override the synthesis without leaving
+ * the editor.
+ */
+export const METRIFOX_AGREEMENT_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Subscription ID", type: "string" },
+  {
+    path: "agreement_name",
+    label: "Name (synthesized: plan name, else product name)",
+    type: "string",
+  },
+  {
+    path: "agreement_type",
+    label: "Agreement type (synthesized; always subscription)",
+    type: "string",
+  },
+  {
+    path: "status",
+    label: "Status (synthesized: active, trialing, paused, canceled, expired, past_due)",
+    type: "string",
+  },
+  { path: "raw_status", label: "Status (Metrifox's own word)", type: "string" },
+  {
+    path: "effective_date",
+    label: "Effective date (synthesized from starts_at)",
+    type: "datetime",
+  },
+  {
+    path: "end_date",
+    label: "End date (synthesized from ends_at)",
+    type: "datetime",
+  },
+  { path: "currency_code", label: "Currency", type: "string" },
+  {
+    path: "customer_id",
+    label: "Customer ID (association, synthesized: the customers-list id)",
+    type: "string",
+  },
+  { path: "offering_key", label: "Offering key", type: "string" },
+  { path: "plan_name", label: "Plan name", type: "string" },
+  { path: "plan_version", label: "Plan version", type: "string" },
+  { path: "product_name", label: "Product name", type: "string" },
+  { path: "product_key", label: "Product key", type: "string" },
+  { path: "starts_at", label: "Starts at (ISO 8601)", type: "datetime" },
+  { path: "ends_at", label: "Ends at (ISO 8601)", type: "datetime" },
+  { path: "next_billing_date", label: "Next billing date (ISO 8601)", type: "datetime" },
+  {
+    path: "next_billing_amount",
+    label: "Next billing amount (standard units, not minor units)",
+    type: "number",
+  },
+  {
+    path: "provider_metadata",
+    label: "Provider metadata (JSON; synthesized, curated)",
+    type: "string",
+  },
+];
+
+/**
+ * The subscription-only fields of the same record.
+ *
+ * Every path is either a direct pass-through or a rename of a stated field;
+ * none is computed. The raw inputs are listed alongside so a user can see what
+ * the synthesis read.
+ */
+export const METRIFOX_SUBSCRIPTION_FIELDS: DiscoveredFieldDef[] = [
+  {
+    path: "current_period_start",
+    label: "Current period start (synthesized)",
+    type: "datetime",
+  },
+  {
+    path: "current_period_end",
+    label: "Current period end (synthesized)",
+    type: "datetime",
+  },
+  {
+    path: "next_billing_at",
+    label: "Next billing at (synthesized from renews_at)",
+    type: "datetime",
+  },
+  {
+    path: "trial_ends_at",
+    label: "Trial ends at (synthesized from trial_end_date)",
+    type: "datetime",
+  },
+  {
+    path: "canceled_at",
+    label: "Canceled at (synthesized; when cancellation was requested)",
+    type: "datetime",
+  },
+  {
+    path: "item_count",
+    label: "Item count (synthesized; absent when the payload omitted the item list)",
+    type: "number",
+  },
+  {
+    path: "provider_metadata",
+    label: "Provider metadata (JSON; synthesized, curated)",
+    type: "string",
+  },
+  {
+    path: "current_billing_period_start",
+    label: "Current billing period start (ISO 8601)",
+    type: "datetime",
+  },
+  {
+    path: "current_billing_period_end",
+    label: "Current billing period end (ISO 8601)",
+    type: "datetime",
+  },
+  { path: "renews_at", label: "Renews at (ISO 8601)", type: "datetime" },
+  { path: "trial_end_date", label: "Trial end date (ISO 8601)", type: "datetime" },
+  { path: "cancelled_at", label: "Cancelled at (ISO 8601)", type: "datetime" },
+];
+
+/**
+ * Subscription lines.
+ *
+ * `item_id`, `agreement_id`, `offering_id`, `price_id` and `item_type` are
+ * synthesized; `unit_price` and `total_amount` are Metrifox's own numbers in
+ * **standard units**, deliberately not the minor-unit form the canonical
+ * `unitPriceMinor` column stores.
+ */
+export const METRIFOX_AGREEMENT_ITEM_FIELDS: DiscoveredFieldDef[] = [
+  {
+    path: "item_id",
+    label: "Line ID (synthesized: subscription:price option, or :posN)",
+    type: "string",
+  },
+  { path: "agreement_id", label: "Agreement ID (association, synthesized)", type: "string" },
+  {
+    path: "price_id",
+    label: "Price ID (association, synthesized from price_option_id)",
+    type: "string",
+  },
+  {
+    path: "offering_id",
+    label: "Offering ID (association, synthesized: the subscription's offering key on the plan line)",
+    type: "string",
+  },
+  {
+    path: "item_type",
+    label: "Line type (synthesized: plan or add_on, when stated)",
+    type: "string",
+  },
+  { path: "position", label: "Position (synthesized: array index)", type: "number" },
+  { path: "quantity", label: "Quantity", type: "number" },
+  { path: "price_option_id", label: "Price option ID", type: "string" },
+  { path: "name", label: "Line name", type: "string" },
+  { path: "source_type", label: "Source type", type: "string" },
+  { path: "source_id", label: "Source ID", type: "string" },
+  { path: "is_addon", label: "Is add-on", type: "boolean" },
+  {
+    path: "unit_price",
+    label: "Unit price (standard units, not minor units)",
+    type: "number",
+  },
+  {
+    path: "total_amount",
+    label: "Total amount (standard units, not minor units)",
+    type: "number",
+  },
+  { path: "currency_code", label: "Currency", type: "string" },
+  { path: "pricing", label: "Pricing (raw; often null)", type: "json" },
+  {
+    path: "provider_metadata",
+    label: "Provider metadata (JSON; synthesized, curated)",
+    type: "string",
+  },
+];
+
+/**
+ * The effective entitlement one subscription confers.
+ *
+ * `value` is the purchased quantity and `limit_value` the hard limit — the
+ * latter always present, carrying `unlimited` when the API states no limit.
+ * That sentinel is load-bearing: it stops the writer deriving a hard limit
+ * from the purchased quantity. See `flattenMetrifoxAgreementEntitlement`.
+ */
+export const METRIFOX_AGREEMENT_ENTITLEMENT_FIELDS: DiscoveredFieldDef[] = [
+  { path: "id", label: "Entitlement row ID (Metrifox's summary row id)", type: "string" },
+
+  {
+    path: "entitlement_row_id",
+    label: "Entitlement row ID (synthesized fallback: subscription:feature key)",
+    type: "string",
+  },
+  { path: "agreement_id", label: "Agreement ID (association, synthesized)", type: "string" },
+  { path: "feature_id", label: "Feature key (association, synthesized from feature_key)", type: "string" },
+  { path: "value", label: "Value (purchased quantity)", type: "string" },
+  {
+    path: "limit_value",
+    label: "Limit value (hard limit; 'unlimited' when none)",
+    type: "string",
+  },
+  { path: "is_enabled", label: "Enabled (synthesized from active)", type: "boolean" },
+  { path: "feature_key", label: "Feature key", type: "string" },
+  { path: "feature_name", label: "Feature name", type: "string" },
+  { path: "active", label: "Active", type: "boolean" },
+  { path: "purchased_qty", label: "Purchased quantity", type: "number" },
+  { path: "included_allowance", label: "Included allowance", type: "number" },
+  { path: "usage_limit", label: "Usage limit (null means unlimited)", type: "number" },
+  { path: "usage_model", label: "Usage model", type: "string" },
+  { path: "price_type", label: "Price type", type: "string" },
+  { path: "feature_type", label: "Feature type", type: "string" },
+  { path: "soft_limit_enabled", label: "Soft limit enabled", type: "boolean" },
+  { path: "billing_interval", label: "Billing interval", type: "string" },
+  { path: "billing_interval_value", label: "Billing interval value", type: "number" },
+  { path: "aggregation_method", label: "Aggregation method", type: "string" },
+  { path: "carryover_enabled", label: "Carryover enabled", type: "boolean" },
+  {
+    path: "provider_metadata",
+    label: "Provider metadata (JSON; synthesized, curated)",
+    type: "string",
+  },
+];
+
+/**
+ * Invoice summaries, as the billing handler yields them.
+ *
+ * Metrifox states amounts in **standard units** (`21`, `-23.0356`), which is
+ * what the raw paths carry. The `*_minor` paths are synthesized by multiplying
+ * by the currency exponent, and the raw figures stay in `provider_metadata`;
+ * that is why both forms are listed rather than hiding the conversion.
+ *
+ * `status` is Metrifox's word translated into our enum; `raw_status` is the
+ * provider's own word. Drafts are ignored by the handler, so no record reaches
+ * the writer with `status: "draft"`; `issued_at` is still synthesized from
+ * `issued_date` and withheld for a draft as a second line of defence.
+ * `customer_id` and `agreement_id` are injected by the handler — the customer
+ * is the customers-list id, the agreement is the subscription whose billing
+ * history returned the invoice.
+ */
+export const METRIFOX_INVOICE_FIELDS: DiscoveredFieldDef[] = [
+  { path: "invoice_id", label: "Invoice ID", type: "string" },
+  { path: "invoice_number", label: "Invoice number (null on a draft)", type: "string" },
+  {
+    path: "status",
+    label: "Status (synthesized: draft, open, paid, past_due, void or uncollectible)",
+    type: "string",
+  },
+  { path: "raw_status", label: "Status (Metrifox's own word)", type: "string" },
+  { path: "currency", label: "Currency", type: "string" },
+  {
+    path: "total_amount",
+    label: "Total (standard units, not minor units)",
+    type: "number",
+  },
+  {
+    path: "amount_paid",
+    label: "Amount paid (standard units, not minor units)",
+    type: "number",
+  },
+  {
+    path: "balance_due",
+    label: "Balance due (standard units, not minor units)",
+    type: "number",
+  },
+  {
+    path: "total_amount_minor",
+    label: "Total (minor units, synthesized from total_amount)",
+    type: "number",
+  },
+  {
+    path: "amount_paid_minor",
+    label: "Amount paid (minor units, synthesized from amount_paid)",
+    type: "number",
+  },
+  {
+    path: "balance_due_minor",
+    label: "Balance due (minor units, synthesized from balance_due)",
+    type: "number",
+  },
+  { path: "issued_date", label: "Issued date (ISO 8601)", type: "datetime" },
+  {
+    path: "issued_at",
+    label: "Issued at (synthesized from issued_date; omitted on a draft)",
+    type: "datetime",
+  },
+  { path: "due_date", label: "Due date (ISO 8601)", type: "datetime" },
+  { path: "created_at", label: "Created at (ISO 8601)", type: "datetime" },
+  { path: "payment_method", label: "Payment method", type: "string" },
+  { path: "source_type", label: "Source type", type: "string" },
+  {
+    path: "customer_id",
+    label: "Customer ID (association, synthesized: the customers-list id)",
+    type: "string",
+  },
+  {
+    path: "agreement_id",
+    label: "Agreement ID (association, synthesized: the subscription id)",
+    type: "string",
+  },
+  {
+    path: "provider_metadata",
+    label: "Provider metadata (JSON; synthesized, curated)",
+    type: "string",
+  },
+];

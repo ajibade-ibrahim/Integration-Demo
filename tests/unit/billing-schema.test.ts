@@ -183,7 +183,7 @@ describe("function scoping of billing rules", () => {
     );
   });
 
-  it("shows the editor all three sections and nothing else", () => {
+  it("owns all three billing sections and nothing else", () => {
     expect(schemasForFunction(BILLING_FUNCTION).map((s) => s.label)).toEqual([
       "Invoice",
       "Invoice line",

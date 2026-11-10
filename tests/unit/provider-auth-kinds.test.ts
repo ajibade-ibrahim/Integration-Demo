@@ -294,22 +294,22 @@ describe("credential-kind behaviour", () => {
 });
 
 describe("function coverage", () => {
-  it("serves identity and agreement, but not billing", async () => {
+  it("serves identity, agreement and billing", async () => {
     const { functionNamesForProvider, providerNamesForFunction } = await import(
       "@/core/registries/function-registry"
     );
 
     expect(functionNamesForProvider("metrifox")).toEqual([
       "agreement",
+      "billing",
       "identity",
     ]);
     expect(providerNamesForFunction("identity")).toContain("metrifox");
 
-    // Metrifox carries orders and subscriptions, so agreement is a true claim
-    // about the API even though no handler reads them yet. It carries invoices
-    // too, but billing is built on Stripe and Chargebee rather than here, which
-    // keeps ["identity","billing"] a genuine partial intersection.
-    expect(providerNamesForFunction("billing")).not.toContain("metrifox");
+    // Metrifox reads subscriptions and each subscription's billing history, so
+    // agreement and billing are both handler-backed claims. It carries no order
+    // read at all, which is why its agreement scope no longer mentions orders.
+    expect(providerNamesForFunction("billing")).toContain("metrifox");
   });
 });
 
@@ -367,7 +367,7 @@ describe("Stripe as a second API-key provider", () => {
 
     // Stripe genuinely has a billing API, and now ships a handler for it. The
     // partial intersection that keeps the whole-set coverage rule observable
-    // survives on HubSpot, Salesforce and Metrifox, which have identity but no
+    // survives on HubSpot, Salesforce and Stigg, which have identity but no
     // billing scope.
     expect(providerNamesForFunction("billing")).toContain("stripe");
   });

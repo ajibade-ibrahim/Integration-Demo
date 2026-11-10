@@ -8,6 +8,7 @@ import { findMappings } from "@/core/repositories/mapping-repository";
 import { defaultMappingsFor } from "@/core/providers/defaults-registry";
 import { discoverFields } from "@/core/sync/discovery-service";
 import { mappableFields, schemasForFunction } from "@/core/object-schema";
+import { supportedObjectsFor } from "@/core/capabilities";
 import { providerRegistry } from "@/core/registries/provider-registry";
 import { HUBSPOT_PROVIDER_NAME } from "@/core/providers/hubspot/provider";
 import type { TargetObject } from "@/core/types/common";
@@ -72,22 +73,30 @@ export default async function MappingPage({
     .map((candidate) => ({ name: candidate.name, label: candidate.label }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
-  // Scoped to the function being edited, not every object that exists. A
-  // catalog rule set must not offer Customer as a target: the rule would save,
-  // validate, and then write nothing on every sync.
-  const objects: EditorObject[] = schemasForFunction(functionName).map((schema) => ({
-    object: schema.object,
-    label: schema.label,
-    sources: discovered[schema.object] ?? [],
-    crossRefProviders: schema.object === "customer" ? crossRefProviders : [],
-    targets: mappableFields(schema.object).map((field) => ({
-      name: field.name,
-      label: field.label,
-      kind: field.kind,
-      ...(field.required === true ? { required: true } : {}),
-      ...(field.enumValues === undefined ? {} : { enumValues: field.enumValues }),
-    })),
-  }));
+  // Scoped to the function being edited, not every object that exists, and
+  // narrowed again to what this provider's handler actually writes. A catalog
+  // rule set must not offer Customer as a target, and a Metrifox billing rule
+  // set must not offer Invoice line or Payment: either rule would save,
+  // validate, and then write nothing on every sync. Filtering the function's
+  // schemas preserves their declared order.
+  const supported = new Set(
+    supportedObjectsFor(functionName, integration.providerName)
+  );
+  const objects: EditorObject[] = schemasForFunction(functionName)
+    .filter((schema) => supported.has(schema.object))
+    .map((schema) => ({
+      object: schema.object,
+      label: schema.label,
+      sources: discovered[schema.object] ?? [],
+      crossRefProviders: schema.object === "customer" ? crossRefProviders : [],
+      targets: mappableFields(schema.object).map((field) => ({
+        name: field.name,
+        label: field.label,
+        kind: field.kind,
+        ...(field.required === true ? { required: true } : {}),
+        ...(field.enumValues === undefined ? {} : { enumValues: field.enumValues }),
+      })),
+    }));
 
   return (
     <div className="space-y-6">

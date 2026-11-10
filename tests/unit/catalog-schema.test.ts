@@ -220,8 +220,9 @@ describe("function scoping of mapping rules", () => {
     expect(result.violations[0]?.message).toContain("no objects");
   });
 
-  it("shows the editor only the objects the function being edited owns", () => {
-    // What the mapping page renders. Offering Customer as a target while
+  it("gives each function only the objects it owns", () => {
+    // The function-scoped half of what the mapping page renders; the page then
+    // narrows again by provider capability. Offering Customer as a target while
     // editing a catalog mapping is exactly how the silent-no-op rule gets
     // created in the first place.
     expect(schemasForFunction(CATALOG_FUNCTION).map((s) => s.object)).toEqual([

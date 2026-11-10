@@ -44,12 +44,32 @@ export const METRIFOX_IDENTITY_SCOPES = [
  * Scopes for the agreement function, named after the API paths the way the
  * identity set is.
  *
- * Metrifox is the provider that carries both shapes — `orders` for the
- * committed, order-form side and `subscriptions` for the recurring one —
- * which is the case the single agreement model has to absorb without forking.
+ * The handler pages `/api/v1/customers` and reads subscriptions from each
+ * customer's details payload, so it needs both scopes. An earlier version
+ * claimed `orders:read`, which the public API cannot honour: Metrifox documents
+ * `POST /api/v1/orders` and no order read at all — no list endpoint, no per-id
+ * read. The integration must not promise data it cannot fetch, so the order
+ * claim is removed rather than left as roadmap. The effective-entitlement
+ * summary and billing history are subscription endpoints, so they are covered
+ * by the same subscription scope.
  */
 export const METRIFOX_AGREEMENT_SCOPES = [
-  "orders:read",
+  "customers:read",
+  "subscriptions:read",
+] as const;
+
+/**
+ * Scopes for the billing function.
+ *
+ * Invoices have no endpoint of their own: the handler pages customers, reads
+ * their subscriptions from the details payload, and then fetches each
+ * subscription's billing history under `/api/v1/subscriptions/{id}`. So the
+ * scope names the two resources actually read rather than inventing an
+ * `invoices:read` the API could not honour. Scope union with identity dedupes
+ * `customers:read` for free.
+ */
+export const METRIFOX_BILLING_SCOPES = [
+  "customers:read",
   "subscriptions:read",
 ] as const;
 
@@ -61,7 +81,7 @@ const metrifoxAuth: ApiKeyProviderAuth = {
   header: "x-api-key",
 
   instructions:
-    "In Metrifox, open Developers → API Keys and create a key with read access to customers. Paste it below: it is encrypted before it is stored, and never shown again.",
+    "In Metrifox, open Developers → API Keys and create a key with read access to customers and subscriptions. Paste it below: it is encrypted before it is stored, and never shown again.",
   placeholder: "sk_test_…",
 
   /**
@@ -119,7 +139,7 @@ export const metrifoxProvider: ProviderDefinition = {
   name: METRIFOX_PROVIDER_NAME,
   label: "Metrifox",
   description:
-    "Sync customers and their contact people from Metrifox. Authenticates with an API key — there is no OAuth app to register.",
+    "Sync customers, their contact people, subscriptions and their effective entitlements, plus invoice summaries from Metrifox. Billing writes invoices only — the public API exposes no invoice lines or payment list. Authenticates with an API key — there is no OAuth app to register.",
 
   auth: metrifoxAuth,
 

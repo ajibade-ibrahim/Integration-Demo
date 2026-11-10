@@ -314,7 +314,7 @@ describe("function scoping of agreement rules", () => {
     ).toBe(false);
   });
 
-  it("shows the editor all five sections and nothing else", () => {
+  it("owns all five agreement sections and nothing else", () => {
     expect(
       schemasForFunction(AGREEMENT_FUNCTION).map((s) => s.label)
     ).toEqual([

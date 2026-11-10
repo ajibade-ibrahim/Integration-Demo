@@ -454,7 +454,7 @@
       hubspot: ["crm.objects.deals.read", "crm.schemas.deals.read"],
       salesforce: ["api", "refresh_token"],
       stripe: ["subscriptions:read"],
-      metrifox: ["orders:read", "subscriptions:read"],
+      metrifox: ["customers:read", "subscriptions:read"],
       chargebee: ["subscriptions:read", "subscription_entitlements:read",
                   "features:read", "item_entitlements:read"],
       stigg: ["subscriptions:read"],
@@ -463,6 +463,9 @@
     billing: {
       stripe: ["invoices:read", "invoice_payments:read", "charges:read", "refunds:read"],
       chargebee: ["invoices:read", "transactions:read"],
+      // Invoices only: the handler reads them from each subscription's billing
+      // history, so there is no invoice endpoint to name.
+      metrifox: ["customers:read", "subscriptions:read"],
       mock: ["billing.invoices.read"]
     },
     usage: {},

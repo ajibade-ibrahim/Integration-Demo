@@ -53,6 +53,7 @@ import {
   metrifoxProvider,
   METRIFOX_IDENTITY_SCOPES,
   METRIFOX_AGREEMENT_SCOPES,
+  METRIFOX_BILLING_SCOPES,
   METRIFOX_PROVIDER_NAME,
 } from "./providers/metrifox/provider";
 import {
@@ -80,6 +81,8 @@ import {
 } from "./providers/stigg/provider";
 
 import { metrifoxIdentityHandler } from "./providers/metrifox/identity-handler";
+import { metrifoxAgreementHandler } from "./providers/metrifox/agreement-handler";
+import { metrifoxBillingHandler } from "./providers/metrifox/billing-handler";
 import { metrifoxFieldDiscovery } from "./providers/metrifox/discovery";
 import { stripeIdentityHandler } from "./providers/stripe/identity-handler";
 import { stripeAgreementHandler } from "./providers/stripe/agreement-handler";
@@ -143,12 +146,12 @@ export function bootstrap(): void {
   // does not claim we have built the handler — the capability layer requires
   // both a handler and its declared target objects before offering the pair.
   //
-  // Billing is now real on Stripe and Chargebee, and stays declared on the mock
-  // so scope isolation ("authorizing for identity must never request
-  // `billing.invoices.read`") keeps a subject. That keeps
+  // Billing is now real on Stripe, Chargebee and Metrifox, and stays declared
+  // on the mock so scope isolation ("authorizing for identity must never
+  // request `billing.invoices.read`") keeps a subject. That keeps
   // `providerNamesForFunctions(["identity","billing"])` a genuine partial
-  // intersection — hubspot, salesforce and metrifox have identity but not
-  // billing — which is the only place the "a provider must cover the whole set"
+  // intersection — hubspot, salesforce and stigg have identity but no billing
+  // scopes — which is the only place the "a provider must cover the whole set"
   // rule is observable. `tests/unit/multi-function.test.ts` pins the result.
   // Agreement is the deliberate widening that comment used to ask for.
   const identityScopes: Array<[string, readonly string[]]> = [
@@ -206,10 +209,16 @@ export function bootstrap(): void {
   // the canonical model insists one agreement covers both a self-serve
   // subscription and a sales-led order form, and the scope sets are where that
   // claim first becomes checkable: Salesforce supplies Contract, Stripe
-  // supplies subscriptions, Metrifox supplies both, HubSpot supplies deals.
-  // Stigg joins with a fifth contract-like shape — the subscription it already
-  // supplies catalog and identity for — and is the first provider whose lines
-  // type themselves first-class (a plan line and its addons).
+  // supplies subscriptions, HubSpot supplies deals. Stigg joins with a fifth
+  // contract-like shape — the subscription it already supplies catalog and
+  // identity for — and is the first provider whose lines type themselves
+  // first-class (a plan line and its addons).
+  //
+  // Metrifox is subscriptions only. Its scope used to claim `orders:read` as
+  // well, but the public API exposes `POST /api/v1/orders` and no read of any
+  // kind, so the claim was removed rather than left as roadmap. Its agreements
+  // are read by fanning out from the customer details payload, because there
+  // is no subscription list endpoint either.
   //
   // `dataModels` names two objects, and the pair is the whole design. The
   // canonical AGREEMENT node is six fields — id, account, offering, type,
@@ -302,8 +311,13 @@ export function bootstrap(): void {
   });
 
   // Billing: the invoices a customer was sent and the money that moved. Real on
-  // the two providers that already ship the functions an invoice hangs off —
-  // Stripe and Chargebee — and declared on the mock only for scope isolation.
+  // the three providers that already ship the functions an invoice hangs off —
+  // Stripe, Chargebee and Metrifox — and declared on the mock only for scope
+  // isolation.
+  //
+  // Metrifox is invoice-only: its public API exposes no invoice lines and no
+  // payment list, so its handler declares one object even though the function
+  // offers three. The capability layer reports that narrower coverage.
   //
   // The mock keeps its scopes so that authorizing for identity never requests a
   // billing scope, which is the observable form of the isolation rule; it gets
@@ -316,6 +330,7 @@ export function bootstrap(): void {
   const billingScopes: Array<[string, readonly string[]]> = [
     [STRIPE_PROVIDER_NAME, STRIPE_BILLING_SCOPES],
     [CHARGEBEE_PROVIDER_NAME, CHARGEBEE_BILLING_SCOPES],
+    [METRIFOX_PROVIDER_NAME, METRIFOX_BILLING_SCOPES],
   ];
   if (isMockEnabled()) {
     billingScopes.push([MOCK_PROVIDER_NAME, MOCK_BILLING_SCOPES]);
@@ -366,6 +381,10 @@ export function bootstrap(): void {
     salesforceFieldDiscovery
   );
 
+  // Metrifox is an API-key provider with identity built first. Its customer
+  // list is the same page the agreement and billing handlers start from, which
+  // is why each run paginates it separately — see `agreement-handler.ts` and
+  // `billing-handler.ts`.
   registerSyncHandler(
     IDENTITY_FUNCTION,
     METRIFOX_PROVIDER_NAME,
@@ -480,6 +499,22 @@ export function bootstrap(): void {
     stiggFieldDiscovery
   );
 
+  // Metrifox joins as an agreement provider. Its scope was declared before a
+  // handler existed, so the capability layer filtered it out of the picker;
+  // the picker gains the provider at the same moment the handler does. The
+  // discoverer is the instance the identity registration uses — it switches on
+  // the target object, not the function.
+  registerSyncHandler(
+    AGREEMENT_FUNCTION,
+    METRIFOX_PROVIDER_NAME,
+    metrifoxAgreementHandler
+  );
+  registerFieldDiscovery(
+    AGREEMENT_FUNCTION,
+    METRIFOX_PROVIDER_NAME,
+    metrifoxFieldDiscovery
+  );
+
   // HubSpot's agreement function is deals, with their line items read from a
   // second paginated list. The scopes were declared long before this handler,
   // so the picker already offered it; only the sync becomes real here.
@@ -494,8 +529,8 @@ export function bootstrap(): void {
     hubspotFieldDiscovery
   );
 
-  // Billing, on the same two providers. The discoverer switches on the target
-  // object, so the same instance serves billing and the functions above.
+  // Billing, on Stripe, Chargebee and Metrifox. The discoverer switches on the
+  // target object, so the same instance serves billing and the functions above.
   registerSyncHandler(
     BILLING_FUNCTION,
     STRIPE_PROVIDER_NAME,
@@ -516,6 +551,20 @@ export function bootstrap(): void {
     BILLING_FUNCTION,
     CHARGEBEE_PROVIDER_NAME,
     chargebeeFieldDiscovery
+  );
+
+  // Metrifox's billing handler is invoice-only; the same discoverer instance
+  // offers only the invoice section because its switch returns nothing for the
+  // line and payment objects.
+  registerSyncHandler(
+    BILLING_FUNCTION,
+    METRIFOX_PROVIDER_NAME,
+    metrifoxBillingHandler
+  );
+  registerFieldDiscovery(
+    BILLING_FUNCTION,
+    METRIFOX_PROVIDER_NAME,
+    metrifoxFieldDiscovery
   );
 
   if (isMockEnabled()) {

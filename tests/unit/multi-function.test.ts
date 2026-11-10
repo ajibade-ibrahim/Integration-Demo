@@ -27,7 +27,11 @@ import {
   SALESFORCE_IDENTITY_SCOPES,
   SALESFORCE_PROVIDER_NAME,
 } from "@/core/providers/salesforce/provider";
-import { METRIFOX_PROVIDER_NAME } from "@/core/providers/metrifox/provider";
+import {
+  METRIFOX_AGREEMENT_SCOPES,
+  METRIFOX_BILLING_SCOPES,
+  METRIFOX_PROVIDER_NAME,
+} from "@/core/providers/metrifox/provider";
 import { MOCK_PROVIDER_NAME } from "@/core/providers/mock/provider";
 import {
   STRIPE_BILLING_SCOPES,
@@ -93,12 +97,13 @@ describe("provider candidates for a function set", () => {
   });
 
   it("excludes a provider that covers only part of the set", () => {
-    // Billing is built on Stripe and Chargebee and declared on the mock, so
-    // pairing it with identity leaves exactly those three — HubSpot, Salesforce
-    // and Metrifox have identity but no billing scope, and the whole-set rule
-    // is why they drop out.
+    // Billing is built on Stripe, Chargebee and Metrifox and declared on the
+    // mock, so pairing it with identity leaves exactly those four — HubSpot,
+    // Salesforce and Stigg have identity but no billing scope, and the
+    // whole-set rule is why they drop out.
     expect(providerNamesForFunctions(["identity", "billing"])).toEqual([
       "chargebee",
+      "metrifox",
       "mock",
       "stripe",
     ]);
@@ -232,25 +237,25 @@ describe("the agreement function", () => {
     );
   });
 
-  // Built on Stripe, Chargebee, Stigg and HubSpot; declared on the rest. The
-  // capability layer reads the handler registry and removes the unbuilt pairs
-  // from the picker, so this pins the boundary: four providers real, three
-  // still not.
+  // Built on Stripe, Chargebee, Stigg, HubSpot and Metrifox; declared on the
+  // rest. The capability layer reads the handler registry and removes the
+  // unbuilt pairs from the picker, so this pins the boundary: five providers
+  // real, two still not.
   //
   // It is a list rather than a loop over every agreement provider, which is
   // what it used to be. A loop asserting "no handler anywhere" stops being a
   // statement about the unbuilt providers the moment one is built — it just
   // fails, and the fix looks like deleting the test. Naming them keeps the
   // assertion meaningful and makes the next provider a one-line change.
-  it("is built on Stripe, Chargebee, Stigg and HubSpot, and on no other provider yet", () => {
+  it("is built on Stripe, Chargebee, Stigg, HubSpot and Metrifox, and on no other provider yet", () => {
     expect(getSyncHandler("agreement", STRIPE_PROVIDER_NAME)).toBeDefined();
     expect(getSyncHandler("agreement", CHARGEBEE_PROVIDER_NAME)).toBeDefined();
     expect(getSyncHandler("agreement", STIGG_PROVIDER_NAME)).toBeDefined();
     expect(getSyncHandler("agreement", HUBSPOT_PROVIDER_NAME)).toBeDefined();
+    expect(getSyncHandler("agreement", METRIFOX_PROVIDER_NAME)).toBeDefined();
 
     for (const provider of [
       SALESFORCE_PROVIDER_NAME,
-      METRIFOX_PROVIDER_NAME,
       MOCK_PROVIDER_NAME,
     ]) {
       expect(
@@ -274,6 +279,7 @@ describe("the billing function", () => {
     // so the expectation is alphabetical rather than insertion order.
     expect(providerNamesForFunction("billing")).toEqual([
       "chargebee",
+      "metrifox",
       "mock",
       "stripe",
     ]);
@@ -298,17 +304,18 @@ describe("the billing function", () => {
     );
   });
 
-  it("is built on Stripe and Chargebee and on no other provider yet", () => {
+  it("is built on Stripe, Chargebee and Metrifox, and on no other provider yet", () => {
     // A named list rather than a loop, for the reason the agreement twin gives:
     // a loop over every billing provider stops testing the unbuilt ones the
     // moment one is built, and the fix then looks like deleting the test.
     expect(getSyncHandler("billing", STRIPE_PROVIDER_NAME)).toBeDefined();
     expect(getSyncHandler("billing", CHARGEBEE_PROVIDER_NAME)).toBeDefined();
+    expect(getSyncHandler("billing", METRIFOX_PROVIDER_NAME)).toBeDefined();
 
     for (const provider of [
       HUBSPOT_PROVIDER_NAME,
       SALESFORCE_PROVIDER_NAME,
-      METRIFOX_PROVIDER_NAME,
+      STIGG_PROVIDER_NAME,
       MOCK_PROVIDER_NAME,
     ]) {
       expect(
@@ -320,6 +327,33 @@ describe("the billing function", () => {
     // The mock's scopes remain declared for scope-isolation tests, but it has
     // no billing handler and the capability layer filters it from the picker.
     expect(providerNamesForFunction("billing")).toContain(MOCK_PROVIDER_NAME);
+  });
+
+  it("shares the customer and subscription scopes between Metrifox functions", () => {
+    // An identity-only connection must not ask for subscription access.
+    const identityOnly = resolveScopes(["identity"], METRIFOX_PROVIDER_NAME);
+    expect(identityOnly).toContain("customers:read");
+    expect(identityOnly).not.toContain("subscriptions:read");
+
+    // Agreement and billing both read customers and subscriptions, and the
+    // union with identity keeps `customers:read` once.
+    for (const functionName of ["agreement", "billing"] as const) {
+      const scopes = resolveScopes(
+        ["identity", functionName],
+        METRIFOX_PROVIDER_NAME
+      );
+      for (const scope of [
+        "customers:read",
+        "subscriptions:read",
+        ...(functionName === "agreement"
+          ? METRIFOX_AGREEMENT_SCOPES
+          : METRIFOX_BILLING_SCOPES),
+      ]) {
+        expect(scopes, `${functionName} requests ${scope}`).toContain(scope);
+      }
+      expect(new Set(scopes).size, functionName).toBe(scopes.length);
+      expect(scopes.filter((s) => s === "customers:read")).toHaveLength(1);
+    }
   });
 
   it("does not leak invoice scopes into an identity-only integration", () => {
