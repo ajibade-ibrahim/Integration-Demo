@@ -15,6 +15,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
+import { ownedScope, pageWindow, type DataPageQuery } from "./data-page";
 import { readJsonObject } from "./json-column";
 import { parseFieldProvenance } from "../identity/provenance";
 import type {
@@ -66,16 +67,29 @@ export interface SyncedDataPage {
 
 export async function loadSyncedData(
   userId: string,
-  take = 200
+  query: DataPageQuery = {}
 ): Promise<SyncedDataPage> {
-  const scope = { integration: { userId } };
+  const scope = ownedScope(userId, query.integrationId);
+  const window = pageWindow(query.page, query.pageSize);
+
+  // The account count follows the connection filter without leaving the user's
+  // tenant: an account is in scope when at least one of its members came from
+  // that integration. Accounts are merged cross-source, so the members and keys
+  // are deliberately not narrowed — see `loadCustomerAccounts`.
+  const accountWhere =
+    query.integrationId === undefined
+      ? { userId }
+      : { userId, members: { some: { integrationId: query.integrationId } } };
 
   const [customers, contacts, customerTotal, contactTotal, accountTotal, unlinked] =
     await Promise.all([
       prisma.customer.findMany({
         where: scope,
-        orderBy: { name: "asc" },
-        take,
+        // The id tiebreak is what makes a page boundary stable: two customers
+        // can share a name, and without it the same row can appear on two
+        // pages or on none.
+        orderBy: [{ name: "asc" }, { id: "asc" }],
+        ...window,
         include: {
           integration: { select: { instanceLabel: true, providerName: true } },
           _count: { select: { contacts: true } },
@@ -83,8 +97,8 @@ export async function loadSyncedData(
       }),
       prisma.contact.findMany({
         where: scope,
-        orderBy: { name: "asc" },
-        take,
+        orderBy: [{ name: "asc" }, { id: "asc" }],
+        ...window,
         include: {
           integration: { select: { instanceLabel: true } },
           customer: { select: { name: true } },
@@ -92,7 +106,7 @@ export async function loadSyncedData(
       }),
       prisma.customer.count({ where: scope }),
       prisma.contact.count({ where: scope }),
-      prisma.customerAccount.count({ where: { userId } }),
+      prisma.customerAccount.count({ where: accountWhere }),
       prisma.contact.count({
         where: { ...scope, customerId: null, externalCustomerId: { not: null } },
       }),
@@ -182,16 +196,28 @@ export interface CustomerAccountRow {
  *
  * Sorted `name asc, id asc`. The id tiebreak matters more than it looks: two
  * accounts can genuinely share a resolved name, and without it their order
- * would shift between renders of an unchanged page.
+ * would shift between renders of an unchanged page — which pagination turns
+ * into a row appearing twice or disappearing entirely.
+ *
+ * When `query.integrationId` is set, an account is in scope only if one of its
+ * members came from that connection, but **every** member and key is still
+ * returned. An account is a cross-source merge; trimming it to one source's
+ * records would describe an account that does not exist and would hide the
+ * reason the tab is worth opening.
  */
 export async function loadCustomerAccounts(
   userId: string,
-  take = 200
+  query: DataPageQuery = {}
 ): Promise<CustomerAccountRow[]> {
+  const where =
+    query.integrationId === undefined
+      ? { userId }
+      : { userId, members: { some: { integrationId: query.integrationId } } };
+
   const accounts = await prisma.customerAccount.findMany({
-    where: { userId },
+    where,
     orderBy: [{ name: "asc" }, { id: "asc" }],
-    take,
+    ...pageWindow(query.page, query.pageSize),
     include: {
       members: {
         orderBy: [{ externalSourceId: "asc" }],

@@ -20,6 +20,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { priceLabel } from "../price-format";
+import { ownedScope, pageWindow, type DataPageQuery } from "./data-page";
 import { readJsonObject } from "./json-column";
 
 /**
@@ -260,17 +261,22 @@ function renewalAt(row: {
 
 export async function loadAgreements(
   userId: string,
-  take = 200
+  query: DataPageQuery = {}
 ): Promise<AgreementPage> {
-  const scope = { integration: { userId } };
+  const scope = ownedScope(userId, query.integrationId);
+  const window = pageWindow(query.page, query.pageSize);
+  // Each half has to reach as far as this page's window, not merely one page
+  // deep: on page 2 a row at position 60 in a half can be inside the merged
+  // top-120 even though it is outside that half's first 50.
+  const topK = window.skip + window.take;
 
   // Two queries rather than one `orderBy`, because the sort key is
   // `COALESCE(nextBillingAt, currentPeriodEnd)` and Prisma has no expression
   // ordering. Splitting on whether `nextBillingAt` is present lets each half
   // be ordered by the column that is actually populated — the fallback is
   // exact rather than "nextBillingAt first, and rows without one last" — and
-  // taking `take` from each before merging is enough, because no row outside a
-  // half's own top-`take` can be inside the merged top-`take`.
+  // taking `topK` from each before merging is enough, because no row outside a
+  // half's own top-`topK` can be inside the merged top-`topK`.
   const [withNext, withoutNext, total, active, unlinkedCustomers, unlinkedOfferings, multiItem] =
     await Promise.all([
       prisma.agreement.findMany({
@@ -278,8 +284,9 @@ export async function loadAgreements(
         orderBy: [
           { subscription: { nextBillingAt: "asc" } },
           { name: "asc" },
+          { id: "asc" },
         ],
-        take,
+        take: topK,
         include: AGREEMENT_INCLUDE,
       }),
       prisma.agreement.findMany({
@@ -293,8 +300,9 @@ export async function loadAgreements(
         orderBy: [
           { subscription: { currentPeriodEnd: "asc" } },
           { name: "asc" },
+          { id: "asc" },
         ],
-        take,
+        take: topK,
         include: AGREEMENT_INCLUDE,
       }),
       prisma.agreement.count({ where: scope }),
@@ -308,7 +316,7 @@ export async function loadAgreements(
         where: { ...scope, offeringId: null, externalOfferingId: { not: null } },
       }),
       prisma.subscription.count({
-        where: { integration: { userId }, itemCount: { gt: 1 } },
+        where: { ...scope, itemCount: { gt: 1 } },
       }),
     ]);
 
@@ -324,9 +332,13 @@ export async function loadAgreements(
       } else if (right !== null) {
         return 1;
       }
-      return a.name.localeCompare(b.name);
+      // The id tiebreak is not cosmetic. Two agreements can share a name and a
+      // renewal date, and without a total order the page boundary can show one
+      // twice or drop it entirely.
+      const byName = a.name.localeCompare(b.name);
+      return byName !== 0 ? byName : a.id.localeCompare(b.id);
     })
-    .slice(0, take);
+    .slice(window.skip, window.skip + window.take);
 
   return {
     agreements: agreements.map((row) => {

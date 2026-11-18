@@ -8,6 +8,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
+import { ownedScope, pageWindow, type DataPageQuery } from "./data-page";
 import { readJsonArray } from "./json-column";
 
 export interface MessageParticipantView {
@@ -144,15 +145,17 @@ function toListRow(row: {
   };
 }
 
-/** Newest messages across every integration this user owns. */
+/** Newest messages across every integration this user owns, or one of them. */
 export async function loadMessagesForUser(
   userId: string,
-  take = 200
+  query: DataPageQuery = {}
 ): Promise<MessageListRow[]> {
   const rows = await prisma.message.findMany({
-    where: { integration: { userId } },
+    where: ownedScope(userId, query.integrationId),
+    // The id tiebreak is already here, and it is what keeps two messages that
+    // share a timestamp on the same page across renders.
     orderBy: [{ sentAt: "desc" }, { id: "asc" }],
-    take,
+    ...pageWindow(query.page, query.pageSize),
     include: {
       integration: { select: { instanceLabel: true, providerName: true } },
       participants: {
@@ -165,8 +168,13 @@ export async function loadMessagesForUser(
   return rows.map(toListRow);
 }
 
-export async function countMessagesForUser(userId: string): Promise<number> {
-  return prisma.message.count({ where: { integration: { userId } } });
+export async function countMessagesForUser(
+  userId: string,
+  integrationId?: string
+): Promise<number> {
+  return prisma.message.count({
+    where: ownedScope(userId, integrationId),
+  });
 }
 
 /** One message for the detail page, scoped through its integration's owner. */

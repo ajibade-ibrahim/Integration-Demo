@@ -1,6 +1,13 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { bootstrap } from "@/core/bootstrap";
 import { currentUserId } from "@/lib/current-user";
+import {
+  buildDataHref,
+  pageCount,
+  parsePage,
+  resolveIntegrationScope,
+} from "@/lib/integration-scope";
 import {
   loadAssertionsForDisplay,
   loadCustomerAccounts,
@@ -12,6 +19,8 @@ import {
   loadMessagesForUser,
   type MessageListRow,
 } from "@/core/repositories/message-repository";
+import { Pager } from "../pager";
+import { ScopeBanner, UnresolvedScopeNotice } from "../scope-banner";
 import { AccountsPanel } from "./accounts-panel";
 
 export const dynamic = "force-dynamic";
@@ -19,21 +28,30 @@ export const dynamic = "force-dynamic";
 export default async function SyncedDataPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; integration?: string; page?: string }>;
 }) {
   bootstrap();
 
-  const { tab } = await searchParams;
+  const { tab, integration, page: rawPage } = await searchParams;
   const showContacts = tab === "contacts";
   const showAccounts = tab === "accounts";
   const showMessages = tab === "messages";
 
   const userId = await currentUserId();
+  const { scope, unresolved } = await resolveIntegrationScope(
+    integration,
+    userId
+  );
+  const integrationId = scope?.integrationId;
+  const page = parsePage(rawPage);
+
   const [{ customers, contacts, totals }, messageTotal, messages] =
     await Promise.all([
-      loadSyncedData(userId),
-      countMessagesForUser(userId),
-      showMessages ? loadMessagesForUser(userId) : Promise.resolve([]),
+      loadSyncedData(userId, { integrationId, page }),
+      countMessagesForUser(userId, integrationId),
+      showMessages
+        ? loadMessagesForUser(userId, { integrationId, page })
+        : Promise.resolve([]),
     ]);
 
   // Only for the tab that renders them. The accounts read pulls members and
@@ -41,7 +59,7 @@ export default async function SyncedDataPage({
   // the customer table.
   const [accounts, assertions, runs] = showAccounts
     ? await Promise.all([
-        loadCustomerAccounts(userId),
+        loadCustomerAccounts(userId, { integrationId, page }),
         loadAssertionsForDisplay(userId),
         listResolutionRuns(userId, 1),
       ])
@@ -52,6 +70,37 @@ export default async function SyncedDataPage({
   // anything it did not report again has been settled.
   const latestRun = runs[0];
 
+  // The active tab decides what "page N" means. Redirecting before render
+  // keeps the URL truthful rather than showing an empty table under a page
+  // number that cannot exist.
+  const activeTotal = showMessages
+    ? messageTotal
+    : showAccounts
+      ? totals.accounts
+      : showContacts
+        ? totals.contacts
+        : totals.customers;
+  const activeTab = showMessages
+    ? "messages"
+    : showAccounts
+      ? "accounts"
+      : showContacts
+        ? "contacts"
+        : undefined;
+
+  if (page > pageCount(activeTotal)) {
+    redirect(
+      buildDataHref("/customers", {
+        tab: activeTab,
+        integration,
+        page: pageCount(activeTotal),
+      })
+    );
+  }
+
+  const empty =
+    totals.customers === 0 && totals.contacts === 0 && messageTotal === 0;
+
   return (
     <div className="space-y-6">
       <div>
@@ -61,25 +110,69 @@ export default async function SyncedDataPage({
         </p>
       </div>
 
-      {totals.customers === 0 &&
-      totals.contacts === 0 &&
-      messageTotal === 0 ? (
+      {scope !== null && (
+        <ScopeBanner
+          label={scope.label}
+          clearHref={buildDataHref("/customers", { tab: activeTab })}
+          // The Accounts tab is a cross-source merge. Saying "only this
+          // connection" there would be a promise the account card cannot keep:
+          // every field and member it shows is merged from all sources.
+          note={
+            showAccounts
+              ? "Accounts combine records from every source. Each account below contains at least one record from this connection; its fields and members may still come from other connections."
+              : undefined
+          }
+        />
+      )}
+      {unresolved && <UnresolvedScopeNotice />}
+
+      {empty ? (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
-          <p className="text-slate-600">Nothing synced yet.</p>
-          <Link
-            href="/integrations"
-            className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          >
-            Go to integrations
-          </Link>
+          {scope !== null ? (
+            <>
+              <p className="text-slate-600">
+                Nothing synced from {scope.label} yet.
+              </p>
+              <Link
+                href={`/integrations/${scope.integrationId}`}
+                className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Back to connection
+              </Link>
+            </>
+          ) : (
+            <>
+              <p className="text-slate-600">Nothing synced yet.</p>
+              <Link
+                href="/integrations"
+                className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Go to integrations
+              </Link>
+            </>
+          )}
         </div>
       ) : (
         <>
           <div className="flex items-center gap-2 border-b border-slate-200">
-            <Tab href="/customers" active={!showContacts && !showAccounts && !showMessages}>
+            {/*
+              Every tab link is built through `buildDataHref` so the connection
+              filter survives a tab switch. A hand-written `?tab=…` here would
+              silently show every source while the banner still claimed one.
+            */}
+            <Tab
+              href={buildDataHref("/customers", { integration })}
+              active={!showContacts && !showAccounts && !showMessages}
+            >
               Customers ({totals.customers})
             </Tab>
-            <Tab href="/customers?tab=contacts" active={showContacts}>
+            <Tab
+              href={buildDataHref("/customers", {
+                tab: "contacts",
+                integration,
+              })}
+              active={showContacts}
+            >
               Contacts ({totals.contacts})
             </Tab>
             {/*
@@ -87,10 +180,22 @@ export default async function SyncedDataPage({
               company appears once per integration in Customers, and this is
               where those rows become one company.
             */}
-            <Tab href="/customers?tab=accounts" active={showAccounts}>
+            <Tab
+              href={buildDataHref("/customers", {
+                tab: "accounts",
+                integration,
+              })}
+              active={showAccounts}
+            >
               Accounts ({totals.accounts})
             </Tab>
-            <Tab href="/customers?tab=messages" active={showMessages}>
+            <Tab
+              href={buildDataHref("/customers", {
+                tab: "messages",
+                integration,
+              })}
+              active={showMessages}
+            >
               Messages ({messageTotal})
             </Tab>
           </div>
@@ -126,12 +231,21 @@ export default async function SyncedDataPage({
                 latestRun?.startedAt.toLocaleString() ??
                 null
               }
+              scopeLabel={scope?.label}
+              focusIntegrationId={scope?.integrationId}
             />
           ) : showContacts ? (
             <ContactTable rows={contacts} />
           ) : (
             <CustomerTable rows={customers} />
           )}
+
+          <Pager
+            page={page}
+            total={activeTotal}
+            path="/customers"
+            params={{ tab: activeTab, integration }}
+          />
         </>
       )}
     </div>

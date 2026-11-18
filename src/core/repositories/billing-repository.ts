@@ -23,6 +23,7 @@ import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { formatMoney } from "../price-format";
+import { ownedScope, pageWindow, type DataPageQuery } from "./data-page";
 import { readJsonObject } from "./json-column";
 
 /** One line on an invoice, as the page renders it. */
@@ -190,16 +191,18 @@ const INVOICE_INCLUDE = {
  */
 export async function loadInvoices(
   userId: string,
-  take = 200
+  query: DataPageQuery = {}
 ): Promise<BillingPage> {
-  const scope = { integration: { userId } };
+  const scope = ownedScope(userId, query.integrationId);
 
   const [invoices, total, outstanding, unlinkedCustomers, unlinkedAgreements, payments] =
     await Promise.all([
       prisma.invoice.findMany({
         where: scope,
-        orderBy: { issuedAt: { sort: "desc", nulls: "last" } },
-        take,
+        // The id tiebreak gives the page boundary a total order: two invoices
+        // can share an issue date, and without it one row can appear twice.
+        orderBy: [{ issuedAt: { sort: "desc", nulls: "last" } }, { id: "asc" }],
+        ...pageWindow(query.page, query.pageSize),
         include: INVOICE_INCLUDE,
       }),
       prisma.invoice.count({ where: scope }),
@@ -215,7 +218,7 @@ export async function loadInvoices(
       prisma.invoice.count({
         where: { ...scope, agreementId: null, externalAgreementId: { not: null } },
       }),
-      prisma.payment.count({ where: { integration: { userId } } }),
+      prisma.payment.count({ where: scope }),
     ]);
 
   return {

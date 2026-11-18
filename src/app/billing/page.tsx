@@ -1,7 +1,14 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { bootstrap } from "@/core/bootstrap";
 import { currentUserId } from "@/lib/current-user";
+import {
+  buildDataHref,
+  pageCount,
+  parsePage,
+  resolveIntegrationScope,
+} from "@/lib/integration-scope";
 import {
   formatAmount,
   loadInvoices,
@@ -10,13 +17,40 @@ import {
   type PaymentRow,
 } from "@/core/repositories/billing-repository";
 import { Empty, Table, Td } from "../data-table";
+import { Pager } from "../pager";
+import { ScopeBanner, UnresolvedScopeNotice } from "../scope-banner";
 
 export const dynamic = "force-dynamic";
 
-export default async function BillingPage() {
+export default async function BillingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ integration?: string; page?: string }>;
+}) {
   bootstrap();
 
-  const { invoices, totals } = await loadInvoices(await currentUserId());
+  const { integration, page: rawPage } = await searchParams;
+
+  const userId = await currentUserId();
+  const { scope, unresolved } = await resolveIntegrationScope(
+    integration,
+    userId
+  );
+  const page = parsePage(rawPage);
+
+  const { invoices, totals } = await loadInvoices(userId, {
+    integrationId: scope?.integrationId,
+    page,
+  });
+
+  if (page > pageCount(totals.invoices)) {
+    redirect(
+      buildDataHref("/billing", {
+        integration,
+        page: pageCount(totals.invoices),
+      })
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -28,19 +62,43 @@ export default async function BillingPage() {
         </p>
       </div>
 
+      {scope !== null && (
+        <ScopeBanner
+          label={scope.label}
+          clearHref={buildDataHref("/billing", {})}
+        />
+      )}
+      {unresolved && <UnresolvedScopeNotice />}
+
       {totals.invoices === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
-          <p className="text-slate-600">Nothing synced yet.</p>
-          <p className="mt-1 text-sm text-slate-500">
-            Connect an integration that serves the Billing function, then run a
-            sync.
-          </p>
-          <Link
-            href="/integrations"
-            className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          >
-            Go to integrations
-          </Link>
+          {scope !== null ? (
+            <>
+              <p className="text-slate-600">
+                Nothing synced from {scope.label} yet.
+              </p>
+              <Link
+                href={`/integrations/${scope.integrationId}`}
+                className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Back to connection
+              </Link>
+            </>
+          ) : (
+            <>
+              <p className="text-slate-600">Nothing synced yet.</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Connect an integration that serves the Billing function, then run
+                a sync.
+              </p>
+              <Link
+                href="/integrations"
+                className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Go to integrations
+              </Link>
+            </>
+          )}
         </div>
       ) : (
         <>
@@ -136,6 +194,13 @@ export default async function BillingPage() {
               </tr>
             ))}
           </Table>
+
+          <Pager
+            page={page}
+            total={totals.invoices}
+            path="/billing"
+            params={{ integration }}
+          />
         </>
       )}
     </div>

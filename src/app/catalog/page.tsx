@@ -1,12 +1,21 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { bootstrap } from "@/core/bootstrap";
 import { currentUserId } from "@/lib/current-user";
+import {
+  buildDataHref,
+  pageCount,
+  parsePage,
+  resolveIntegrationScope,
+} from "@/lib/integration-scope";
 import {
   formatOfferingPrice,
   loadCatalog,
   type FeatureOffering,
 } from "@/core/repositories/catalog-repository";
 import { Empty, Table, Td } from "../data-table";
+import { Pager } from "../pager";
+import { ScopeBanner, UnresolvedScopeNotice } from "../scope-banner";
 
 export const dynamic = "force-dynamic";
 
@@ -26,19 +35,44 @@ function viewFrom(tab: string | undefined): View {
 export default async function CatalogPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; integration?: string; page?: string }>;
 }) {
   bootstrap();
 
-  const { tab } = await searchParams;
+  const { tab, integration, page: rawPage } = await searchParams;
   const view = viewFrom(tab);
 
-  const { products, offerings, features, totals } = await loadCatalog(
-    await currentUserId()
+  const userId = await currentUserId();
+  const { scope, unresolved } = await resolveIntegrationScope(
+    integration,
+    userId
   );
+  const page = parsePage(rawPage);
+
+  const { products, offerings, features, totals } = await loadCatalog(userId, {
+    integrationId: scope?.integrationId,
+    page,
+  });
 
   const empty =
     totals.products === 0 && totals.offerings === 0 && totals.features === 0;
+
+  const activeTotal =
+    view === "offerings"
+      ? totals.offerings
+      : view === "features"
+        ? totals.features
+        : totals.products;
+
+  if (page > pageCount(activeTotal)) {
+    redirect(
+      buildDataHref("/catalog", {
+        tab: view === "products" ? undefined : view,
+        integration,
+        page: pageCount(activeTotal),
+      })
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -50,27 +84,62 @@ export default async function CatalogPage({
         </p>
       </div>
 
+      {scope !== null && (
+        <ScopeBanner
+          label={scope.label}
+          clearHref={buildDataHref("/catalog", {
+            tab: view === "products" ? undefined : view,
+          })}
+        />
+      )}
+      {unresolved && <UnresolvedScopeNotice />}
+
       {empty ? (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
-          <p className="text-slate-600">Nothing synced yet.</p>
-          <p className="mt-1 text-sm text-slate-500">
-            Connect an integration that serves the Catalog function, then run a
-            sync.
-          </p>
-          <Link
-            href="/integrations"
-            className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          >
-            Go to integrations
-          </Link>
+          {scope !== null ? (
+            <>
+              <p className="text-slate-600">
+                Nothing synced from {scope.label} yet.
+              </p>
+              <Link
+                href={`/integrations/${scope.integrationId}`}
+                className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Back to connection
+              </Link>
+            </>
+          ) : (
+            <>
+              <p className="text-slate-600">Nothing synced yet.</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Connect an integration that serves the Catalog function, then run
+                a sync.
+              </p>
+              <Link
+                href="/integrations"
+                className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Go to integrations
+              </Link>
+            </>
+          )}
         </div>
       ) : (
         <>
           <div className="flex gap-2">
-            <Tab href="/catalog" active={view === "products"}>
+            <Tab
+              href={buildDataHref("/catalog", { integration })}
+              active={view === "products"}
+            >
               Products ({totals.products})
             </Tab>
-            <Tab href="/catalog?tab=offerings" active={view === "offerings"}>
+            <Tab
+              href={buildDataHref("/catalog", {
+                tab: "offerings",
+                integration,
+              })}
+              active={view === "offerings"}
+            >
               Offerings ({totals.offerings})
             </Tab>
             {/*
@@ -79,7 +148,13 @@ export default async function CatalogPage({
               answer to "did the feature sync work?" — a missing tab would leave
               that indistinguishable from a build without the feature in it.
             */}
-            <Tab href="/catalog?tab=features" active={view === "features"}>
+            <Tab
+              href={buildDataHref("/catalog", {
+                tab: "features",
+                integration,
+              })}
+              active={view === "features"}
+            >
               Features ({totals.features})
             </Tab>
           </div>
@@ -250,6 +325,13 @@ export default async function CatalogPage({
               ))}
             </Table>
           )}
+
+          <Pager
+            page={page}
+            total={activeTotal}
+            path="/catalog"
+            params={{ tab: view === "products" ? undefined : view, integration }}
+          />
         </>
       )}
     </div>
