@@ -13,6 +13,8 @@ import {
   listAllIntegrations,
   updateStatus,
 } from "../repositories/integration-repository";
+import { pruneExpiredMessages } from "../repositories/message-repository";
+import { retentionCutoff } from "../communication/config";
 import { resolveAfterSync } from "../identity/resolve-after-sync";
 import { recoverExpiredSyncRuns } from "./lease";
 import { executeSync, totalRecordsWritten } from "./sync-engine";
@@ -64,6 +66,8 @@ export interface SchedulerResult {
   /** Runs whose lease expired and were marked abandoned before selection. */
   recovered: number;
   resolutions: ScheduledResolution[];
+  /** Messages deleted by the global retention sweep this tick. */
+  messagesPruned: number;
 }
 
 export interface SchedulerOptions {
@@ -127,6 +131,11 @@ export async function runScheduledSyncs(
     expired,
     recovered,
     resolutions: await resolveTouchedUsers(synced),
+    // Independent of which integrations were due: an integration that stopped
+    // syncing must not leave its expired messages behind forever. The active
+    // path prunes after a complete pass; this is the retention floor for
+    // everything else.
+    messagesPruned: await pruneExpiredMessages(retentionCutoff(new Date(now))),
   };
 }
 

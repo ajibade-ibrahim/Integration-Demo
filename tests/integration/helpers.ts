@@ -70,6 +70,7 @@ export async function collect(
     invoice: [],
     invoiceLine: [],
     payment: [],
+    message: [],
   };
 
   for await (const page of handler.fetchPages(ctx)) {

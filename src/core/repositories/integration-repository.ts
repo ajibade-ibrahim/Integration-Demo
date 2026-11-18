@@ -6,12 +6,22 @@ import { prisma } from "@/lib/prisma";
 import type { IntegrationStatus } from "../types/common";
 import { writeJsonArray, writeJsonCounts } from "./json-column";
 
+export interface FunctionSyncState {
+  lastCompleteSyncAt: Date | null;
+  syncFingerprint: string | null;
+}
+
 export interface IntegrationRecord {
   id: string;
   userId: string;
   providerName: string;
   /** Every function this integration serves, sorted for stable comparison. */
   functionNames: string[];
+  /**
+   * Per-function complete-pass state. Absent for functions that do not use a
+   * watermark; communication is the first.
+   */
+  functionStates: Record<string, FunctionSyncState>;
   status: IntegrationStatus;
   instanceLabel: string;
   syncIntervalHours: number;
@@ -46,7 +56,11 @@ interface RowWithFunctions {
   sourceAccountId: string | null;
   pendingTokenRevocation: boolean;
   createdAt: Date;
-  functions: Array<{ functionName: string }>;
+  functions: Array<{
+    functionName: string;
+    lastCompleteSyncAt: Date | null;
+    syncFingerprint: string | null;
+  }>;
 }
 
 function toRecord(row: RowWithFunctions): IntegrationRecord {
@@ -55,6 +69,15 @@ function toRecord(row: RowWithFunctions): IntegrationRecord {
     userId: row.userId,
     providerName: row.providerName,
     functionNames: row.functions.map((f) => f.functionName).sort(),
+    functionStates: Object.fromEntries(
+      row.functions.map((f) => [
+        f.functionName,
+        {
+          lastCompleteSyncAt: f.lastCompleteSyncAt,
+          syncFingerprint: f.syncFingerprint,
+        },
+      ])
+    ),
     status: row.status as IntegrationStatus,
     instanceLabel: row.instanceLabel,
     syncIntervalHours: row.syncIntervalHours,
@@ -67,7 +90,15 @@ function toRecord(row: RowWithFunctions): IntegrationRecord {
   };
 }
 
-const withFunctions = { functions: { select: { functionName: true } } } as const;
+const withFunctions = {
+  functions: {
+    select: {
+      functionName: true,
+      lastCompleteSyncAt: true,
+      syncFingerprint: true,
+    },
+  },
+} as const;
 
 /**
  * Every relation that cascades from an integration, in the same words the
@@ -93,6 +124,7 @@ const CASCADED_COUNT_SELECT = {
   invoices: true,
   invoiceLines: true,
   payments: true,
+  messages: true,
   syncRuns: true,
 } as const;
 
@@ -117,6 +149,7 @@ const SYNCED_RECORD_RELATIONS = [
   "invoices",
   "invoiceLines",
   "payments",
+  "messages",
 ] as const satisfies ReadonlyArray<keyof CascadedCounts>;
 
 function countSyncedRecords(counts: CascadedCounts): number {
@@ -433,6 +466,27 @@ export async function addFunctions(
   });
 
   return findIntegration(id);
+}
+
+/**
+ * Record that a function's list was acquired completely.
+ *
+ * A watermark, not a generic sync timestamp: the integration's
+ * `lastSyncTimestamp` moves on every successful or partial run, including one
+ * that stopped at a page limit, and using it to choose an incremental window
+ * would silently skip the rest of the mailbox.
+ */
+export async function recordFunctionCompleteSync(
+  integrationId: string,
+  functionName: string,
+  at: Date,
+  syncFingerprint: string
+): Promise<boolean> {
+  const result = await prisma.integrationFunction.updateMany({
+    where: { integrationId, functionName },
+    data: { lastCompleteSyncAt: at, syncFingerprint },
+  });
+  return result.count === 1;
 }
 
 /**

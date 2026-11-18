@@ -135,6 +135,7 @@ model Integration {
   invoices         Invoice[]
   invoiceLines     InvoiceLine[]
   payments         Payment[]
+  messages         Message[]
   syncRuns         SyncRun[]
 
   @@index([userId])
@@ -155,6 +156,12 @@ model IntegrationFunction {
 
   /// Registered function name, e.g. "identity" | "support".
   functionName String
+
+  /// Last run that acquired the function's list completely, and the known-party
+  /// fingerprint that acquisition was based on. Null for functions that do not
+  /// use a complete-pass watermark.
+  lastCompleteSyncAt DateTime?
+  syncFingerprint    String?
 
   addedAt DateTime @default(now())
 
@@ -317,6 +324,7 @@ model Customer {
   /// on either side depending on who it is paired with.
   assertionsAsLeft  IdentityAssertion[] @relation("AssertionLeft")
   assertionsAsRight IdentityAssertion[] @relation("AssertionRight")
+  messageParticipants MessageParticipant[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
@@ -347,10 +355,94 @@ model Contact {
   customFields String @default("{}")
 
   updatedAt DateTime @updatedAt
+  messageParticipants MessageParticipant[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
   @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------
+// Communication
+//
+// One message, plus every known party it matched. A message is stored only
+// when it has at least one matched participant; the participant table carries
+// the role and evidence rather than flattening a single "attributed party"
+// onto the message, because one email can legitimately involve several
+// companies and roles.
+// ---------------------------------------------------------------------------
+
+model Message {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider-assigned id. The upsert key, paired with integrationId.
+  externalSourceId String
+
+  threadId  String?
+  fromEmail String?
+  fromName  String?
+
+  /// JSON arrays of addresses, stored as TEXT for the same reason the rest of
+  /// this schema's JSON columns are.
+  toEmails String @default("[]")
+  ccEmails String @default("[]")
+
+  subject  String?
+  snippet  String?
+  bodyText String?
+  bodyHtml String?
+
+  /// Gmail internalDate, with the Date header only as a fallback.
+  sentAt DateTime
+
+  /// MessageDirection: sent | received.
+  direction String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  participants MessageParticipant[]
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId, sentAt])
+  @@index([sentAt])
+}
+
+model MessageParticipant {
+  id        String  @id @default(uuid())
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  /// MessageRole: from | to | cc.
+  role String
+
+  /// Stable candidate identity: contact:<id> | account:<id> | customer:<id>.
+  partyKey String
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  customerAccountId String?
+  customerAccount   CustomerAccount? @relation(fields: [customerAccountId], references: [id], onDelete: SetNull)
+
+  /// MatchKind: contact_email | customer_email | customer_domain.
+  matchKind String
+
+  matchedValue String
+  rank         Int
+  disputed     Boolean @default(false)
+  isPrimary    Boolean @default(false)
+
+  @@unique([messageId, role, partyKey])
+  @@index([messageId, isPrimary])
+  @@index([contactId])
+  @@index([customerId])
+  @@index([customerAccountId])
 }
 
 // ---------------------------------------------------------------------------
@@ -1413,6 +1505,7 @@ model CustomerAccount {
 
   members Customer[]
   keys    CustomerAccountKey[]
+  messageParticipants MessageParticipant[]
 
   @@index([userId])
   @@index([userId, name])

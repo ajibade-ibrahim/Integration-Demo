@@ -31,6 +31,7 @@ const FUNCTIONS_WITH_OBJECTS = [
   "catalog",
   "agreement",
   "billing",
+  "communication",
 ] as const;
 
 const functionArb = fc.constantFrom(...FUNCTIONS_WITH_OBJECTS);

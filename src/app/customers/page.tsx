@@ -7,6 +7,11 @@ import {
   loadSyncedData,
 } from "@/core/repositories/synced-data-repository";
 import { listResolutionRuns } from "@/core/repositories/identity-repository";
+import {
+  countMessagesForUser,
+  loadMessagesForUser,
+  type MessageListRow,
+} from "@/core/repositories/message-repository";
 import { AccountsPanel } from "./accounts-panel";
 
 export const dynamic = "force-dynamic";
@@ -21,9 +26,15 @@ export default async function SyncedDataPage({
   const { tab } = await searchParams;
   const showContacts = tab === "contacts";
   const showAccounts = tab === "accounts";
+  const showMessages = tab === "messages";
 
   const userId = await currentUserId();
-  const { customers, contacts, totals } = await loadSyncedData(userId);
+  const [{ customers, contacts, totals }, messageTotal, messages] =
+    await Promise.all([
+      loadSyncedData(userId),
+      countMessagesForUser(userId),
+      showMessages ? loadMessagesForUser(userId) : Promise.resolve([]),
+    ]);
 
   // Only for the tab that renders them. The accounts read pulls members and
   // keys for every account, which is a lot of rows to fetch for a page showing
@@ -50,7 +61,9 @@ export default async function SyncedDataPage({
         </p>
       </div>
 
-      {totals.customers === 0 && totals.contacts === 0 ? (
+      {totals.customers === 0 &&
+      totals.contacts === 0 &&
+      messageTotal === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
           <p className="text-slate-600">Nothing synced yet.</p>
           <Link
@@ -63,7 +76,7 @@ export default async function SyncedDataPage({
       ) : (
         <>
           <div className="flex items-center gap-2 border-b border-slate-200">
-            <Tab href="/customers" active={!showContacts && !showAccounts}>
+            <Tab href="/customers" active={!showContacts && !showAccounts && !showMessages}>
               Customers ({totals.customers})
             </Tab>
             <Tab href="/customers?tab=contacts" active={showContacts}>
@@ -76,6 +89,9 @@ export default async function SyncedDataPage({
             */}
             <Tab href="/customers?tab=accounts" active={showAccounts}>
               Accounts ({totals.accounts})
+            </Tab>
+            <Tab href="/customers?tab=messages" active={showMessages}>
+              Messages ({messageTotal})
             </Tab>
           </div>
 
@@ -94,7 +110,9 @@ export default async function SyncedDataPage({
             </p>
           )}
 
-          {showAccounts ? (
+          {showMessages ? (
+            <MessageTable rows={messages} />
+          ) : showAccounts ? (
             <AccountsPanel
               accounts={accounts.map((account) => ({
                 ...account,
@@ -238,6 +256,58 @@ function ContactTable({
                 ) : (
                   <Empty />
                 )}
+              </Td>
+              <Td className="text-xs text-slate-400">
+                {row.integrationLabel}
+                <span className="ml-1 font-mono">#{row.externalSourceId}</span>
+              </Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MessageTable({ rows }: { rows: MessageListRow[] }) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      <table className="w-full text-sm">
+        <thead className="border-b border-slate-100 text-left text-xs uppercase tracking-wide text-slate-400">
+          <tr>
+            <Th>From</Th>
+            <Th>Subject</Th>
+            <Th>Sent</Th>
+            <Th>Direction</Th>
+            <Th>Primary party</Th>
+            <Th>Snippet</Th>
+            <Th>Source</Th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {rows.map((row) => (
+            <tr key={row.id}>
+              <Td className="font-medium text-slate-900">
+                <Link
+                  href={`/customers/messages/${row.id}`}
+                  className="hover:underline"
+                >
+                  {row.fromName ?? row.fromEmail ?? "(unknown sender)"}
+                </Link>
+              </Td>
+              <Td>
+                <Link
+                  href={`/customers/messages/${row.id}`}
+                  className="hover:underline"
+                >
+                  {row.subject ?? <Empty />}
+                </Link>
+              </Td>
+              <Td>{row.sentAt.toLocaleString()}</Td>
+              <Td>{row.direction}</Td>
+              <Td>{row.primaryLabel}</Td>
+              <Td className="max-w-md truncate text-slate-600">
+                {row.snippet ?? <Empty />}
               </Td>
               <Td className="text-xs text-slate-400">
                 {row.integrationLabel}

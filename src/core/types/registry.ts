@@ -7,6 +7,8 @@
  */
 
 import type { Clock } from "../sync/clock";
+import type { KnownParties } from "../communication/known-parties";
+import type { MessageAttribution } from "../communication/types";
 import type { RawRecord, TargetObject } from "./common";
 
 // ---------------------------------------------------------------------------
@@ -243,6 +245,14 @@ export interface HandlerContext {
     accessToken: string;
     metadata: ProviderMetadata;
   }>;
+  /**
+   * Known parties for a communication sync, loaded once per run. Communication
+   * handlers do not query customer tables themselves; the engine owns that read
+   * and the fingerprint that decides full versus incremental scans.
+   */
+  readonly knownParties?: KnownParties;
+  /** Inclusive lower bound for a communication fetch. */
+  readonly communicationWindowStart?: Date;
 }
 
 /** One page of source records for a given object. */
@@ -337,7 +347,27 @@ export interface SyncHandler {
    * `objectsForFunction`.
    */
   readonly objects: readonly TargetObject[];
+  /**
+   * A handler that writes page by page rather than collecting a whole run.
+   *
+   * Communication is the first one: a twelve-month mailbox can be large, and
+   * buffering every fetched body before writing it buys nothing. The engine
+   * calls `attributionsOf` and the message page writer for each page, then
+   * updates the complete-pass watermark only after the handler declares the
+   * acquisition complete.
+   */
+  readonly streaming?: boolean;
   fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage>;
+  /**
+   * Derived participant candidates for one message, when the handler itself
+   * does not write participants. Returning undefined filters the record out;
+   * a communication message with no known party is not stored.
+   */
+  attributionsOf?(
+    record: RawRecord,
+    object: TargetObject,
+    ctx: HandlerContext
+  ): MessageAttribution | undefined;
   /**
    * Provider ids of the records this one hangs off, keyed by what each is —
    * `{ customer }` for a contact, `{ product }` for an offering,

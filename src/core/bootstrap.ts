@@ -79,6 +79,11 @@ import {
   STIGG_IDENTITY_SCOPES,
   STIGG_PROVIDER_NAME,
 } from "./providers/stigg/provider";
+import {
+  gmailProvider,
+  GMAIL_COMMUNICATION_SCOPES,
+  GMAIL_PROVIDER_NAME,
+} from "./providers/gmail/provider";
 
 import { metrifoxIdentityHandler } from "./providers/metrifox/identity-handler";
 import { metrifoxAgreementHandler } from "./providers/metrifox/agreement-handler";
@@ -105,11 +110,14 @@ import { hubspotAgreementHandler } from "./providers/hubspot/agreement-handler";
 import { hubspotFieldDiscovery } from "./providers/hubspot/discovery";
 import { salesforceIdentityHandler } from "./providers/salesforce/identity-handler";
 import { salesforceFieldDiscovery } from "./providers/salesforce/discovery";
+import { gmailCommunicationHandler } from "./providers/gmail/communication-handler";
+import { gmailFieldDiscovery } from "./providers/gmail/discovery";
 
 export const IDENTITY_FUNCTION = "identity";
 export const CATALOG_FUNCTION = "catalog";
 export const AGREEMENT_FUNCTION = "agreement";
 export const BILLING_FUNCTION = "billing";
+export const COMMUNICATION_FUNCTION = "communication";
 
 let bootstrapped = false;
 
@@ -138,6 +146,9 @@ export function bootstrap(): void {
   // Same again: Stigg's server key is pasted per integration, so there is
   // nothing deployment-level to configure.
   registerProvider(stiggProvider);
+  // Gmail needs deployment-level OAuth credentials; registration is still
+  // unconditional, and the picker greys it out until they are set.
+  registerProvider(gmailProvider);
   if (isMockEnabled()) registerProvider(mockProvider);
 
   // --- functions ---------------------------------------------------------
@@ -344,23 +355,26 @@ export function bootstrap(): void {
     scopesByProvider: scopeMap(billingScopes),
   });
 
-  for (const [name, label, description, models] of [
-    ["usage", "Usage", "Product usage events and metering data.", ["usageEvent"]],
-    [
-      "communication",
-      "Communication",
-      "Email, calls, and messaging history with contacts.",
-      ["message"],
-    ],
-  ] as const) {
-    registerFunction({
-      name,
-      label,
-      description,
-      dataModels: [...models],
-      scopesByProvider: scopeMap([]),
-    });
-  }
+  registerFunction({
+    name: "usage",
+    label: "Usage",
+    description: "Product usage events and metering data.",
+    dataModels: ["usageEvent"],
+    scopesByProvider: scopeMap([]),
+  });
+
+  // Communication is read-only email history. Gmail is the first provider; its
+  // restricted `gmail.readonly` scope is declared here so consent, the picker,
+  // and the sync handler all agree about what the connection can do.
+  registerFunction({
+    name: COMMUNICATION_FUNCTION,
+    label: "Communication",
+    description: "Email, calls, and messaging history with contacts.",
+    dataModels: ["message"],
+    scopesByProvider: scopeMap([
+      [GMAIL_PROVIDER_NAME, GMAIL_COMMUNICATION_SCOPES],
+    ]),
+  });
 
   // --- handlers ----------------------------------------------------------
   // A function declared with scopes but no handler remains a reachable, honest
@@ -565,6 +579,19 @@ export function bootstrap(): void {
     BILLING_FUNCTION,
     METRIFOX_PROVIDER_NAME,
     metrifoxFieldDiscovery
+  );
+
+  // Gmail communication. The handler is the only streaming one today; its
+  // `attributionsOf` hook is what lets the engine filter and write page by page.
+  registerSyncHandler(
+    COMMUNICATION_FUNCTION,
+    GMAIL_PROVIDER_NAME,
+    gmailCommunicationHandler
+  );
+  registerFieldDiscovery(
+    COMMUNICATION_FUNCTION,
+    GMAIL_PROVIDER_NAME,
+    gmailFieldDiscovery
   );
 
   if (isMockEnabled()) {

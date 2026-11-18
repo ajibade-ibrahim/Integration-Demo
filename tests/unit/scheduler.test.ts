@@ -14,6 +14,7 @@ function integration(
     userId: "user-1",
     providerName: "mock",
     functionNames: ["identity"],
+    functionStates: {},
     status: "active" as IntegrationStatus,
     instanceLabel: "Test",
     syncIntervalHours: 24,

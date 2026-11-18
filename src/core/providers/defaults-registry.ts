@@ -40,6 +40,8 @@ import {
   stiggIdentityDefaults,
 } from "./stigg/defaults";
 import { STIGG_PROVIDER_NAME } from "./stigg/provider";
+import { gmailCommunicationDefaults } from "./gmail/defaults";
+import { GMAIL_PROVIDER_NAME } from "./gmail/provider";
 
 const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
   [`identity:${HUBSPOT_PROVIDER_NAME}`]: hubspotIdentityDefaults,
@@ -60,6 +62,7 @@ const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
   [`billing:${STRIPE_PROVIDER_NAME}`]: stripeBillingDefaults,
   [`billing:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeBillingDefaults,
   [`billing:${METRIFOX_PROVIDER_NAME}`]: metrifoxBillingDefaults,
+  [`communication:${GMAIL_PROVIDER_NAME}`]: gmailCommunicationDefaults,
 };
 
 export function defaultMappingsFor(

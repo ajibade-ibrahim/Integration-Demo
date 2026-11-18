@@ -13,6 +13,7 @@ import { currentUserId } from "@/lib/current-user";
 import { functionRegistry, resolveScopes } from "@/core/registries/function-registry";
 import { providerRegistry } from "@/core/registries/provider-registry";
 import { checkReauthorization } from "@/core/oauth/oauth-service";
+import { loadKnownParties } from "@/core/communication/known-parties";
 import { connectHrefFor } from "@/core/providers/connect-url";
 import {
   StatusBadge,
@@ -37,9 +38,15 @@ export default async function IntegrationDetailPage({
 
   const { id } = await params;
   const { connected, error } = await searchParams;
+  const userId = await currentUserId();
 
-  const integration = await findIntegrationForUser(id, await currentUserId());
+  const integration = await findIntegrationForUser(id, userId);
   if (integration === undefined) notFound();
+
+  const hasIdentity = integration.functionNames.includes("identity");
+  const communicationWithoutParties =
+    integration.functionNames.includes("communication") &&
+    (await loadKnownParties(userId)).isEmpty;
 
   const provider = providerRegistry.get(integration.providerName);
   const isApiKey = provider?.auth.kind === "apiKey";
@@ -151,6 +158,26 @@ export default async function IntegrationDetailPage({
         </div>
       )}
 
+      {communicationWithoutParties && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm font-medium text-amber-900">
+            No known communication parties yet
+          </p>
+          <p className="mt-1 text-sm text-amber-800">
+            Communication sync matches messages only against customers and
+            contacts that already exist. Connect an identity source, or sync one
+            you have already connected, before this integration can write
+            messages.
+          </p>
+          <Link
+            href="/integrations/new"
+            className="mt-3 inline-block rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500"
+          >
+            Connect an identity source
+          </Link>
+        </div>
+      )}
+
       {integration.status === "pending_authorization" && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
           <p className="text-sm text-amber-900">
@@ -248,19 +275,24 @@ export default async function IntegrationDetailPage({
         }))}
       />
 
-      <IdentityPanel
-        integrationId={integration.id}
-        providerName={provider?.label ?? integration.providerName}
-        initialPriority={integration.identityPriority}
-        // Every provider but this one. A crosswalk naming this integration's
-        // own provider would pair its ids with its own ids, which is the
-        // self-key the resolver already emits for free.
-        foreignProviders={providerRegistry
-          .getAll()
-          .filter((candidate) => candidate.name !== integration.providerName)
-          .map((candidate) => ({ name: candidate.name, label: candidate.label }))
-          .sort((a, b) => a.label.localeCompare(b.label))}
-      />
+      {hasIdentity && (
+        <IdentityPanel
+          integrationId={integration.id}
+          providerName={provider?.label ?? integration.providerName}
+          initialPriority={integration.identityPriority}
+          // Every provider but this one. A crosswalk naming this integration's
+          // own provider would pair its ids with its own ids, which is the
+          // self-key the resolver already emits for free.
+          foreignProviders={providerRegistry
+            .getAll()
+            .filter((candidate) => candidate.name !== integration.providerName)
+            .map((candidate) => ({
+              name: candidate.name,
+              label: candidate.label,
+            }))
+            .sort((a, b) => a.label.localeCompare(b.label))}
+        />
+      )}
 
       <section className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
