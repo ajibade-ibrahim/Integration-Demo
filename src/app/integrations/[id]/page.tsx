@@ -19,6 +19,7 @@ import {
   StatusBadge,
   SyncabilityBadge,
 } from "@/app/integrations/status-badge";
+import { functionDataHref } from "@/app/function-data-links";
 import { listRecentRuns } from "@/core/repositories/sync-run-repository";
 import { countMappings } from "@/core/repositories/mapping-repository";
 import { SyncPanel } from "./sync-panel";
@@ -202,6 +203,7 @@ export default async function IntegrationDetailPage({
           {integration.functionNames.map((name) => {
             const definition = functionRegistry.get(name);
             const objects = supportedObjectsFor(name, integration.providerName);
+            const dataHref = functionDataHref(name, integration.id);
             const unserved =
               definition?.dataModels.filter(
                 (declared) => !objects.some((object) => object === declared)
@@ -239,6 +241,19 @@ export default async function IntegrationDetailPage({
                       >
                         Edit field mapping
                       </Link>
+                      {/*
+                        Offered on the same condition as the mapping editor:
+                        a function without a handler writes no records, so a
+                        data link there would promise an empty page.
+                      */}
+                      {dataHref !== null && (
+                        <Link
+                          href={dataHref}
+                          className="ml-2 text-slate-700 underline underline-offset-2 hover:text-slate-900"
+                        >
+                          View synced data
+                        </Link>
+                      )}
                       <span className="ml-2 text-xs text-slate-400">
                         {ruleCounts.find((entry) => entry.name === name)?.count ?? 0}{" "}
                         rules
