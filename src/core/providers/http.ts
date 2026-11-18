@@ -195,6 +195,16 @@ export function createProviderSession(
 
       const body = await safeBody(response);
 
+      // Google reports quota exhaustion as 403, not 429. Waiting and retrying
+      // is the correct response; treating it as a fatal provider error would
+      // park a large mailbox sync until a human intervened.
+      if (response.status === 403 && isGoogleQuotaError(body)) {
+        throw new RetryableSyncError(
+          `${label} quota exhausted: ${body}`,
+          syncTiming().rateLimitFallbackMs
+        );
+      }
+
       if (response.status >= 500) {
         throw new RetryableSyncError(
           `${label} returned ${response.status}: ${body}`
@@ -222,6 +232,39 @@ async function safeBody(response: Response): Promise<string> {
     return (await response.text()).slice(0, MAX_BODY_CHARS);
   } catch {
     return "(unreadable body)";
+  }
+}
+
+/**
+ * Detect Google's 403 quota shape without matching every provider's 403.
+ *
+ * `{ error: { errors: [{ reason: "quotaExceeded" }] } }` is Google's; a Stripe
+ * permission failure does not carry those reasons and stays fatal.
+ */
+function isGoogleQuotaError(body: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed !== "object" || parsed === null) return false;
+    const error = (parsed as Record<string, unknown>)["error"];
+    if (typeof error !== "object" || error === null) return false;
+    const errors = (error as Record<string, unknown>)["errors"];
+    if (!Array.isArray(errors)) return false;
+
+    const reasons = new Set([
+      "rateLimitExceeded",
+      "userRateLimitExceeded",
+      "quotaExceeded",
+      "dailyLimitExceeded",
+      "uploadQuotaExceeded",
+    ]);
+    return errors.some(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        reasons.has(String((item as Record<string, unknown>)["reason"]))
+    );
+  } catch {
+    return false;
   }
 }
 

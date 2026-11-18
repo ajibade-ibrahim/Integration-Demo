@@ -45,6 +45,7 @@ import {
   isDiscountStatus,
   isInvoiceLineType,
   isInvoiceStatus,
+  isMessageDirection,
   isPaymentKind,
   isPaymentStatus,
   isSubscriptionBillingPeriod,
@@ -54,7 +55,9 @@ import {
 import { MAX_CUSTOM_FIELDS, OBJECT_SCHEMAS } from "../object-schema";
 import type { MappedRecord } from "../types/mapping";
 import type { ExternalRefs } from "../types/registry";
-import { readJsonObject, writeJsonObject } from "../repositories/json-column";
+import type { MessageAttribution } from "../communication/types";
+import { MESSAGE_ROLES, type MessageRole } from "../communication/types";
+import { readJsonObject, writeJsonArray, writeJsonObject } from "../repositories/json-column";
 // Imported rather than defined here: identity resolution matches on the same
 // addresses this writer validates, and two definitions of "a valid address"
 // would let the writer store something the matcher silently refuses to join on.
@@ -81,6 +84,8 @@ export interface CollectedRecord {
   externalSourceId: string | undefined;
   externalRefs?: ExternalRefs;
   mapped: MappedRecord;
+  /** Derived participant candidates, for communication messages. */
+  attribution?: MessageAttribution;
 }
 
 /** Trim to a field's max length, returning null for blanks. */
@@ -2941,6 +2946,220 @@ export async function relinkOrphanedPaymentInvoices(
     }
   }
   return relinked;
+}
+
+// ---------------------------------------------------------------------------
+// Communication messages
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a mapped address list.
+ *
+ * The handler emits a comma-separated string because that is what a field
+ * mapping can carry, but accepting the JSON array form too means a future
+ * provider (or a hand-written mapping) does not need a special transform.
+ * Addresses are kept as they arrived; matching is what normalizes them.
+ */
+function parseEmailList(value: string | null): string[] {
+  if (value === null || value.trim() === "") return [];
+
+  const trimmed = value.trim();
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter((item) => item !== "");
+      }
+    } catch {
+      // Fall through to the delimiter form.
+    }
+  }
+
+  return trimmed
+    .split(/[,;]/)
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+}
+
+function rawText(value: string | null): string | null {
+  return value === null || value === "" ? null : value;
+}
+
+function normalizeParticipant(
+  participant: MessageAttribution["participants"][number],
+  seen: Set<string>,
+  primaryState: { seen: boolean }
+):
+  | {
+      role: MessageRole;
+      partyKey: string;
+      contactId: string | null;
+      customerId: string | null;
+      customerAccountId: string | null;
+      matchKind: string;
+      matchedValue: string;
+      rank: number;
+      disputed: boolean;
+      isPrimary: boolean;
+    }
+  | undefined {
+  if (!(MESSAGE_ROLES as readonly string[]).includes(participant.role)) {
+    return undefined;
+  }
+  const key = `${participant.role}:${participant.partyKey}`;
+  if (seen.has(key)) return undefined;
+  seen.add(key);
+
+  const isPrimary = participant.isPrimary && !primaryState.seen;
+  if (isPrimary) primaryState.seen = true;
+
+  return {
+    role: participant.role,
+    partyKey: participant.partyKey,
+    contactId: participant.contactId ?? null,
+    customerId: participant.customerId ?? null,
+    customerAccountId: participant.customerAccountId ?? null,
+    matchKind: participant.matchKind,
+    matchedValue: participant.matchedValue,
+    rank: participant.rank,
+    disputed: participant.disputed,
+    isPrimary,
+  };
+}
+
+/**
+ * Write one streamed page of messages and replace each message's participants.
+ *
+ * Upserting the message by `(integrationId, externalSourceId)` and replacing the
+ * participant set makes re-attribution idempotent: a full rescan after a contact
+ * is added updates the links rather than accumulating stale candidates.
+ */
+export async function writeMessagePage(
+  integrationId: string,
+  records: readonly CollectedRecord[]
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  let written = 0;
+
+  for (const { externalSourceId, mapped, attribution } of records) {
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "message",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const sentAt = parseDate(mapped.fields["sentAt"] ?? null);
+    if (sentAt === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "message",
+        reason: "Sent at is required",
+        fieldName: "sentAt",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const rawDirection = normalize(mapped.fields["direction"] ?? null);
+    if (rawDirection === null || !isMessageDirection(rawDirection.toLowerCase())) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "message",
+        reason: "Direction must be 'sent' or 'received'",
+        fieldName: "direction",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const rawFromEmail = normalize(
+      mapped.fields["fromEmail"] ?? null,
+      maxLengthOf("message", "fromEmail")
+    );
+    let fromEmail = rawFromEmail;
+    if (fromEmail !== null && !EMAIL_PATTERN.test(fromEmail)) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "message",
+        reason: `'${fromEmail}' is not a valid email address; left unset`,
+        fieldName: "fromEmail",
+        severity: "warning",
+      });
+      fromEmail = null;
+    }
+
+    const seenParticipants = new Set<string>();
+    const primaryState = { seen: false };
+    const participants = (attribution?.participants ?? [])
+      .map((participant) =>
+        normalizeParticipant(participant, seenParticipants, primaryState)
+      )
+      .filter((participant) => participant !== undefined);
+
+    if (participants.some((participant) => participant.disputed)) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "message",
+        reason: "Message matches more than one account group; no primary party chosen",
+        severity: "warning",
+      });
+    }
+
+    const data = {
+      threadId: normalize(
+        mapped.fields["threadId"] ?? null,
+        maxLengthOf("message", "threadId")
+      ),
+      fromEmail,
+      fromName: normalize(
+        mapped.fields["fromName"] ?? null,
+        maxLengthOf("message", "fromName")
+      ),
+      toEmails: writeJsonArray(parseEmailList(mapped.fields["toEmails"] ?? null)),
+      ccEmails: writeJsonArray(parseEmailList(mapped.fields["ccEmails"] ?? null)),
+      subject: normalize(
+        mapped.fields["subject"] ?? null,
+        maxLengthOf("message", "subject")
+      ),
+      snippet: normalize(mapped.fields["snippet"] ?? null),
+      // Bodies are not trimmed and not capped. Trimming a text body would
+      // silently change a quoted reply; truncating an HTML part would make the
+      // "source" view a different document from the one that arrived.
+      bodyText: rawText(mapped.fields["bodyText"] ?? null),
+      bodyHtml: rawText(mapped.fields["bodyHtml"] ?? null),
+      sentAt,
+      direction: rawDirection.toLowerCase(),
+    };
+
+    await prisma.message.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: {
+        integrationId,
+        externalSourceId,
+        ...data,
+        ...(participants.length === 0
+          ? {}
+          : { participants: { create: participants } }),
+      },
+      update: {
+        ...data,
+        participants: { deleteMany: {}, create: participants },
+      },
+    });
+
+    written += 1;
+  }
+
+  return { written, issues };
 }
 
 // ---------------------------------------------------------------------------

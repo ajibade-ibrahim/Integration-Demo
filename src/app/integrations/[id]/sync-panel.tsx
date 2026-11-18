@@ -31,6 +31,7 @@ interface CoverageObject {
   warnings: number;
   rejected: number;
   atPageLimit: boolean;
+  pruned?: number;
 }
 
 interface CoverageFunction {
@@ -44,6 +45,7 @@ interface CoverageFunction {
   warnings: number;
   rejected: number;
   error?: string;
+  skippedReason?: string;
 }
 
 interface Coverage {
@@ -87,6 +89,7 @@ const OBJECT_LABELS: Record<string, [singular: string, plural: string]> = {
   invoice: ["invoice", "invoices"],
   invoiceLine: ["invoice line", "invoice lines"],
   payment: ["payment", "payments"],
+  message: ["message", "messages"],
 };
 
 const FUNCTION_LABELS: Record<string, string> = {
@@ -165,6 +168,9 @@ function summarizeCoverage(
     0
   );
   const failed = coverage.functions.filter((fn) => fn.error !== undefined).length;
+  const skipped = coverage.functions.filter(
+    (fn) => fn.skippedReason !== undefined
+  ).length;
   const warnings = coverage.functions.reduce(
     (total, fn) => total + fn.warnings,
     0
@@ -190,6 +196,7 @@ function summarizeCoverage(
     parts.push(`${rejected} rejected`);
   }
   if (failed > 0) parts.push(`${failed} failed`);
+  if (skipped > 0) parts.push(`${skipped} skipped`);
 
   const tone: CoverageTone =
     incomplete > 0 ||
@@ -198,7 +205,7 @@ function summarizeCoverage(
     warnings > 0 ||
     rejected > 0
       ? "warn"
-      : unverified > 0 || omitted > 0 || unmapped > 0
+      : unverified > 0 || omitted > 0 || unmapped > 0 || skipped > 0
         ? "muted"
         : "ok";
 
@@ -447,6 +454,11 @@ function RunRow({ run }: { run: Run }) {
                     {fn.error !== undefined && (
                       <p className="mt-1 text-xs text-red-700">{fn.error}</p>
                     )}
+                    {fn.skippedReason !== undefined && (
+                      <p className="mt-1 text-xs text-amber-700">
+                        Skipped: {fn.skippedReason}
+                      </p>
+                    )}
                     <ul className="mt-1 space-y-1">
                       {fn.objects
                         .filter((object) => object.mapped || object.yielded)
@@ -479,6 +491,12 @@ function RunRow({ run }: { run: Run }) {
                                 page limit
                               </span>
                             )}
+                            {object.pruned !== undefined &&
+                              object.pruned > 0 && (
+                                <span className="text-slate-400">
+                                  {object.pruned} pruned
+                                </span>
+                              )}
                           </li>
                         ))}
                     </ul>

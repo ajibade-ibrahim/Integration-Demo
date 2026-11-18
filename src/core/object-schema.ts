@@ -30,6 +30,7 @@ import {
   IDENTITY_SCHEMA,
   crossRefProviderName,
 } from "./identity-schema";
+import { MESSAGE_OBJECT_SCHEMA } from "./message-schema";
 import { providerRegistry } from "./registries/provider-registry";
 import { TARGET_OBJECTS, type TargetObject } from "./types/common";
 
@@ -104,6 +105,7 @@ export const OBJECT_SCHEMAS: Readonly<Record<TargetObject, ObjectSchema>> = {
   ...CATALOG_SCHEMA,
   ...AGREEMENT_OBJECT_SCHEMA,
   ...BILLING_OBJECT_SCHEMA,
+  ...MESSAGE_OBJECT_SCHEMA,
 };
 
 /**
@@ -143,6 +145,9 @@ const FUNCTION_OBJECTS: Readonly<Record<string, readonly TargetObject[]>> = {
   // before either child is written. A line's invoice FK is required and
   // rejecting, and a payment's is nullable but wants the link on first sight.
   billing: ["invoice", "invoiceLine", "payment"],
+  // One object, but it depends on identity having written customers and
+  // contacts before it runs: known parties are read from those rows.
+  communication: ["message"],
 };
 
 /**
@@ -188,6 +193,9 @@ export function schemasForFunction(
  */
 const FUNCTION_WRITE_ORDER: readonly string[] = [
   "identity",
+  // Communication reads the identity rows, so it must run after them. It does
+  // not feed any other function.
+  "communication",
   "catalog",
   "agreement",
   // Last, after agreement: an invoice resolves a customer written by identity,

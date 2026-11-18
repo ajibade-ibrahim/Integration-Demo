@@ -377,6 +377,7 @@ export const stiggFieldDiscovery: FieldDiscovery = {
       case "invoice":
       case "invoiceLine":
       case "payment":
+      case "message":
         return [];
     }
   },

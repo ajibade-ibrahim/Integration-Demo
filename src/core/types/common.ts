@@ -99,6 +99,10 @@ export const TARGET_OBJECTS = [
   "invoice",
   "invoiceLine",
   "payment",
+  // A communication message. It is written only by the `communication`
+  // function and is never a field-mapping parent: participants are resolved by
+  // the communication matcher, not by a provider foreign-id reference.
+  "message",
 ] as const;
 
 export type TargetObject = (typeof TARGET_OBJECTS)[number];
@@ -352,6 +356,24 @@ export function isPaymentKind(v: unknown): v is PaymentKind {
 }
 
 /**
+ * Which way a communication message travelled relative to the connected
+ * mailbox.
+ *
+ * Non-nullable: a message that cannot say whether it was sent or received is
+ * not useful in the Messages list, and Gmail's `SENT` label answers it directly.
+ */
+export const MESSAGE_DIRECTIONS = ["sent", "received"] as const;
+
+export type MessageDirection = (typeof MESSAGE_DIRECTIONS)[number];
+
+export function isMessageDirection(v: unknown): v is MessageDirection {
+  return (
+    typeof v === "string" &&
+    (MESSAGE_DIRECTIONS as readonly string[]).includes(v)
+  );
+}
+
+/**
  * What kind of line an invoice line is, in our vocabulary.
  *
  * A union of its own rather than `AGREEMENT_ITEM_TYPES`, which is the tempting
@@ -573,6 +595,8 @@ export interface SyncObjectCoverage {
    * handler returned normally.
    */
   atPageLimit: boolean;
+  /** Rows deleted by a retention pass for this object, when one ran. */
+  pruned?: number;
 }
 
 /** Coverage for one function in a run, across every object it can write. */
@@ -589,6 +613,12 @@ export interface SyncFunctionCoverage {
   warnings: number;
   rejected: number;
   error?: string;
+  /**
+   * Why a function did not run. Set when the engine deliberately skips work
+   * before calling the handler — today, a communication sync with no known
+   * parties.
+   */
+  skippedReason?: string;
 }
 
 /** The persisted coverage report for a run. */

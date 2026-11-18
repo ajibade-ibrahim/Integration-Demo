@@ -14,14 +14,22 @@
 
 import { applyMappings, requestedSourcePaths } from "../field-mapper/field-mapper";
 import { mappingVersionFor } from "../field-mapper/mapping-version";
+import {
+  lookbackStart,
+  overlapStart,
+  retentionCutoff,
+} from "../communication/config";
+import { loadKnownParties } from "../communication/known-parties";
 import { functionsInWriteOrder } from "../object-schema";
 import { getValidToken, refreshToken } from "../oauth/oauth-service";
 import { requireSyncHandler } from "../registries/handler-registry";
 import { canRefresh } from "../registries/provider-registry";
 import {
   findIntegration,
+  recordFunctionCompleteSync,
   type IntegrationRecord,
 } from "../repositories/integration-repository";
+import { pruneMessagesForIntegration } from "../repositories/message-repository";
 import { findMappings } from "../repositories/mapping-repository";
 import {
   writeJsonArray,
@@ -34,6 +42,7 @@ import type {
   TargetObject,
 } from "../types/common";
 import type { FieldMappingRule } from "../types/mapping";
+import type { HandlerContext, SyncHandler } from "../types/registry";
 import {
   syncLeaseTiming,
   syncTiming,
@@ -74,6 +83,7 @@ import {
 } from "./lease";
 import {
   relinkOrphansForFunction,
+  writeMessagePage,
   writeRecordsForFunction,
   type CollectedRecord,
 } from "./record-writer";
@@ -399,6 +409,196 @@ function leaseLostResult(lease: SyncLease): SyncResult {
   };
 }
 
+interface StreamingFunctionArgs {
+  integration: IntegrationRecord;
+  functionName: string;
+  handler: SyncHandler;
+  rules: readonly FieldMappingRule[];
+  sourcePaths: ReadonlyMap<TargetObject, readonly string[]>;
+  coverage: ReturnType<typeof createFunctionCoverage>;
+  lease: SyncLease;
+  heartbeat: SyncLeaseHeartbeat;
+  clock: Clock;
+  state: RunState;
+  token: { accessToken: string; metadata: Record<string, string> };
+}
+
+/**
+ * Run a page-at-a-time function, currently communication.
+ *
+ * The state/watermark rules live here rather than in the provider so Gmail does
+ * not have to know about prior runs, page limits, or retention. A complete
+ * acquisition is the only event that advances `lastCompleteSyncAt` and prunes;
+ * a rejection on one message still counts as complete acquisition and leaves
+ * the run `partial`.
+ */
+async function runStreamingFunction(
+  args: StreamingFunctionArgs
+): Promise<void> {
+  const {
+    integration,
+    functionName,
+    handler,
+    rules,
+    sourcePaths,
+    coverage,
+    lease,
+    heartbeat,
+    clock,
+    state,
+    token,
+  } = args;
+
+  const mailboxEmail =
+    token.metadata["email"] ?? token.metadata["emailAddress"];
+  const knownParties = await loadKnownParties(integration.userId, {
+    ...(mailboxEmail === undefined ? {} : { mailboxEmail }),
+  });
+
+  if (knownParties.isEmpty) {
+    coverage.skippedReason = "no known parties";
+    const issue: RecordIssue = {
+      sourceRecordId: "(run)",
+      targetObject: "message",
+      reason:
+        "No known customers or contacts. Connect an identity integration or sync identity records before syncing communication.",
+      severity: "warning",
+    };
+    state.issues.push(issue);
+    recordCoverageIssues(coverage, [issue]);
+    finishFunctionCoverage(coverage);
+    return;
+  }
+
+  const now = new Date(clock.now());
+  const retainedFrom = lookbackStart(now);
+  const functionState = integration.functionStates[functionName];
+  const lastComplete = functionState?.lastCompleteSyncAt ?? null;
+  const full =
+    lastComplete === null ||
+    lastComplete < retainedFrom ||
+    functionState?.syncFingerprint !== knownParties.fingerprint;
+  const windowStart = full
+    ? retainedFrom
+    : overlapStart(lastComplete as Date);
+
+  const context: HandlerContext = {
+    integrationId: integration.id,
+    accessToken: token.accessToken,
+    metadata: token.metadata,
+    requestedSourcePaths: sourcePaths,
+    clock,
+    knownParties,
+    communicationWindowStart: windowStart,
+    ...(canRefresh(integration.providerName)
+      ? {
+          refreshAccessToken: async () => {
+            assertLeaseHeld(lease, heartbeat, clock);
+            const refreshed = await refreshToken(integration.id);
+            return {
+              accessToken: refreshed.accessToken,
+              metadata: refreshed.metadata,
+            };
+          },
+        }
+      : {}),
+  };
+
+  const complete = new Map<TargetObject, boolean>();
+  const streamIssues: RecordIssue[] = [];
+  let messagesWritten = 0;
+
+  const finalize = (): void => {
+    const counts: Partial<Record<TargetObject, number>> = {
+      message: messagesWritten,
+    };
+    recordCoverageWrites(coverage, counts);
+    recordCoverageIssues(coverage, streamIssues);
+    finishFunctionCoverage(coverage);
+
+    state.recordCounts.message =
+      (state.recordCounts.message ?? 0) + messagesWritten;
+    state.issues.push(...streamIssues);
+  };
+
+  try {
+    for await (const page of handler.fetchPages(context)) {
+      assertLeaseHeld(lease, heartbeat, clock);
+
+      if (page.object !== "message") {
+        throw new Error(
+          `Communication handler '${functionName}' yielded '${page.object}'`
+        );
+      }
+
+      const collected: CollectedRecord[] = [];
+      for (const raw of page.records) {
+        const attribution = handler.attributionsOf?.(raw, page.object, context);
+        if (handler.attributionsOf !== undefined && attribution === undefined) {
+          continue;
+        }
+        collected.push({
+          externalSourceId: handler.externalIdOf(raw),
+          externalRefs: handler.externalRefsOf(raw, page.object),
+          mapped: applyMappings(rules, page.object, raw),
+          ...(attribution === undefined ? {} : { attribution }),
+        });
+      }
+
+      if (collected.length > 0) {
+        const result = await writeMessagePage(integration.id, collected);
+        messagesWritten += result.written;
+        streamIssues.push(...result.issues);
+      }
+
+      recordCoveragePage(
+        coverage,
+        page.object,
+        page.records.length,
+        page.complete
+      );
+
+      if (page.complete !== undefined) {
+        const previous = complete.get(page.object);
+        complete.set(
+          page.object,
+          previous === undefined ? page.complete : previous && page.complete
+        );
+      }
+
+      await verifyLeaseHeld(lease, heartbeat, clock);
+    }
+  } catch (error) {
+    finalize();
+    throw error;
+  }
+
+  finalize();
+
+  const messageCoverage = coverage.objects.find(
+    (entry) => entry.object === "message"
+  );
+  const acquiredCompletely =
+    complete.get("message") === true &&
+    messageCoverage?.atPageLimit === false;
+
+  if (!acquiredCompletely) return;
+
+  const recorded = await recordFunctionCompleteSync(
+    integration.id,
+    functionName,
+    now,
+    knownParties.fingerprint
+  );
+  if (!recorded) return;
+
+  const pruned = await pruneMessagesForIntegration(
+    integration.id,
+    retentionCutoff(now)
+  );
+  if (messageCoverage !== undefined) messageCoverage.pruned = pruned;
+}
+
 async function runOnce(
   integration: IntegrationRecord,
   lease: SyncLease,
@@ -444,6 +644,26 @@ async function runOnce(
         throw new Error(
           `No field mappings configured for '${functionName}'; set them up before syncing`
         );
+      }
+
+      if (handler.streaming === true) {
+        await runStreamingFunction({
+          integration,
+          functionName,
+          handler,
+          rules,
+          sourcePaths,
+          coverage,
+          lease,
+          heartbeat,
+          clock,
+          state,
+          token: {
+            accessToken: token.accessToken,
+            metadata: token.metadata,
+          },
+        });
+        continue;
       }
 
       const collected = new Map<TargetObject, CollectedRecord[]>();

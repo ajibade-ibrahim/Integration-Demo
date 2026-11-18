@@ -533,6 +533,8 @@ export const chargebeeFieldDiscovery: FieldDiscovery = {
         return [...CHARGEBEE_INVOICE_LINE_FIELDS];
       case "payment":
         return [...CHARGEBEE_PAYMENT_FIELDS];
+      case "message":
+        return [];
     }
   },
 };
