@@ -19,6 +19,7 @@ import {
 } from "@/core/repositories/mapping-repository";
 import { mappingVersionFor } from "@/core/field-mapper/mapping-version";
 import { defaultMappingsFor } from "@/core/providers/defaults-registry";
+import { supportedObjectsFor } from "@/core/capabilities";
 import { isTargetObject } from "@/core/types/common";
 import { isFieldTransform, type FieldMappingRule } from "@/core/types/mapping";
 
@@ -134,6 +135,24 @@ export async function PUT(
       targetFieldPath: rule["targetFieldPath"],
       transform: isFieldTransform(rule["transform"]) ? rule["transform"] : "none",
     });
+  }
+
+  // The editor already filters to what this handler writes, but the API is the
+  // authority: a Gmail rule must not be allowed to target `slackMessage`, and
+  // the reverse. Without this a stale or hand-crafted rule set could save and
+  // then write nothing on every sync.
+  const supported = new Set(
+    supportedObjectsFor(target.functionName, target.providerName)
+  );
+  const unsupported = rules.find((rule) => !supported.has(rule.targetObject));
+  if (unsupported !== undefined) {
+    return NextResponse.json(
+      {
+        error: `'${unsupported.targetObject}' is not served by ${target.providerName} for ${target.functionName}`,
+        supported: [...supported],
+      },
+      { status: 400 }
+    );
   }
 
   try {

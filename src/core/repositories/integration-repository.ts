@@ -124,7 +124,14 @@ const CASCADED_COUNT_SELECT = {
   invoices: true,
   invoiceLines: true,
   payments: true,
-  messages: true,
+  emailMessages: true,
+  slackMessages: true,
+  slackConversationMembers: true,
+  // Configuration rather than synced business data: deleting an integration
+  // removes the Slack mappings, but they do not count toward `recordCount`.
+  // They are listed here so the delete preview and audit do not under-report
+  // what the cascade removes.
+  slackConversationMappings: true,
   syncRuns: true,
 } as const;
 
@@ -149,7 +156,9 @@ const SYNCED_RECORD_RELATIONS = [
   "invoices",
   "invoiceLines",
   "payments",
-  "messages",
+  "emailMessages",
+  "slackMessages",
+  "slackConversationMembers",
 ] as const satisfies ReadonlyArray<keyof CascadedCounts>;
 
 function countSyncedRecords(counts: CascadedCounts): number {

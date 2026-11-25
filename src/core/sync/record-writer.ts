@@ -55,8 +55,13 @@ import {
 import { MAX_CUSTOM_FIELDS, OBJECT_SCHEMAS } from "../object-schema";
 import type { MappedRecord } from "../types/mapping";
 import type { ExternalRefs } from "../types/registry";
-import type { MessageAttribution } from "../communication/types";
-import { MESSAGE_ROLES, type MessageRole } from "../communication/types";
+import type {
+  CommunicationAttribution,
+  EmailAttribution,
+  EmailMessageRole,
+  SlackAttribution,
+} from "../communication/types";
+import { EMAIL_MESSAGE_ROLES } from "../communication/types";
 import { readJsonObject, writeJsonArray, writeJsonObject } from "../repositories/json-column";
 // Imported rather than defined here: identity resolution matches on the same
 // addresses this writer validates, and two definitions of "a valid address"
@@ -84,8 +89,8 @@ export interface CollectedRecord {
   externalSourceId: string | undefined;
   externalRefs?: ExternalRefs;
   mapped: MappedRecord;
-  /** Derived participant candidates, for communication messages. */
-  attribution?: MessageAttribution;
+  /** Derived attribution, for communication messages. */
+  attribution?: CommunicationAttribution;
 }
 
 /** Trim to a field's max length, returning null for blanks. */
@@ -2989,12 +2994,12 @@ function rawText(value: string | null): string | null {
 }
 
 function normalizeParticipant(
-  participant: MessageAttribution["participants"][number],
+  participant: EmailAttribution["participants"][number],
   seen: Set<string>,
   primaryState: { seen: boolean }
 ):
   | {
-      role: MessageRole;
+      role: EmailMessageRole;
       partyKey: string;
       contactId: string | null;
       customerId: string | null;
@@ -3006,7 +3011,7 @@ function normalizeParticipant(
       isPrimary: boolean;
     }
   | undefined {
-  if (!(MESSAGE_ROLES as readonly string[]).includes(participant.role)) {
+  if (!(EMAIL_MESSAGE_ROLES as readonly string[]).includes(participant.role)) {
     return undefined;
   }
   const key = `${participant.role}:${participant.partyKey}`;
@@ -3031,13 +3036,13 @@ function normalizeParticipant(
 }
 
 /**
- * Write one streamed page of messages and replace each message's participants.
+ * Write one streamed page of emails and replace each message's participants.
  *
  * Upserting the message by `(integrationId, externalSourceId)` and replacing the
  * participant set makes re-attribution idempotent: a full rescan after a contact
  * is added updates the links rather than accumulating stale candidates.
  */
-export async function writeMessagePage(
+export async function writeEmailMessagePage(
   integrationId: string,
   records: readonly CollectedRecord[]
 ): Promise<WriteOutcome> {
@@ -3048,7 +3053,7 @@ export async function writeMessagePage(
     if (externalSourceId === undefined || externalSourceId === "") {
       issues.push({
         sourceRecordId: "(unknown)",
-        targetObject: "message",
+        targetObject: "emailMessage",
         reason: "Source record has no id",
         severity: "rejected",
       });
@@ -3059,7 +3064,7 @@ export async function writeMessagePage(
     if (sentAt === null) {
       issues.push({
         sourceRecordId: externalSourceId,
-        targetObject: "message",
+        targetObject: "emailMessage",
         reason: "Sent at is required",
         fieldName: "sentAt",
         severity: "rejected",
@@ -3071,7 +3076,7 @@ export async function writeMessagePage(
     if (rawDirection === null || !isMessageDirection(rawDirection.toLowerCase())) {
       issues.push({
         sourceRecordId: externalSourceId,
-        targetObject: "message",
+        targetObject: "emailMessage",
         reason: "Direction must be 'sent' or 'received'",
         fieldName: "direction",
         severity: "rejected",
@@ -3081,13 +3086,13 @@ export async function writeMessagePage(
 
     const rawFromEmail = normalize(
       mapped.fields["fromEmail"] ?? null,
-      maxLengthOf("message", "fromEmail")
+      maxLengthOf("emailMessage", "fromEmail")
     );
     let fromEmail = rawFromEmail;
     if (fromEmail !== null && !EMAIL_PATTERN.test(fromEmail)) {
       issues.push({
         sourceRecordId: externalSourceId,
-        targetObject: "message",
+        targetObject: "emailMessage",
         reason: `'${fromEmail}' is not a valid email address; left unset`,
         fieldName: "fromEmail",
         severity: "warning",
@@ -3097,7 +3102,9 @@ export async function writeMessagePage(
 
     const seenParticipants = new Set<string>();
     const primaryState = { seen: false };
-    const participants = (attribution?.participants ?? [])
+    const emailAttribution =
+      attribution?.kind === "email" ? attribution : undefined;
+    const participants = (emailAttribution?.participants ?? [])
       .map((participant) =>
         normalizeParticipant(participant, seenParticipants, primaryState)
       )
@@ -3106,7 +3113,7 @@ export async function writeMessagePage(
     if (participants.some((participant) => participant.disputed)) {
       issues.push({
         sourceRecordId: externalSourceId,
-        targetObject: "message",
+        targetObject: "emailMessage",
         reason: "Message matches more than one account group; no primary party chosen",
         severity: "warning",
       });
@@ -3115,18 +3122,18 @@ export async function writeMessagePage(
     const data = {
       threadId: normalize(
         mapped.fields["threadId"] ?? null,
-        maxLengthOf("message", "threadId")
+        maxLengthOf("emailMessage", "threadId")
       ),
       fromEmail,
       fromName: normalize(
         mapped.fields["fromName"] ?? null,
-        maxLengthOf("message", "fromName")
+        maxLengthOf("emailMessage", "fromName")
       ),
       toEmails: writeJsonArray(parseEmailList(mapped.fields["toEmails"] ?? null)),
       ccEmails: writeJsonArray(parseEmailList(mapped.fields["ccEmails"] ?? null)),
       subject: normalize(
         mapped.fields["subject"] ?? null,
-        maxLengthOf("message", "subject")
+        maxLengthOf("emailMessage", "subject")
       ),
       snippet: normalize(mapped.fields["snippet"] ?? null),
       // Bodies are not trimmed and not capped. Trimming a text body would
@@ -3138,7 +3145,7 @@ export async function writeMessagePage(
       direction: rawDirection.toLowerCase(),
     };
 
-    await prisma.message.upsert({
+    await prisma.emailMessage.upsert({
       where: {
         integrationId_externalSourceId: { integrationId, externalSourceId },
       },
@@ -3160,6 +3167,225 @@ export async function writeMessagePage(
   }
 
   return { written, issues };
+}
+
+/**
+ * Write one streamed page of Slack messages and refresh member snapshots.
+ *
+ * A Slack message has no participant rows. Its customer is the mapping's, its
+ * author contact is a single nullable foreign key, and the conversation's people
+ * live in `SlackConversationMember`.
+ */
+export async function writeSlackMessagePage(
+  integrationId: string,
+  records: readonly CollectedRecord[]
+): Promise<WriteOutcome> {
+  const issues: RecordIssue[] = [];
+  let written = 0;
+
+  // Members are refreshed once per mapping per page, even when several messages
+  // in the page belong to the same conversation. `undefined` is not stored: it
+  // means the lookup failed and the existing snapshot must survive.
+  const membersByMapping = new Map<
+    string,
+    NonNullable<SlackAttribution["conversationMembers"]>
+  >();
+
+  for (const { externalSourceId, mapped, attribution } of records) {
+    if (externalSourceId === undefined || externalSourceId === "") {
+      issues.push({
+        sourceRecordId: "(unknown)",
+        targetObject: "slackMessage",
+        reason: "Source record has no id",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const slackAttribution =
+      attribution?.kind === "slack" ? attribution : undefined;
+    if (slackAttribution === undefined) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "slackMessage",
+        reason: "Slack message has no conversation mapping attribution",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const authorId = normalize(
+      mapped.fields["authorId"] ?? null,
+      maxLengthOf("slackMessage", "authorId")
+    );
+    if (authorId === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "slackMessage",
+        reason: "Author Slack user id is required",
+        fieldName: "authorId",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const threadRootTs = normalize(
+      mapped.fields["threadRootTs"] ?? null,
+      maxLengthOf("slackMessage", "threadRootTs")
+    );
+    if (threadRootTs === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "slackMessage",
+        reason: "Thread root timestamp is required",
+        fieldName: "threadRootTs",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const sentAt = parseDate(mapped.fields["sentAt"] ?? null);
+    if (sentAt === null) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "slackMessage",
+        reason: "Sent at is required",
+        fieldName: "sentAt",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const rawDirection = normalize(mapped.fields["direction"] ?? null);
+    if (rawDirection === null || !isMessageDirection(rawDirection.toLowerCase())) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "slackMessage",
+        reason: "Direction must be 'sent' or 'received'",
+        fieldName: "direction",
+        severity: "rejected",
+      });
+      continue;
+    }
+
+    const rawAuthorEmail = normalize(
+      mapped.fields["authorEmail"] ?? null,
+      maxLengthOf("slackMessage", "authorEmail")
+    );
+    let authorEmail = rawAuthorEmail;
+    if (authorEmail !== null && !EMAIL_PATTERN.test(authorEmail)) {
+      issues.push({
+        sourceRecordId: externalSourceId,
+        targetObject: "slackMessage",
+        reason: `'${authorEmail}' is not a valid email address; left unset`,
+        fieldName: "authorEmail",
+        severity: "warning",
+      });
+      authorEmail = null;
+    }
+
+    const data = {
+      mappingId: slackAttribution.mappingId,
+      authorId,
+      authorName: normalize(
+        mapped.fields["authorName"] ?? null,
+        maxLengthOf("slackMessage", "authorName")
+      ),
+      authorEmail,
+      authorIsExternal: slackAttribution.authorExternal,
+      threadRootTs,
+      bodyText: rawText(mapped.fields["bodyText"] ?? null),
+      snippet: normalize(mapped.fields["snippet"] ?? null),
+      sentAt,
+      direction: rawDirection.toLowerCase(),
+      authorContactId: slackAttribution.authorContact?.contactId ?? null,
+    };
+
+    await prisma.slackMessage.upsert({
+      where: {
+        integrationId_externalSourceId: { integrationId, externalSourceId },
+      },
+      create: { integrationId, externalSourceId, ...data },
+      update: data,
+    });
+
+    // Only a supplied snapshot is stored. `undefined` is a failed lookup and
+    // must leave the existing rows alone, so this is not a map write of
+    // `undefined` that the loop below would have to filter back out.
+    if (slackAttribution.conversationMembers !== undefined) {
+      membersByMapping.set(
+        slackAttribution.mappingId,
+        slackAttribution.conversationMembers
+      );
+    }
+    written += 1;
+  }
+
+  for (const [mappingId, snapshot] of membersByMapping) {
+    await replaceSlackConversationMembers(integrationId, mappingId, snapshot);
+  }
+
+  return { written, issues };
+}
+
+async function replaceSlackConversationMembers(
+  integrationId: string,
+  mappingId: string,
+  snapshot: NonNullable<SlackAttribution["conversationMembers"]>
+): Promise<void> {
+  const ids = snapshot.map((member) => member.slackUserId);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.slackConversationMember.deleteMany({
+      where: {
+        integrationId,
+        mappingId,
+        ...(ids.length === 0 ? {} : { slackUserId: { notIn: ids } }),
+      },
+    });
+
+    for (const member of snapshot) {
+      const data = {
+        name: member.name ?? null,
+        email: member.email ?? null,
+        isExternal: member.isExternal,
+      };
+      await tx.slackConversationMember.upsert({
+        where: {
+          mappingId_slackUserId: {
+            mappingId,
+            slackUserId: member.slackUserId,
+          },
+        },
+        create: {
+          integrationId,
+          mappingId,
+          slackUserId: member.slackUserId,
+          ...data,
+        },
+        update: data,
+      });
+    }
+  });
+}
+
+/** Write a streamed page for whichever source-specific message the handler
+ * produced. */
+export async function writeCommunicationPage(
+  integrationId: string,
+  object: TargetObject,
+  records: readonly CollectedRecord[]
+): Promise<WriteOutcome> {
+  switch (object) {
+    case "emailMessage":
+      return writeEmailMessagePage(integrationId, records);
+    case "slackMessage":
+      return writeSlackMessagePage(integrationId, records);
+    default:
+      throw new Error(
+        `Communication handler yielded unsupported object '${object}'`
+      );
+  }
 }
 
 // ---------------------------------------------------------------------------

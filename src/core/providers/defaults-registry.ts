@@ -42,6 +42,8 @@ import {
 import { STIGG_PROVIDER_NAME } from "./stigg/provider";
 import { gmailCommunicationDefaults } from "./gmail/defaults";
 import { GMAIL_PROVIDER_NAME } from "./gmail/provider";
+import { slackCommunicationDefaults } from "./slack/defaults";
+import { SLACK_PROVIDER_NAME } from "./slack/provider";
 
 const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
   [`identity:${HUBSPOT_PROVIDER_NAME}`]: hubspotIdentityDefaults,
@@ -63,6 +65,7 @@ const DEFAULTS: Record<string, readonly FieldMappingRule[]> = {
   [`billing:${CHARGEBEE_PROVIDER_NAME}`]: chargebeeBillingDefaults,
   [`billing:${METRIFOX_PROVIDER_NAME}`]: metrifoxBillingDefaults,
   [`communication:${GMAIL_PROVIDER_NAME}`]: gmailCommunicationDefaults,
+  [`communication:${SLACK_PROVIDER_NAME}`]: slackCommunicationDefaults,
 };
 
 export function defaultMappingsFor(

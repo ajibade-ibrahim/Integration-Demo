@@ -99,10 +99,12 @@ export const TARGET_OBJECTS = [
   "invoice",
   "invoiceLine",
   "payment",
-  // A communication message. It is written only by the `communication`
-  // function and is never a field-mapping parent: participants are resolved by
-  // the communication matcher, not by a provider foreign-id reference.
-  "message",
+  // Communication is split by source. Both are written only by the
+  // `communication` function and are never field-mapping parents: email
+  // participants are resolved by the address matcher, and Slack attribution
+  // comes from the conversation mapping rather than a foreign-id reference.
+  "emailMessage",
+  "slackMessage",
 ] as const;
 
 export type TargetObject = (typeof TARGET_OBJECTS)[number];

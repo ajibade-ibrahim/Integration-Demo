@@ -13,7 +13,8 @@ import {
   listAllIntegrations,
   updateStatus,
 } from "../repositories/integration-repository";
-import { pruneExpiredMessages } from "../repositories/message-repository";
+import { pruneExpiredEmailMessages } from "../repositories/email-message-repository";
+import { pruneExpiredSlackMessages } from "../repositories/slack-conversation-repository";
 import { retentionCutoff } from "../communication/config";
 import { resolveAfterSync } from "../identity/resolve-after-sync";
 import { recoverExpiredSyncRuns } from "./lease";
@@ -124,6 +125,8 @@ export async function runScheduledSyncs(
     if (result.status !== "discarded") synced.push(integration);
   }
 
+  const cutoff = retentionCutoff(new Date(now));
+
   return {
     checked: all.length,
     due: due.length,
@@ -134,8 +137,10 @@ export async function runScheduledSyncs(
     // Independent of which integrations were due: an integration that stopped
     // syncing must not leave its expired messages behind forever. The active
     // path prunes after a complete pass; this is the retention floor for
-    // everything else.
-    messagesPruned: await pruneExpiredMessages(retentionCutoff(new Date(now))),
+    // everything else, across both source-specific message tables.
+    messagesPruned:
+      (await pruneExpiredEmailMessages(cutoff)) +
+      (await pruneExpiredSlackMessages(cutoff)),
   };
 }
 

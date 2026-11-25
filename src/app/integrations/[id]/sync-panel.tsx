@@ -89,7 +89,8 @@ const OBJECT_LABELS: Record<string, [singular: string, plural: string]> = {
   invoice: ["invoice", "invoices"],
   invoiceLine: ["invoice line", "invoice lines"],
   payment: ["payment", "payments"],
-  message: ["message", "messages"],
+  emailMessage: ["email message", "email messages"],
+  slackMessage: ["Slack message", "Slack messages"],
 };
 
 const FUNCTION_LABELS: Record<string, string> = {

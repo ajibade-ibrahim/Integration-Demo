@@ -135,7 +135,10 @@ model Integration {
   invoices         Invoice[]
   invoiceLines     InvoiceLine[]
   payments         Payment[]
-  messages         Message[]
+  emailMessages    EmailMessage[]
+  slackMessages    SlackMessage[]
+  slackConversationMappings SlackConversationMapping[]
+  slackConversationMembers  SlackConversationMember[]
   syncRuns         SyncRun[]
 
   @@index([userId])
@@ -324,7 +327,8 @@ model Customer {
   /// on either side depending on who it is paired with.
   assertionsAsLeft  IdentityAssertion[] @relation("AssertionLeft")
   assertionsAsRight IdentityAssertion[] @relation("AssertionRight")
-  messageParticipants MessageParticipant[]
+  emailMessageParticipants EmailMessageParticipant[]
+  slackConversationMappings SlackConversationMapping[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
@@ -355,7 +359,8 @@ model Contact {
   customFields String @default("{}")
 
   updatedAt DateTime @updatedAt
-  messageParticipants MessageParticipant[]
+  emailMessageParticipants EmailMessageParticipant[]
+  slackAuthoredMessages SlackMessage[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId])
@@ -365,14 +370,15 @@ model Contact {
 // ---------------------------------------------------------------------------
 // Communication
 //
-// One message, plus every known party it matched. A message is stored only
-// when it has at least one matched participant; the participant table carries
-// the role and evidence rather than flattening a single "attributed party"
-// onto the message, because one email can legitimately involve several
-// companies and roles.
+// Two source-specific records rather than one generic message. An email is
+// address-matched, so it owns its From/To/Cc participants and their evidence.
+// A Slack message is conversation-mapped: the mapped customer is the primary
+// party through `mappingId`, the author may resolve to one contact of that
+// customer, and the conversation's people live in a refreshed member snapshot
+// rather than being copied onto every message.
 // ---------------------------------------------------------------------------
 
-model Message {
+model EmailMessage {
   id            String      @id @default(uuid())
   integrationId String
   integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
@@ -394,7 +400,7 @@ model Message {
   bodyText String?
   bodyHtml String?
 
-  /// Gmail internalDate, with the Date header only as a fallback.
+  /// When the message was sent, in the provider's own timestamp.
   sentAt DateTime
 
   /// MessageDirection: sent | received.
@@ -403,19 +409,19 @@ model Message {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  participants MessageParticipant[]
+  participants EmailMessageParticipant[]
 
   @@unique([integrationId, externalSourceId])
   @@index([integrationId, sentAt])
   @@index([sentAt])
 }
 
-model MessageParticipant {
-  id        String  @id @default(uuid())
-  messageId String
-  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+model EmailMessageParticipant {
+  id             String       @id @default(uuid())
+  emailMessageId String
+  emailMessage   EmailMessage @relation(fields: [emailMessageId], references: [id], onDelete: Cascade)
 
-  /// MessageRole: from | to | cc.
+  /// EmailMessageRole: from | to | cc.
   role String
 
   /// Stable candidate identity: contact:<id> | account:<id> | customer:<id>.
@@ -430,7 +436,7 @@ model MessageParticipant {
   customerAccountId String?
   customerAccount   CustomerAccount? @relation(fields: [customerAccountId], references: [id], onDelete: SetNull)
 
-  /// MatchKind: contact_email | customer_email | customer_domain.
+  /// EmailMatchKind: contact_email | customer_email | customer_domain.
   matchKind String
 
   matchedValue String
@@ -438,11 +444,112 @@ model MessageParticipant {
   disputed     Boolean @default(false)
   isPrimary    Boolean @default(false)
 
-  @@unique([messageId, role, partyKey])
-  @@index([messageId, isPrimary])
+  @@unique([emailMessageId, role, partyKey])
+  @@index([emailMessageId, isPrimary])
   @@index([contactId])
   @@index([customerId])
   @@index([customerAccountId])
+}
+
+/// A Slack conversation a human has explicitly attributed to a customer.
+///
+/// Configuration, not synced business data: the mapping itself decides what the
+/// communication sync reads. A conversation with no row here is never fetched,
+/// which is why the mapping is the source of truth rather than an inference from
+/// participants. `Customer` is the target rather than `CustomerAccount` because
+/// customer ids are stable for the life of their source integration, while
+/// accounts are merged and reaped by identity resolution.
+model SlackConversationMapping {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider conversation id: C…, G…, or D….
+  conversationId   String
+  /// SlackConversationKind: shared_channel | connect_dm | group_dm.
+  conversationKind String
+  /// Human-readable snapshot used by the Slack message list. A channel rename
+  /// is not reflected until the mapping is refreshed; that is deliberate.
+  label            String
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members  SlackConversationMember[]
+  messages SlackMessage[]
+
+  @@unique([integrationId, conversationId])
+  @@index([integrationId])
+  @@index([customerId])
+}
+
+/// A refreshed snapshot of one mapped conversation's human members.
+///
+/// Replaced wholesale by the writer when the sync handler supplies a snapshot.
+/// `undefined` from the handler means the lookup failed and the existing rows
+/// must be kept; an empty list means the conversation genuinely has none left.
+model SlackConversationMember {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  mappingId String
+  mapping   SlackConversationMapping @relation(fields: [mappingId], references: [id], onDelete: Cascade)
+
+  slackUserId String
+  name        String?
+  email       String?
+  isExternal  Boolean
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([mappingId, slackUserId])
+  @@index([integrationId])
+  @@index([mappingId])
+}
+
+model SlackMessage {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Provider-assigned id: `<conversationId>:<ts>`. The upsert key with
+  /// integrationId, unchanged by the source split so dedupe still works.
+  externalSourceId String
+
+  mappingId String
+  mapping   SlackConversationMapping @relation(fields: [mappingId], references: [id], onDelete: Cascade)
+
+  authorId         String
+  authorName       String?
+  authorEmail      String?
+  authorIsExternal Boolean
+  /// Root `ts` of the thread: `thread_ts`, or the message's own `ts` when root.
+  threadRootTs String
+
+  bodyText String?
+  snippet  String?
+  sentAt   DateTime
+  /// MessageDirection: sent | received.
+  direction String
+
+  /// Best-effort contact of the external author, restricted to the mapped
+  /// customer. Null for internal authors and unmatched external authors.
+  authorContactId String?
+  authorContact   Contact? @relation(fields: [authorContactId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([integrationId, externalSourceId])
+  @@index([integrationId, sentAt])
+  @@index([mappingId, threadRootTs])
+  @@index([sentAt])
+  @@index([authorContactId])
 }
 
 // ---------------------------------------------------------------------------
@@ -1505,7 +1612,7 @@ model CustomerAccount {
 
   members Customer[]
   keys    CustomerAccountKey[]
-  messageParticipants MessageParticipant[]
+  emailMessageParticipants EmailMessageParticipant[]
 
   @@index([userId])
   @@index([userId, name])

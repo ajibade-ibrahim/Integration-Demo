@@ -8,7 +8,10 @@
  * falls back to free-text entry.
  */
 
-import { getFieldDiscovery } from "../registries/handler-registry";
+import {
+  getFieldDiscovery,
+  getSyncHandler,
+} from "../registries/handler-registry";
 import { canRefresh } from "../registries/provider-registry";
 import { getValidToken, refreshToken } from "../oauth/oauth-service";
 import { findIntegration } from "../repositories/integration-repository";
@@ -52,10 +55,16 @@ export async function discoverFields(
   const discovery = getFieldDiscovery(functionName, integration.providerName);
   const results: DiscoveryResult[] = [];
 
-  // The function's own objects, not every object that exists — otherwise
-  // editing an identity mapping would call the provider's schema API for
-  // products, and cache an empty answer against them.
-  for (const object of objectsForFunction(functionName)) {
+  // The objects this provider's handler actually writes, not every object the
+  // function could contain. A function with two message objects would otherwise
+  // make Gmail discover fields for the Slack object and cache an empty answer
+  // against it. Falling back to the function's objects keeps a declared but
+  // unbuilt pair discoverable for free-text entry.
+  const handler = getSyncHandler(functionName, integration.providerName);
+  const objects =
+    handler === undefined ? objectsForFunction(functionName) : handler.objects;
+
+  for (const object of objects) {
     if (options.refresh !== true) {
       const cached = await findDiscoveredFields(integrationId, functionName, object);
       const fresh =

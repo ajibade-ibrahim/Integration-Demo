@@ -1,16 +1,16 @@
 /**
- * Communication message reads and retention.
+ * Email message reads and retention.
  *
  * The writer lives beside the other record writers; this module owns the two
  * destructive operations and the UI projections. Every read is scoped by
- * `integration.userId`, including the detail page, so an id from another
- * tenant answers as "not found" rather than leaking a subject or body.
+ * `integration.userId`, including the detail page, so an id from another tenant
+ * answers as "not found" rather than leaking a subject or body.
  */
 
 import { prisma } from "@/lib/prisma";
 import { readJsonArray } from "./json-column";
 
-export interface MessageParticipantView {
+export interface EmailMessageParticipantView {
   id: string;
   role: string;
   partyKey: string;
@@ -24,23 +24,24 @@ export interface MessageParticipantView {
   accountName: string | null;
 }
 
-export interface MessageListRow {
+export interface EmailMessageListRow {
   id: string;
   externalSourceId: string;
   subject: string | null;
   snippet: string | null;
   fromEmail: string | null;
   fromName: string | null;
+  toEmails: string[];
   sentAt: Date;
   direction: string;
   integrationLabel: string;
   providerName: string;
-  participants: MessageParticipantView[];
+  participants: EmailMessageParticipantView[];
   /** A name when one primary exists, otherwise the ambiguity's shape. */
   primaryLabel: string;
 }
 
-export interface MessageDetail extends MessageListRow {
+export interface EmailMessageDetail extends EmailMessageListRow {
   threadId: string | null;
   toEmails: string[];
   ccEmails: string[];
@@ -76,7 +77,7 @@ type ParticipantRow = {
   customerAccount: { name: string } | null;
 };
 
-function participantView(row: ParticipantRow): MessageParticipantView {
+function participantView(row: ParticipantRow): EmailMessageParticipantView {
   return {
     id: row.id,
     role: row.role,
@@ -92,7 +93,9 @@ function participantView(row: ParticipantRow): MessageParticipantView {
   };
 }
 
-function primaryLabel(participants: readonly MessageParticipantView[]): string {
+function primaryLabel(
+  participants: readonly EmailMessageParticipantView[]
+): string {
   const primary = participants.find((participant) => participant.isPrimary);
   if (primary !== undefined) {
     return (
@@ -122,11 +125,12 @@ function toListRow(row: {
   snippet: string | null;
   fromEmail: string | null;
   fromName: string | null;
+  toEmails: string;
   sentAt: Date;
   direction: string;
   integration: { instanceLabel: string; providerName: string };
   participants: ParticipantRow[];
-}): MessageListRow {
+}): EmailMessageListRow {
   const participants = row.participants.map(participantView);
   return {
     id: row.id,
@@ -135,6 +139,7 @@ function toListRow(row: {
     snippet: row.snippet,
     fromEmail: row.fromEmail,
     fromName: row.fromName,
+    toEmails: readJsonArray<string>(row.toEmails),
     sentAt: row.sentAt,
     direction: row.direction,
     integrationLabel: row.integration.instanceLabel,
@@ -144,12 +149,12 @@ function toListRow(row: {
   };
 }
 
-/** Newest messages across every integration this user owns. */
-export async function loadMessagesForUser(
+/** Newest emails across every integration this user owns. */
+export async function loadEmailMessagesForUser(
   userId: string,
   take = 200
-): Promise<MessageListRow[]> {
-  const rows = await prisma.message.findMany({
+): Promise<EmailMessageListRow[]> {
+  const rows = await prisma.emailMessage.findMany({
     where: { integration: { userId } },
     orderBy: [{ sentAt: "desc" }, { id: "asc" }],
     take,
@@ -165,16 +170,18 @@ export async function loadMessagesForUser(
   return rows.map(toListRow);
 }
 
-export async function countMessagesForUser(userId: string): Promise<number> {
-  return prisma.message.count({ where: { integration: { userId } } });
+export async function countEmailMessagesForUser(
+  userId: string
+): Promise<number> {
+  return prisma.emailMessage.count({ where: { integration: { userId } } });
 }
 
-/** One message for the detail page, scoped through its integration's owner. */
-export async function findMessageForUser(
+/** One email for the detail page, scoped through its integration's owner. */
+export async function findEmailMessageForUser(
   id: string,
   userId: string
-): Promise<MessageDetail | undefined> {
-  const row = await prisma.message.findFirst({
+): Promise<EmailMessageDetail | undefined> {
+  const row = await prisma.emailMessage.findFirst({
     where: { id, integration: { userId } },
     include: {
       integration: { select: { instanceLabel: true, providerName: true } },
@@ -197,24 +204,26 @@ export async function findMessageForUser(
 }
 
 /**
- * Delete one integration's messages older than the retained window.
+ * Delete one integration's emails older than the retained window.
  *
  * Called only after a complete acquisition. A page-limited or failed run must
  * not advance the window and then delete the history it did not re-read.
  */
-export async function pruneMessagesForIntegration(
+export async function pruneEmailMessagesForIntegration(
   integrationId: string,
   cutoff: Date
 ): Promise<number> {
-  const result = await prisma.message.deleteMany({
+  const result = await prisma.emailMessage.deleteMany({
     where: { integrationId, sentAt: { lt: cutoff } },
   });
   return result.count;
 }
 
-/** Delete expired messages for every integration, including inactive ones. */
-export async function pruneExpiredMessages(cutoff: Date): Promise<number> {
-  const result = await prisma.message.deleteMany({
+/** Delete expired emails for every integration, including inactive ones. */
+export async function pruneExpiredEmailMessages(
+  cutoff: Date
+): Promise<number> {
+  const result = await prisma.emailMessage.deleteMany({
     where: { sentAt: { lt: cutoff } },
   });
   return result.count;

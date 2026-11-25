@@ -8,10 +8,20 @@ import {
 } from "@/core/repositories/synced-data-repository";
 import { listResolutionRuns } from "@/core/repositories/identity-repository";
 import {
-  countMessagesForUser,
-  loadMessagesForUser,
-  type MessageListRow,
-} from "@/core/repositories/message-repository";
+  countEmailMessagesForUser,
+  loadEmailMessagesForUser,
+  type EmailMessageListRow,
+} from "@/core/repositories/email-message-repository";
+import {
+  countSlackConversationsForUser,
+  loadSlackConversationsForUser,
+  type SlackConversationListRow,
+} from "@/core/repositories/slack-conversation-repository";
+import {
+  isSlackConversationKind,
+  SLACK_CONVERSATION_KIND_FILTERS,
+  SLACK_CONVERSATION_KIND_LABELS,
+} from "./slack-kind";
 import { AccountsPanel } from "./accounts-panel";
 
 export const dynamic = "force-dynamic";
@@ -19,22 +29,37 @@ export const dynamic = "force-dynamic";
 export default async function SyncedDataPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; kind?: string }>;
 }) {
   bootstrap();
 
-  const { tab } = await searchParams;
+  const { tab, kind } = await searchParams;
   const showContacts = tab === "contacts";
   const showAccounts = tab === "accounts";
-  const showMessages = tab === "messages";
+  const showEmail = tab === "email";
+  const showSlack = tab === "slack";
+
+  // An unrecognised kind is "All", not an error: this is a read-only filter and
+  // a stale bookmark should still render the tab.
+  const slackKind =
+    showSlack && isSlackConversationKind(kind) ? kind : undefined;
 
   const userId = await currentUserId();
-  const [{ customers, contacts, totals }, messageTotal, messages] =
-    await Promise.all([
-      loadSyncedData(userId),
-      countMessagesForUser(userId),
-      showMessages ? loadMessagesForUser(userId) : Promise.resolve([]),
-    ]);
+  const [
+    { customers, contacts, totals },
+    emailTotal,
+    slackTotal,
+    emailMessages,
+    slackConversations,
+  ] = await Promise.all([
+    loadSyncedData(userId),
+    countEmailMessagesForUser(userId),
+    countSlackConversationsForUser(userId),
+    showEmail ? loadEmailMessagesForUser(userId) : Promise.resolve([]),
+    showSlack
+      ? loadSlackConversationsForUser(userId, slackKind)
+      : Promise.resolve([]),
+  ]);
 
   // Only for the tab that renders them. The accounts read pulls members and
   // keys for every account, which is a lot of rows to fetch for a page showing
@@ -63,7 +88,8 @@ export default async function SyncedDataPage({
 
       {totals.customers === 0 &&
       totals.contacts === 0 &&
-      messageTotal === 0 ? (
+      emailTotal === 0 &&
+      slackTotal === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
           <p className="text-slate-600">Nothing synced yet.</p>
           <Link
@@ -76,7 +102,10 @@ export default async function SyncedDataPage({
       ) : (
         <>
           <div className="flex items-center gap-2 border-b border-slate-200">
-            <Tab href="/customers" active={!showContacts && !showAccounts && !showMessages}>
+            <Tab
+              href="/customers"
+              active={!showContacts && !showAccounts && !showEmail && !showSlack}
+            >
               Customers ({totals.customers})
             </Tab>
             <Tab href="/customers?tab=contacts" active={showContacts}>
@@ -90,8 +119,11 @@ export default async function SyncedDataPage({
             <Tab href="/customers?tab=accounts" active={showAccounts}>
               Accounts ({totals.accounts})
             </Tab>
-            <Tab href="/customers?tab=messages" active={showMessages}>
-              Messages ({messageTotal})
+            <Tab href="/customers?tab=email" active={showEmail}>
+              Email messages ({emailTotal})
+            </Tab>
+            <Tab href="/customers?tab=slack" active={showSlack}>
+              Slack conversations ({slackTotal})
             </Tab>
           </div>
 
@@ -110,8 +142,10 @@ export default async function SyncedDataPage({
             </p>
           )}
 
-          {showMessages ? (
-            <MessageTable rows={messages} />
+          {showEmail ? (
+            <EmailMessageTable rows={emailMessages} />
+          ) : showSlack ? (
+            <SlackConversationTable rows={slackConversations} kind={slackKind} />
           ) : showAccounts ? (
             <AccountsPanel
               accounts={accounts.map((account) => ({
@@ -269,7 +303,7 @@ function ContactTable({
   );
 }
 
-function MessageTable({ rows }: { rows: MessageListRow[] }) {
+function EmailMessageTable({ rows }: { rows: EmailMessageListRow[] }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
       <table className="w-full text-sm">
@@ -277,6 +311,7 @@ function MessageTable({ rows }: { rows: MessageListRow[] }) {
           <tr>
             <Th>From</Th>
             <Th>Subject</Th>
+            <Th>To</Th>
             <Th>Sent</Th>
             <Th>Direction</Th>
             <Th>Primary party</Th>
@@ -289,7 +324,7 @@ function MessageTable({ rows }: { rows: MessageListRow[] }) {
             <tr key={row.id}>
               <Td className="font-medium text-slate-900">
                 <Link
-                  href={`/customers/messages/${row.id}`}
+                  href={`/customers/messages/email/${row.id}`}
                   className="hover:underline"
                 >
                   {row.fromName ?? row.fromEmail ?? "(unknown sender)"}
@@ -297,11 +332,14 @@ function MessageTable({ rows }: { rows: MessageListRow[] }) {
               </Td>
               <Td>
                 <Link
-                  href={`/customers/messages/${row.id}`}
+                  href={`/customers/messages/email/${row.id}`}
                   className="hover:underline"
                 >
                   {row.subject ?? <Empty />}
                 </Link>
+              </Td>
+              <Td className="max-w-xs truncate text-slate-600">
+                {row.toEmails.length === 0 ? <Empty /> : row.toEmails.join(", ")}
               </Td>
               <Td>{row.sentAt.toLocaleString()}</Td>
               <Td>{row.direction}</Td>
@@ -317,6 +355,96 @@ function MessageTable({ rows }: { rows: MessageListRow[] }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function SlackConversationTable({
+  rows,
+  kind,
+}: {
+  rows: SlackConversationListRow[];
+  kind?: SlackConversationListRow["conversationKind"];
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {SLACK_CONVERSATION_KIND_FILTERS.map((filter) => {
+          const active = filter.kind === kind;
+          const href =
+            filter.kind === undefined
+              ? "/customers?tab=slack"
+              : `/customers?tab=slack&kind=${filter.kind}`;
+          return (
+            <Link
+              key={filter.key}
+              href={href}
+              className={`rounded-full border px-3 py-1 text-xs ${
+                active
+                  ? "border-slate-900 bg-slate-900 font-medium text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              {filter.label}
+            </Link>
+          );
+        })}
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <table className="w-full text-sm">
+          <thead className="border-b border-slate-100 text-left text-xs uppercase tracking-wide text-slate-400">
+            <tr>
+              <Th>Conversation</Th>
+              <Th>Kind</Th>
+              <Th>Customer</Th>
+              <Th>Members</Th>
+              <Th>Messages</Th>
+              <Th>Last message</Th>
+              <Th>Source</Th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.map((row) => (
+              <tr key={row.mappingId}>
+                <Td className="font-medium text-slate-900">
+                  <Link
+                    href={`/customers/slack/${row.mappingId}`}
+                    className="hover:underline"
+                  >
+                    {row.label}
+                  </Link>
+                  <p className="font-mono text-xs font-normal text-slate-400">
+                    {row.conversationId}
+                  </p>
+                </Td>
+                <Td>{SLACK_CONVERSATION_KIND_LABELS[row.conversationKind].singular}</Td>
+                <Td>{row.customerName}</Td>
+                <Td>{row.memberCount}</Td>
+                <Td>{row.messageCount}</Td>
+                <Td className="max-w-md text-slate-600">
+                  {row.latestMessage === null ? (
+                    <span className="text-slate-400">No messages</span>
+                  ) : (
+                    <>
+                      <span className="font-medium text-slate-800">
+                        {row.latestMessage.authorName ?? row.latestMessage.authorId}
+                      </span>
+                      <span className="ml-2 text-xs text-slate-400">
+                        {row.latestMessage.sentAt.toLocaleString()}
+                      </span>
+                      <p className="truncate">
+                        {row.latestMessage.snippet ?? <Empty />}
+                      </p>
+                    </>
+                  )}
+                </Td>
+                <Td className="text-xs text-slate-400">{row.integrationLabel}</Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

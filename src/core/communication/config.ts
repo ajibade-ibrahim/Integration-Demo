@@ -13,11 +13,27 @@ export const DEFAULT_PAGE_SIZE = 100;
 export const MAX_PAGE_SIZE = 500;
 export const MAX_PAGES = 1000;
 
-function positiveInt(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw.trim() === "") return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+/**
+ * Read a positive integer from `name`, then from its legacy spelling.
+ *
+ * The `GMAIL_*` names predate Slack and remain accepted so an existing
+ * deployment does not silently change its retention window on upgrade. The new
+ * name wins when both are set. Defaults are unchanged, which matters because
+ * the lookback is part of the known-party fingerprint: changing it would force
+ * one extra full scan.
+ */
+function positiveInt(
+  name: string,
+  legacyName: string,
+  fallback: number
+): number {
+  for (const key of [name, legacyName]) {
+    const raw = process.env[key];
+    if (raw === undefined || raw.trim() === "") continue;
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return fallback;
 }
 
 export interface CommunicationConfig {
@@ -29,14 +45,23 @@ export interface CommunicationConfig {
 
 export function communicationConfig(): CommunicationConfig {
   return {
-    lookbackDays: positiveInt("GMAIL_LOOKBACK_DAYS", DEFAULT_LOOKBACK_DAYS),
+    lookbackDays: positiveInt(
+      "COMMUNICATION_LOOKBACK_DAYS",
+      "GMAIL_LOOKBACK_DAYS",
+      DEFAULT_LOOKBACK_DAYS
+    ),
     overlapDays: positiveInt(
+      "COMMUNICATION_SYNC_OVERLAP_DAYS",
       "GMAIL_SYNC_OVERLAP_DAYS",
       DEFAULT_SYNC_OVERLAP_DAYS
     ),
     pageSize: Math.min(
       MAX_PAGE_SIZE,
-      positiveInt("GMAIL_PAGE_SIZE", DEFAULT_PAGE_SIZE)
+      positiveInt(
+        "COMMUNICATION_PAGE_SIZE",
+        "GMAIL_PAGE_SIZE",
+        DEFAULT_PAGE_SIZE
+      )
     ),
     maxPages: MAX_PAGES,
   };

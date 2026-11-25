@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { bootstrap } from "@/core/bootstrap";
+import { bootstrap, COMMUNICATION_FUNCTION } from "@/core/bootstrap";
 import {
   supportedObjectsFor,
   unsupportedFunctionsFor,
@@ -15,6 +15,8 @@ import { providerRegistry } from "@/core/registries/provider-registry";
 import { checkReauthorization } from "@/core/oauth/oauth-service";
 import { loadKnownParties } from "@/core/communication/known-parties";
 import { connectHrefFor } from "@/core/providers/connect-url";
+import { SLACK_PROVIDER_NAME } from "@/core/providers/slack/provider";
+import { countSlackConversationMappings } from "@/core/repositories/slack-conversation-mapping-repository";
 import {
   StatusBadge,
   SyncabilityBadge,
@@ -44,9 +46,24 @@ export default async function IntegrationDetailPage({
   if (integration === undefined) notFound();
 
   const hasIdentity = integration.functionNames.includes("identity");
+
+  // Slack ingests only conversations a human explicitly mapped. A connection
+  // with none is not broken — it is waiting for configuration, and the banner
+  // below says so before the user reads an empty message list as a failure.
+  const isSlackCommunication =
+    integration.providerName === SLACK_PROVIDER_NAME &&
+    integration.functionNames.includes("communication");
+
+  // A mapped Slack customer needs no email or domain, so the address-matched
+  // gate's message would be actively wrong here.
   const communicationWithoutParties =
     integration.functionNames.includes("communication") &&
+    !isSlackCommunication &&
     (await loadKnownParties(userId)).isEmpty;
+
+  const conversationMappingCount = isSlackCommunication
+    ? await countSlackConversationMappings(integration.id)
+    : 0;
 
   const provider = providerRegistry.get(integration.providerName);
   const isApiKey = provider?.auth.kind === "apiKey";
@@ -178,6 +195,25 @@ export default async function IntegrationDetailPage({
         </div>
       )}
 
+      {isSlackCommunication && conversationMappingCount === 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm font-medium text-amber-900">
+            No Slack conversations mapped
+          </p>
+          <p className="mt-1 text-sm text-amber-800">
+            Messages are ingested only from conversations mapped to a customer.
+            Map a shared channel, a Connect DM, or a group DM with an external
+            person to start syncing.
+          </p>
+          <Link
+            href={`/integrations/${integration.id}/conversations`}
+            className="mt-3 inline-block rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500"
+          >
+            Map conversations
+          </Link>
+        </div>
+      )}
+
       {integration.status === "pending_authorization" && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
           <p className="text-sm text-amber-900">
@@ -202,10 +238,15 @@ export default async function IntegrationDetailPage({
           {integration.functionNames.map((name) => {
             const definition = functionRegistry.get(name);
             const objects = supportedObjectsFor(name, integration.providerName);
+            // Communication declares both source-specific message objects, and
+            // each provider writes exactly one. Reporting the other provider's
+            // object as "not served" would be true but misleading; omit it.
             const unserved =
-              definition?.dataModels.filter(
-                (declared) => !objects.some((object) => object === declared)
-              ) ?? [];
+              name === COMMUNICATION_FUNCTION
+                ? []
+                : (definition?.dataModels.filter(
+                    (declared) => !objects.some((object) => object === declared)
+                  ) ?? []);
             return (
               <div
                 key={name}
@@ -243,6 +284,14 @@ export default async function IntegrationDetailPage({
                         {ruleCounts.find((entry) => entry.name === name)?.count ?? 0}{" "}
                         rules
                       </span>
+                      {name === COMMUNICATION_FUNCTION && isSlackCommunication && (
+                        <Link
+                          href={`/integrations/${integration.id}/conversations`}
+                          className="ml-2 text-slate-700 underline underline-offset-2 hover:text-slate-900"
+                        >
+                          Map conversations
+                        </Link>
+                      )}
                     </>
                   ) : (
                     <span className="text-xs text-amber-700">

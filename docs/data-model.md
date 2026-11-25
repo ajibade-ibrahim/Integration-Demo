@@ -4,16 +4,16 @@ A "data model" is simply how information is organized inside the database: what
 kinds of things are stored, what each one contains, and how they relate to each
 other. This document describes all of it in everyday language.
 
-The platform keeps **28 kinds of information** (in database terms, 28 *tables*).
+The platform keeps **34 kinds of information** (in database terms, 34 *tables*).
 They fall into six groups:
 
 | Group | Tables | Belongs to |
 |---|---|---|
 | 1. Sign-in | 1 | The account owner |
 | 2. Connections | 5 | The account owner |
-| 3. Translation rules | 2 | One connection |
-| 4. Synced records | 15 | One connection |
-| 5. Company matching | 4 | The account owner |
+| 3. Translation rules | 3 | One connection |
+| 4. Synced records | 19 | One connection |
+| 5. Company matching | 5 | The account owner |
 | 6. Refresh history | 1 | One connection |
 
 The engineering source of truth is
@@ -68,17 +68,25 @@ hold work in progress, not customer data, and losing either costs only a retry.
 They exist as tables (rather than in the server's memory) because the step that
 writes one and the step that reads it can land on different servers.
 
-## Group 3 — Translation rules (2 tables)
+## Group 3 — Translation rules (3 tables)
 
 | Table | What it holds |
 |---|---|
 | **FieldMapping** | One translation rule: which purpose and record type it belongs to, where the value comes from in the provider, which of our fields it fills, and the optional clean-up. |
 | **DiscoveredField** | A cached list of the fields the provider currently offers, used to fill the dropdown in the editor. Re-read from the provider at most once an hour. |
+| **SlackConversationMapping** | One Slack conversation (a Slack shared channel, Connect DM, or group DM) explicitly attributed to a customer. A conversation with no row here is never read. |
 
 Each rule is stored per purpose and per record type, so the same provider field
 can feed two different features without the rules colliding.
 
-## Group 4 — Synced records (15 tables)
+SlackConversationMapping is configuration rather than a synced record: it states
+which Slack conversation belongs to which customer, and that mapping is the
+source of truth for what the sync reads. The customer named here is the primary
+party for every message in the conversation; the mapping is stored on each
+message, so re-pointing a mapping changes attribution without rewriting message
+rows. Conversations the user has not mapped are never read.
+
+## Group 4 — Synced records (19 tables)
 
 These are the actual business records fetched from providers. Every one belongs
 to exactly one connection, and every one is keyed by *(connection + the
@@ -136,6 +144,25 @@ a total, and never adds up payments to produce a "paid" figure — because
 authorizations (which move no money) are deliberately not stored, that
 arithmetic would be wrong exactly when it looked plausible. All amounts are in
 the currency's smallest unit (cents, pence, yen) with no conversion anywhere.
+
+### Communication — email and Slack (4 tables)
+
+Communication is split by source. Email is address-matched; Slack is
+conversation-mapped. The two share a function and a retention window but not a
+table, because the facts they store are genuinely different.
+
+| Table | What it holds |
+|---|---|
+| **EmailMessage** | One email: From/To/Cc addresses, subject, snippet, plain-text body, escaped HTML source, thread, sent time and direction. Kept per connection, keyed by the provider's message id. |
+| **EmailMessageParticipant** | One matched party on one role of one email: the role (from/to/cc), the candidate's stable identity, optional contact/customer/account links, the match kind (contact email, customer email, or customer domain), matched value, rank, ambiguity flag, and whether it is the primary party. |
+| **SlackMessage** | One message in a mapped Slack conversation: its mapping, author Slack user id, name and visible email, internal/external flag, thread root timestamp, body, snippet, sent time and direction, plus an optional author contact restricted to the mapped customer. |
+| **SlackConversationMember** | A refreshed snapshot of one mapped conversation's human members: Slack user id, name, visible email, and external/internal flag. Replaced when a mapping is saved or a sync succeeds, kept when the member lookup fails, and cascaded away when the mapping is removed. |
+
+**No generic message table.** An email's participants are address matches, and a
+Slack message's customer is the mapping. Collapsing both into one row shape
+would make Gmail's To/Cc columns meaningless on Slack and Slack's conversation
+columns meaningless on email, so the split is deliberate rather than
+duplicated storage.
 
 ## Group 5 — Company matching (5 tables)
 
@@ -271,7 +298,7 @@ connection is deleted.
 
 ---
 
-## All 28 tables at a glance
+## All 34 tables at a glance
 
 | # | Table | Group | In one line |
 |---|---|---|---|
@@ -283,27 +310,32 @@ connection is deleted.
 | 6 | OAuthState | Connections | A single-use security code for approval redirects. |
 | 7 | FieldMapping | Translation rules | One "provider field → our field" rule. |
 | 8 | DiscoveredField | Translation rules | Cached list of the provider's fields (1 hour). |
-| 9 | Customer | Synced — Identity | A company as one system sees it. |
-| 10 | Contact | Synced — Identity | A person at a company. |
-| 11 | Product | Synced — Catalog | Something sold. |
-| 12 | Offering | Synced — Catalog | A purchasable version of a product. |
-| 13 | Price | Synced — Catalog | An amount, currency and billing rhythm. |
-| 14 | Feature | Synced — Catalog | A reusable capability definition. |
-| 15 | Entitlement | Synced — Catalog | An offering includes a feature, at a limit. |
-| 16 | Agreement | Synced — Agreement | A subscription, order form, contract or deal. |
-| 17 | Subscription | Synced — Agreement | Recurring-billing details of an agreement. |
-| 18 | AgreementItem | Synced — Agreement | One priced line on an agreement. |
-| 19 | AgreementEntitlement | Synced — Agreement | What this subscriber actually gets. |
-| 20 | AgreementDiscount | Synced — Agreement | A discount on an agreement, as stated. |
-| 21 | Invoice | Synced — Billing | One bill. |
-| 22 | InvoiceLine | Synced — Billing | One line on a bill. |
-| 23 | Payment | Synced — Billing | One money movement (payment or refund). |
-| 24 | CustomerAccount | Company matching | One combined company profile. |
-| 25 | CustomerAccountKey | Company matching | The evidence a profile owns (email, domain, reference). |
-| 26 | IdentityAssertion | Company matching | A person's "same / not same company" verdict. |
-| 27 | IdentityResolutionRun | Company matching | One execution of the matching pass. |
-| 28 | IdentityWithdrawal | Company matching | A deletion/withdrawal receipt with counts, not payloads. |
-| 29 | SyncRun | Refresh history | One refresh attempt and its outcome. |
+| 9 | SlackConversationMapping | Translation rules | A Slack conversation explicitly attributed to a customer. |
+| 10 | Customer | Synced — Identity | A company as one system sees it. |
+| 11 | Contact | Synced — Identity | A person at a company. |
+| 12 | Product | Synced — Catalog | Something sold. |
+| 13 | Offering | Synced — Catalog | A purchasable version of a product. |
+| 14 | Price | Synced — Catalog | An amount, currency and billing rhythm. |
+| 15 | Feature | Synced — Catalog | A reusable capability definition. |
+| 16 | Entitlement | Synced — Catalog | An offering includes a feature, at a limit. |
+| 17 | Agreement | Synced — Agreement | A subscription, order form, contract or deal. |
+| 18 | Subscription | Synced — Agreement | Recurring-billing details of an agreement. |
+| 19 | AgreementItem | Synced — Agreement | One priced line on an agreement. |
+| 20 | AgreementEntitlement | Synced — Agreement | What this subscriber actually gets. |
+| 21 | AgreementDiscount | Synced — Agreement | A discount on an agreement, as stated. |
+| 22 | Invoice | Synced — Billing | One bill. |
+| 23 | InvoiceLine | Synced — Billing | One line on a bill. |
+| 24 | Payment | Synced — Billing | One money movement (payment or refund). |
+| 25 | EmailMessage | Synced — Communication | One address-matched email. |
+| 26 | EmailMessageParticipant | Synced — Communication | One matched party on one email role. |
+| 27 | SlackMessage | Synced — Communication | One message in a mapped Slack conversation. |
+| 28 | SlackConversationMember | Synced — Communication | A refreshed snapshot of a mapped conversation's people. |
+| 29 | CustomerAccount | Company matching | One combined company profile. |
+| 30 | CustomerAccountKey | Company matching | The evidence a profile owns (email, domain, reference). |
+| 31 | IdentityAssertion | Company matching | A person's "same / not same company" verdict. |
+| 32 | IdentityResolutionRun | Company matching | One execution of the matching pass. |
+| 33 | IdentityWithdrawal | Company matching | A deletion/withdrawal receipt with counts, not payloads. |
+| 34 | SyncRun | Refresh history | One refresh attempt and its outcome. |
 
 ---
 

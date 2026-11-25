@@ -46,6 +46,8 @@ import {
   createIntegrationFromDraft,
   finalizeConnection,
 } from "../integrations/connection";
+import { clearSlackConversationDataForIntegration } from "../repositories/slack-conversation-mapping-repository";
+import { SLACK_PROVIDER_NAME } from "../providers/slack/provider";
 
 /** Refresh this far ahead of expiry so a sync never starts on a dying token. */
 export const REFRESH_LEEWAY_MS = 5 * 60 * 1000;
@@ -306,8 +308,39 @@ async function completeReconnectCallback(
     provider.name
   );
 
+  // Read before the exchange, because the comparison below is against the
+  // credential this reconnection replaces.
+  const stored = await findToken(integrationId);
+
   try {
     const parsed = await exchangeCode(provider, args.code);
+
+    // A Slack credential names both the workspace and the authorizing user.
+    // Either changing means the visible conversation set and Slack's own ids
+    // are no longer what the stored mappings and messages were built from, so
+    // the conversation data cannot be carried across. Clearing before the save
+    // is deliberate: if the save then fails, the integration reports an error
+    // with intact old credentials but no stale Slack data — the privacy-safe
+    // direction, and the user can retry.
+    if (provider.name === SLACK_PROVIDER_NAME) {
+      const previousTeam = stored?.metadata["teamId"];
+      const nextTeam = parsed.metadata["teamId"];
+      const previousUser = stored?.metadata["userId"];
+      const nextUser = parsed.metadata["userId"];
+
+      const workspaceChanged =
+        previousTeam !== undefined &&
+        nextTeam !== undefined &&
+        previousTeam !== nextTeam;
+      const authorizingUserChanged =
+        previousUser !== undefined &&
+        nextUser !== undefined &&
+        previousUser !== nextUser;
+
+      if (workspaceChanged || authorizingUserChanged) {
+        await clearSlackConversationDataForIntegration(integrationId);
+      }
+    }
 
     await saveToken({
       integrationId,
@@ -397,7 +430,15 @@ async function exchangeCode(
     accessToken: parsed.accessToken,
     refreshToken: parsed.refreshToken,
     expiresInSeconds: parsed.expiresInSeconds,
-    grantedScopes: scopesFromResponse(json),
+    // A provider-supplied list wins even when empty: Slack's top-level `scope`
+    // describes the bot token, and falling back to it would record scopes the
+    // user token does not hold. Providers that say nothing keep the generic
+    // parser, which is what makes HubSpot's absent `scope` fall through to the
+    // requested list at the call site.
+    grantedScopes:
+      parsed.grantedScopes === undefined
+        ? scopesFromResponse(json)
+        : [...parsed.grantedScopes],
     metadata,
   };
 }
@@ -509,7 +550,13 @@ export async function refreshToken(
     );
 
     const parsed = provider.auth.parseTokenResponse(json);
-    const granted = scopesFromResponse(json);
+    const granted =
+      parsed.grantedScopes === undefined
+        ? scopesFromResponse(json)
+        : [...parsed.grantedScopes];
+    // Merged rather than replaced: a Slack refresh may omit `team` and the
+    // authorizing user's details, and losing them would break the tenant scope
+    // and the mailbox exclusion mid-life.
     let metadata = { ...stored.metadata, ...parsed.metadata };
 
     // A connect-time token-info lookup may have failed. Try once more when
@@ -642,6 +689,25 @@ export async function revokeTokens(integrationId: string): Promise<boolean> {
   // provider and is not ours to invalidate. The local copy still goes.
   const provider = providerRegistry.get(integration.providerName);
   if (provider === undefined || provider.auth.kind !== "oauth") return true;
+
+  // A provider whose revoke endpoint handles one token at a time owns the whole
+  // exchange. Slack is the case: its endpoint is a GET and the generic path
+  // would revoke only the refresh token, leaving the access token live.
+  if (provider.auth.revokeCredential !== undefined) {
+    try {
+      return await provider.auth.revokeCredential({
+        accessToken: stored.accessToken,
+        refreshToken: stored.refreshToken,
+      });
+    } catch (error) {
+      console.warn(
+        `[oauth] Revocation call failed for integration ${integrationId}:`,
+        error instanceof Error ? error.message : "unknown error"
+      );
+      return false;
+    }
+  }
+
   if (provider.auth.revokeEndpoint === undefined) return true;
 
   try {

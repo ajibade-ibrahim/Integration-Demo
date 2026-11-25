@@ -191,6 +191,42 @@ describe("shipped default mappings", () => {
     expect(defaultMappingsFor("billing", "hubspot")).toEqual([]);
   });
 
+  it("ships Slack communication defaults for the Slack message object only", () => {
+    const rules = defaultMappingsFor("communication", "slack");
+    const targets = rules.map((rule) => rule.targetFieldPath);
+
+    expect(rules.length).toBeGreaterThan(0);
+    expect(new Set(rules.map((rule) => rule.targetObject))).toEqual(
+      new Set(["slackMessage"])
+    );
+    // Every required Slack field, and no Gmail-only address/subject targets.
+    expect(targets).toContain("authorId");
+    expect(targets).toContain("threadRootTs");
+    expect(targets).toContain("sentAt");
+    expect(targets).toContain("direction");
+    expect(targets).not.toContain("fromEmail");
+    expect(targets).not.toContain("subject");
+    expect(targets).not.toContain("bodyHtml");
+    expect(targets).not.toContain("toEmails");
+    expect(targets).not.toContain("ccEmails");
+  });
+
+  it("ships Gmail communication defaults for the email message object only", () => {
+    const rules = defaultMappingsFor("communication", "gmail");
+    const targets = rules.map((rule) => rule.targetFieldPath);
+
+    expect(rules.length).toBeGreaterThan(0);
+    expect(new Set(rules.map((rule) => rule.targetObject))).toEqual(
+      new Set(["emailMessage"])
+    );
+    expect(targets).toContain("fromEmail");
+    expect(targets).toContain("subject");
+    expect(targets).toContain("sentAt");
+    expect(targets).toContain("direction");
+    expect(targets).not.toContain("authorId");
+    expect(targets).not.toContain("threadRootTs");
+  });
+
   it("does not present HubSpot deal inference as agreement facts", () => {
     // These targets are ours, not HubSpot's. The raw stage, closed flags and
     // CRM dates remain available as properties/custom fields; the lifecycle

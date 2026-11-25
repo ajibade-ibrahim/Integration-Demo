@@ -30,7 +30,7 @@ import {
   IDENTITY_SCHEMA,
   crossRefProviderName,
 } from "./identity-schema";
-import { MESSAGE_OBJECT_SCHEMA } from "./message-schema";
+import { COMMUNICATION_OBJECT_SCHEMAS } from "./communication-schema";
 import { providerRegistry } from "./registries/provider-registry";
 import { TARGET_OBJECTS, type TargetObject } from "./types/common";
 
@@ -105,7 +105,7 @@ export const OBJECT_SCHEMAS: Readonly<Record<TargetObject, ObjectSchema>> = {
   ...CATALOG_SCHEMA,
   ...AGREEMENT_OBJECT_SCHEMA,
   ...BILLING_OBJECT_SCHEMA,
-  ...MESSAGE_OBJECT_SCHEMA,
+  ...COMMUNICATION_OBJECT_SCHEMAS,
 };
 
 /**
@@ -145,9 +145,10 @@ const FUNCTION_OBJECTS: Readonly<Record<string, readonly TargetObject[]>> = {
   // before either child is written. A line's invoice FK is required and
   // rejecting, and a payment's is nullable but wants the link on first sight.
   billing: ["invoice", "invoiceLine", "payment"],
-  // One object, but it depends on identity having written customers and
-  // contacts before it runs: known parties are read from those rows.
-  communication: ["message"],
+  // Two source-specific objects, and the function depends on identity having
+  // written customers and contacts before it runs: known parties are read from
+  // those rows. A provider's handler declares only the one it writes.
+  communication: ["emailMessage", "slackMessage"],
 };
 
 /**

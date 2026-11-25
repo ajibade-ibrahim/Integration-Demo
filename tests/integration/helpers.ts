@@ -70,7 +70,8 @@ export async function collect(
     invoice: [],
     invoiceLine: [],
     payment: [],
-    message: [],
+    emailMessage: [],
+    slackMessage: [],
   };
 
   for await (const page of handler.fetchPages(ctx)) {

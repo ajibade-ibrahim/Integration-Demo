@@ -29,8 +29,13 @@ import {
   recordFunctionCompleteSync,
   type IntegrationRecord,
 } from "../repositories/integration-repository";
-import { pruneMessagesForIntegration } from "../repositories/message-repository";
+import { pruneEmailMessagesForIntegration } from "../repositories/email-message-repository";
+import { pruneSlackMessagesForIntegration } from "../repositories/slack-conversation-repository";
 import { findMappings } from "../repositories/mapping-repository";
+import {
+  listSlackConversationMappings,
+  listSlackThreadRoots,
+} from "../repositories/slack-conversation-mapping-repository";
 import {
   writeJsonArray,
   writeJsonCounts,
@@ -83,7 +88,7 @@ import {
 } from "./lease";
 import {
   relinkOrphansForFunction,
-  writeMessagePage,
+  writeCommunicationPage,
   writeRecordsForFunction,
   type CollectedRecord,
 } from "./record-writer";
@@ -449,17 +454,25 @@ async function runStreamingFunction(
     token,
   } = args;
 
+  // The objects whose records must carry an attribution. Both current
+  // communication handlers declare one; the separate hook means a future
+  // non-message object in the same function is not silently filtered out.
+  const attributionObjects = handler.attributionObjects ?? handler.objects;
+
   const mailboxEmail =
     token.metadata["email"] ?? token.metadata["emailAddress"];
   const knownParties = await loadKnownParties(integration.userId, {
     ...(mailboxEmail === undefined ? {} : { mailboxEmail }),
   });
 
-  if (knownParties.isEmpty) {
+  // An address-matched provider genuinely cannot attribute anything when no
+  // known parties exist. A conversation-mapped one can: its customer is fixed
+  // by the mapping, and an author-contact match is best-effort.
+  if (knownParties.isEmpty && handler.requiresKnownParties !== false) {
     coverage.skippedReason = "no known parties";
     const issue: RecordIssue = {
       sourceRecordId: "(run)",
-      targetObject: "message",
+      targetObject: attributionObjects[0] ?? handler.objects[0] ?? "emailMessage",
       reason:
         "No known customers or contacts. Connect an identity integration or sync identity records before syncing communication.",
       severity: "warning",
@@ -482,6 +495,28 @@ async function runStreamingFunction(
     ? retainedFrom
     : overlapStart(lastComplete as Date);
 
+  // Which conversations to read is configuration, not provider data. Loaded
+  // only for a conversation-scoped handler so an address-matched provider never
+  // pays for a query it cannot use.
+  const conversationScoped = handler.conversationScoped === true;
+  const slackConversationMappings = conversationScoped
+    ? await listSlackConversationMappings(integration.id)
+    : undefined;
+
+  // Tracked roots are only needed on an incremental run: a full run reads the
+  // whole retained window anyway. Loading them eagerly is what lets a reply to
+  // an older thread be discovered without scanning the conversation's entire
+  // history.
+  const slackThreadRoots =
+    slackConversationMappings !== undefined &&
+    !full &&
+    slackConversationMappings.length > 0
+      ? await listSlackThreadRoots(
+          integration.id,
+          slackConversationMappings.map((mapping) => mapping.conversationId)
+        )
+      : undefined;
+
   const context: HandlerContext = {
     integrationId: integration.id,
     accessToken: token.accessToken,
@@ -490,6 +525,12 @@ async function runStreamingFunction(
     clock,
     knownParties,
     communicationWindowStart: windowStart,
+    ...(slackConversationMappings === undefined
+      ? {}
+      : { slackConversationMappings }),
+    ...(slackThreadRoots === undefined
+      ? {}
+      : { slackThreadRoots }),
     ...(canRefresh(integration.providerName)
       ? {
           refreshAccessToken: async () => {
@@ -506,18 +547,22 @@ async function runStreamingFunction(
 
   const complete = new Map<TargetObject, boolean>();
   const streamIssues: RecordIssue[] = [];
-  let messagesWritten = 0;
+  const writtenByObject = new Map<TargetObject, number>();
+  const seenObjects = new Set<TargetObject>();
 
   const finalize = (): void => {
-    const counts: Partial<Record<TargetObject, number>> = {
-      message: messagesWritten,
-    };
+    const counts: Partial<Record<TargetObject, number>> = {};
+    for (const object of seenObjects) {
+      counts[object] = writtenByObject.get(object) ?? 0;
+    }
     recordCoverageWrites(coverage, counts);
     recordCoverageIssues(coverage, streamIssues);
     finishFunctionCoverage(coverage);
 
-    state.recordCounts.message =
-      (state.recordCounts.message ?? 0) + messagesWritten;
+    for (const [object, count] of Object.entries(counts)) {
+      const key = object as TargetObject;
+      state.recordCounts[key] = (state.recordCounts[key] ?? 0) + (count ?? 0);
+    }
     state.issues.push(...streamIssues);
   };
 
@@ -525,18 +570,25 @@ async function runStreamingFunction(
     for await (const page of handler.fetchPages(context)) {
       assertLeaseHeld(lease, heartbeat, clock);
 
-      if (page.object !== "message") {
+      if (!handler.objects.includes(page.object)) {
         throw new Error(
-          `Communication handler '${functionName}' yielded '${page.object}'`
+          `Communication handler '${functionName}' yielded '${page.object}', which it does not declare`
         );
       }
+
+      seenObjects.add(page.object);
+
+      // Only attribution objects are filtered. A non-message object added to a
+      // communication handler later must not be dropped merely because the
+      // handler also implements the attribution hook.
+      const filtersByAttribution =
+        handler.attributionsOf !== undefined &&
+        attributionObjects.includes(page.object);
 
       const collected: CollectedRecord[] = [];
       for (const raw of page.records) {
         const attribution = handler.attributionsOf?.(raw, page.object, context);
-        if (handler.attributionsOf !== undefined && attribution === undefined) {
-          continue;
-        }
+        if (filtersByAttribution && attribution === undefined) continue;
         collected.push({
           externalSourceId: handler.externalIdOf(raw),
           externalRefs: handler.externalRefsOf(raw, page.object),
@@ -546,8 +598,15 @@ async function runStreamingFunction(
       }
 
       if (collected.length > 0) {
-        const result = await writeMessagePage(integration.id, collected);
-        messagesWritten += result.written;
+        const result = await writeCommunicationPage(
+          integration.id,
+          page.object,
+          collected
+        );
+        writtenByObject.set(
+          page.object,
+          (writtenByObject.get(page.object) ?? 0) + result.written
+        );
         streamIssues.push(...result.issues);
       }
 
@@ -575,12 +634,13 @@ async function runStreamingFunction(
 
   finalize();
 
-  const messageCoverage = coverage.objects.find(
-    (entry) => entry.object === "message"
-  );
-  const acquiredCompletely =
-    complete.get("message") === true &&
-    messageCoverage?.atPageLimit === false;
+  // Per-object completeness: withholding one object's guarantee withholds the
+  // watermark for the whole function, because an incremental window would
+  // otherwise be built on a list that was not fully read.
+  const acquiredCompletely = attributionObjects.every((object) => {
+    const entry = coverage.objects.find((candidate) => candidate.object === object);
+    return complete.get(object) === true && entry?.atPageLimit === false;
+  });
 
   if (!acquiredCompletely) return;
 
@@ -592,11 +652,20 @@ async function runStreamingFunction(
   );
   if (!recorded) return;
 
-  const pruned = await pruneMessagesForIntegration(
-    integration.id,
-    retentionCutoff(now)
-  );
-  if (messageCoverage !== undefined) messageCoverage.pruned = pruned;
+  // Prune only the message tables this handler actually writes. Slack member
+  // snapshots are configuration-like and are never pruned.
+  const cutoff = retentionCutoff(now);
+  for (const object of handler.objects) {
+    if (object === "emailMessage") {
+      const pruned = await pruneEmailMessagesForIntegration(integration.id, cutoff);
+      const entry = coverage.objects.find((candidate) => candidate.object === object);
+      if (entry !== undefined) entry.pruned = pruned;
+    } else if (object === "slackMessage") {
+      const pruned = await pruneSlackMessagesForIntegration(integration.id, cutoff);
+      const entry = coverage.objects.find((candidate) => candidate.object === object);
+      if (entry !== undefined) entry.pruned = pruned;
+    }
+  }
 }
 
 async function runOnce(

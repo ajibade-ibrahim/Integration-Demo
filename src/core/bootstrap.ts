@@ -84,6 +84,11 @@ import {
   GMAIL_COMMUNICATION_SCOPES,
   GMAIL_PROVIDER_NAME,
 } from "./providers/gmail/provider";
+import {
+  slackProvider,
+  SLACK_COMMUNICATION_SCOPES,
+  SLACK_PROVIDER_NAME,
+} from "./providers/slack/provider";
 
 import { metrifoxIdentityHandler } from "./providers/metrifox/identity-handler";
 import { metrifoxAgreementHandler } from "./providers/metrifox/agreement-handler";
@@ -112,6 +117,8 @@ import { salesforceIdentityHandler } from "./providers/salesforce/identity-handl
 import { salesforceFieldDiscovery } from "./providers/salesforce/discovery";
 import { gmailCommunicationHandler } from "./providers/gmail/communication-handler";
 import { gmailFieldDiscovery } from "./providers/gmail/discovery";
+import { slackCommunicationHandler } from "./providers/slack/communication-handler";
+import { slackFieldDiscovery } from "./providers/slack/discovery";
 
 export const IDENTITY_FUNCTION = "identity";
 export const CATALOG_FUNCTION = "catalog";
@@ -149,6 +156,8 @@ export function bootstrap(): void {
   // Gmail needs deployment-level OAuth credentials; registration is still
   // unconditional, and the picker greys it out until they are set.
   registerProvider(gmailProvider);
+  // Slack is the same: a deployment-level OAuth app with user scopes only.
+  registerProvider(slackProvider);
   if (isMockEnabled()) registerProvider(mockProvider);
 
   // --- functions ---------------------------------------------------------
@@ -363,16 +372,20 @@ export function bootstrap(): void {
     scopesByProvider: scopeMap([]),
   });
 
-  // Communication is read-only email history. Gmail is the first provider; its
-  // restricted `gmail.readonly` scope is declared here so consent, the picker,
-  // and the sync handler all agree about what the connection can do.
+  // Communication is read-only conversation history. Gmail declares its
+  // restricted `gmail.readonly` scope here; Slack declares user scopes only,
+  // because it connects with a user token and reads exactly what the authorizing
+  // teammate can see. Consent, the picker and the sync handlers agree from this
+  // one list.
   registerFunction({
     name: COMMUNICATION_FUNCTION,
     label: "Communication",
-    description: "Email, calls, and messaging history with contacts.",
-    dataModels: ["message"],
+    description:
+      "Email messages and Slack conversation history attributed to customers.",
+    dataModels: ["emailMessage", "slackMessage"],
     scopesByProvider: scopeMap([
       [GMAIL_PROVIDER_NAME, GMAIL_COMMUNICATION_SCOPES],
+      [SLACK_PROVIDER_NAME, SLACK_COMMUNICATION_SCOPES],
     ]),
   });
 
@@ -592,6 +605,20 @@ export function bootstrap(): void {
     COMMUNICATION_FUNCTION,
     GMAIL_PROVIDER_NAME,
     gmailFieldDiscovery
+  );
+
+  // Slack communication. Its handler is conversation-scoped: it requires
+  // `slackConversationMappings` from the engine and reads only conversations a
+  // human mapped to a customer.
+  registerSyncHandler(
+    COMMUNICATION_FUNCTION,
+    SLACK_PROVIDER_NAME,
+    slackCommunicationHandler
+  );
+  registerFieldDiscovery(
+    COMMUNICATION_FUNCTION,
+    SLACK_PROVIDER_NAME,
+    slackFieldDiscovery
   );
 
   if (isMockEnabled()) {

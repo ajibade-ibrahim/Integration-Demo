@@ -1,18 +1,18 @@
 /**
- * The communication schema: what a Gmail message can be mapped into.
+ * The email message schema: what a Gmail message can be mapped into.
  *
  * Bodies are deliberately uncapped here. The list page shows a snippet; the
- * detail page reads the full text and the escaped HTML source. No target exists
- * for a participant, a primary party, or a truncation flag: those are derived
- * by the communication matcher, not typed by a user.
+ * detail page reads the full text and the escaped HTML source. Participants,
+ * primary party and match evidence are derived by the address matcher, not
+ * typed by a user.
  */
 
 import type { ObjectSchema } from "./object-schema";
 import { MESSAGE_DIRECTIONS } from "./types/common";
 
-const MESSAGE_SCHEMA: ObjectSchema = {
-  object: "message",
-  label: "Message",
+export const EMAIL_MESSAGE_SCHEMA: ObjectSchema = {
+  object: "emailMessage",
+  label: "Email message",
   fields: [
     { name: "fromEmail", label: "From email", kind: "email", maxLength: 254 },
     { name: "fromName", label: "From name", kind: "string", maxLength: 255 },
@@ -45,9 +45,3 @@ const MESSAGE_SCHEMA: ObjectSchema = {
     },
   ],
 };
-
-export const MESSAGE_OBJECT_SCHEMA = {
-  message: MESSAGE_SCHEMA,
-} as const;
-
-export type CommunicationObject = keyof typeof MESSAGE_OBJECT_SCHEMA;

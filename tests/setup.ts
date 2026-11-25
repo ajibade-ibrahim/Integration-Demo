@@ -63,6 +63,28 @@ delete process.env["STRIPE_PAGE_SIZE"];
 process.env["STIGG_API_BASE"] = "https://api.stigg.io";
 delete process.env["STIGG_PAGE_SIZE"];
 
+process.env["SLACK_CLIENT_ID"] ??= "test-slack-client-id";
+process.env["SLACK_CLIENT_SECRET"] ??= "test-slack-client-secret";
+// Assigned, not defaulted: the msw handlers assert this exact URL, and a
+// developer's `.env` pointing at a real workspace must not redirect them.
+process.env["SLACK_API_BASE"] = "https://slack.com/api";
+// Deleted rather than assigned: the detail-page tests set it per case and clear
+// it in `afterEach`, so a value here would mask a regression in the default.
+delete process.env["SLACK_CONVERSATION_MESSAGE_LIMIT"];
+
+/*
+ * Pin the communication window to its documented defaults.
+ *
+ * A developer's `.env` can legitimately set a shorter lookback for the demo,
+ * and Prisma loads that file as a side effect of instantiating the client. The
+ * sweep below is about retention arithmetic, so it must not inherit one
+ * machine's tuning. The new name is assigned (not just the legacy one): either
+ * would win, and pinning both would leave the fallback untested.
+ */
+process.env["COMMUNICATION_LOOKBACK_DAYS"] = "365";
+process.env["COMMUNICATION_SYNC_OVERLAP_DAYS"] = "2";
+process.env["COMMUNICATION_PAGE_SIZE"] = "100";
+
 process.env["HUBSPOT_CLIENT_ID"] ??= "test-hubspot-client-id";
 process.env["HUBSPOT_CLIENT_SECRET"] ??= "test-hubspot-client-secret";
 process.env["SALESFORCE_CLIENT_ID"] ??= "test-salesforce-client-id";

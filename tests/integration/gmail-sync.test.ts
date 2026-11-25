@@ -152,9 +152,9 @@ describe("a Gmail communication sync", () => {
     });
 
     expect(result.status).toBe("success");
-    expect(result.recordCounts.message).toBe(1);
+    expect(result.recordCounts.emailMessage).toBe(1);
 
-    const message = await prisma.message.findFirstOrThrow({
+    const message = await prisma.emailMessage.findFirstOrThrow({
       where: { integrationId: INTEGRATION_ID },
       include: { participants: true },
     });
@@ -254,9 +254,9 @@ describe("a Gmail communication sync", () => {
     });
 
     expect(result.status).toBe("success");
-    expect(result.recordCounts.message).toBe(0);
+    expect(result.recordCounts.emailMessage).toBe(0);
     expect(
-      await prisma.message.count({ where: { integrationId: INTEGRATION_ID } })
+      await prisma.emailMessage.count({ where: { integrationId: INTEGRATION_ID } })
     ).toBe(0);
   });
 });

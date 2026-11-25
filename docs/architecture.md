@@ -93,7 +93,7 @@ Three consequences worth remembering:
 | **Billing** | Ready | Stripe, Chargebee; Metrifox (invoice summaries only — its API exposes no invoice lines or payment list) |
 | **Support** | Not selectable yet | No handler; scope declarations remain for the roadmap |
 | **Usage** | Not selectable yet | No handler; scope declarations remain for the roadmap |
-| **Communication** | Not selectable yet | No handler; scope declarations remain for the roadmap |
+| **Communication** | Ready | Gmail (mailbox history); Slack (only conversations mapped to a customer, read with a user token) |
 
 Unbuilt functions are deliberately still visible on the New integration page,
 marked "no sync yet" and disabled. The scope declarations keep the roadmap and
@@ -101,6 +101,27 @@ the consent rules honest; the capability layer requires a registered handler
 before a function/provider pair can be selected or connected. That makes "no
 system supports this yet" a state the software reports up front, rather than a
 connection that authorizes and then syncs nothing.
+
+Communication has two ingestion shapes, and the difference is deliberate. Gmail
+is mailbox-scoped: the connection reads the authorizing mailbox and joins
+messages to existing customers and contacts by address. Slack is
+conversation-scoped: a user token can see shared channels, Connect DMs and group
+DMs, but the platform does not guess which conversation belongs to which
+customer. A human maps conversations to customers on the Conversations page, and
+only those conversations are read. Every message in a mapped conversation is
+attributed to that customer, with a best-effort contact match for the external
+author when Slack exposes their email.
+
+The two shapes are stored separately rather than in one generic message table.
+Email has its own rows and address-participant rows; Slack has its own messages
+plus a refreshed snapshot of each mapped conversation's human members. The
+customer UI mirrors that split with separate **Email messages** and **Slack
+conversations** tabs. The email tab lists messages and its detail page shows
+From/To/Cc. The Slack tab lists one row per mapped conversation — including a
+mapped conversation with no stored messages — and its detail page shows the
+conversation, its member snapshot, and a thread-grouped timeline of the latest
+stored messages, with an explicit notice when older history is outside the
+loaded window.
 
 ## 4. Connecting a system
 

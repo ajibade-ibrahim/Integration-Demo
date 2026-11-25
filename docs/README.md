@@ -12,7 +12,7 @@ deeper:
 | [`architecture.md`](./architecture.md) | **How it works** — what happens when you connect a system, choose what to bring in, and refresh the data. |
 | [`data-model.md`](./data-model.md) | **What it stores** — the information kept behind the scenes, described group by group. |
 | [`revenue-graph.md`](./revenue-graph.md) | **Where this is headed** — the revenue-graph framework mapped onto what this platform already builds, with the gaps named. |
-| [`diagrams/index.html`](./diagrams/index.html) | **How it looks** — interactive, clickable diagrams of the architecture, the revenue graph and all 28 stored tables, with zoom, pan and a working permissions picker. |
+| [`diagrams/index.html`](./diagrams/index.html) | **How it looks** — interactive, clickable diagrams of the architecture, the revenue graph and all 34 stored tables, with zoom, pan and a working permissions picker. |
 
 ---
 
@@ -57,7 +57,7 @@ Two things make it more than a copy machine:
 
 ## What you can connect today
 
-Seven systems are supported. Six are real products; one is a built-in practice
+Nine systems are supported. Eight are real products; one is a built-in practice
 system.
 
 | System | Type | How you connect it | What it brings in today |
@@ -68,6 +68,8 @@ system.
 | **Stripe** | Billing | Paste a secret or restricted API key | Customers, catalog, subscriptions, invoices, payments |
 | **Chargebee** | Billing | Paste a read-only key (`site:key`) | Customers, catalog, subscriptions, invoices, payments |
 | **Stigg** | Billing | Paste a server API key | Customers, catalog, subscriptions |
+| **Gmail** | Email | Sign in and approve access | Mailbox history, matched to customers by email address |
+| **Slack** | Messaging | Sign in and approve access (user token) | Messages from shared channels and external DMs a human mapped to a customer |
 | **Mock CRM** *(built-in)* | Practice | Click through a built-in approval screen | Made-up companies and contacts — lets the whole flow be demonstrated with no credentials |
 
 "Sign in and approve access" means the standard permission screen from the
@@ -75,10 +77,10 @@ system itself (technically called **OAuth**). "Paste an API key" means the
 system gave you a long-lived password to copy; there is no approval screen to
 show, so the platform proves the key works before saving anything.
 
-## The four kinds of data — and what is ready
+## The seven purposes — and what is ready
 
-The platform defines seven purposes. Four of them can actually sync data today;
-the other three are shown because the products and the plan are real, but no
+The platform defines seven purposes. Five of them can actually sync data today;
+the other two are shown because the products and the plan are real, but no
 system is connected to them yet.
 
 | Purpose | What it brings in | Ready today |
@@ -89,17 +91,21 @@ system is connected to them yet.
 | **Billing** | Invoices, the lines on each invoice, and payments and refunds | Stripe, Chargebee |
 | **Support** | Tickets, conversations, satisfaction scores | *Planned — not selectable yet* |
 | **Usage** | Usage events and metering data | *Planned — not selectable yet* |
-| **Communication** | Email, calls, and messaging history | *Planned — not selectable yet* |
+| **Communication** | Email (Gmail) and customer conversations in Slack shared channels and external DMs | Gmail, Slack |
 
 A few honest details behind that table:
 
 - **Agreement is partly planned.** Salesforce, Metrifox and the Mock CRM
   declare agreement scopes, but they have no handler, so they are not offered
   for Agreement. Only Stripe, Chargebee, Stigg and HubSpot actually sync it.
-- **Support, Usage and Communication have no system behind them at all.** They
-  remain visible but disabled on the New integration page, so the roadmap is
-  visible and "no provider supports this yet" is a state the software can
-  genuinely report.
+- **Support and Usage have no system behind them at all.** They remain visible
+  but disabled on the New integration page, so the roadmap is visible and "no
+  provider supports this yet" is a state the software can genuinely report.
+- **Slack reads only mapped conversations.** A Slack connection uses a user
+  token (never a bot), so it sees exactly what the authorizing teammate can see.
+  Shared channels, Connect DMs, and group DMs with an external person are offered
+  on the Conversations page, and nothing is ingested until one is mapped to a
+  customer.
 - **The same data can arrive from several systems.** Customers from Stripe,
   Metrifox and a CRM are separate records until the company-matching step
   combines them (see below).
@@ -211,8 +217,11 @@ knowing:
 - **One sign-in account, created at setup.** There is no sign-up or password-reset
   screen yet; every connection belongs to the single account created when the
   database is first prepared.
-- **Support, Usage and Communication sync nothing yet**, and Agreement is only
-  live for Stripe, Chargebee, Stigg and HubSpot (deals and line items).
+- **Support and Usage sync nothing yet**, and Agreement is only live for
+  Stripe, Chargebee, Stigg and HubSpot (deals and line items). Communication is
+  live on Gmail and Slack: Gmail matches existing customers and contacts from
+  email addresses, while Slack reads only the conversations a human mapped to a
+  customer and attributes every message in them to that customer.
 - **Stripe has no separate people records.** Its contacts are assembled from the
   customer's own name, email and phone — one per customer — which is the best
   that system offers, not a full contact list.

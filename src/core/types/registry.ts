@@ -8,7 +8,10 @@
 
 import type { Clock } from "../sync/clock";
 import type { KnownParties } from "../communication/known-parties";
-import type { MessageAttribution } from "../communication/types";
+import type {
+  CommunicationAttribution,
+  SlackConversationMappingView,
+} from "../communication/types";
 import type { RawRecord, TargetObject } from "./common";
 
 // ---------------------------------------------------------------------------
@@ -57,6 +60,16 @@ export interface ParsedTokenResponse {
    * `instance_url` here; without it no Salesforce request can be addressed.
    */
   metadata: ProviderMetadata;
+  /**
+   * The scopes the provider says it actually granted, when they are not in the
+   * top-level `scope` field.
+   *
+   * Slack is the motivating case: the token response's top-level `scope` is the
+   * bot's scopes, while the user grant is under `authed_user.scope`. An empty
+   * list is meaningful — it says the provider supplied no user-scope
+   * information — so callers must distinguish `undefined` from `[]`.
+   */
+  grantedScopes?: readonly string[];
 }
 
 /**
@@ -104,6 +117,21 @@ export interface OAuthProviderAuth {
   resolveTokenMetadata?(
     accessToken: string
   ): Promise<ProviderMetadata>;
+
+  /**
+   * Revoke the credential, for providers whose revoke endpoint does not accept
+   * the generic "refresh token if present, otherwise access token" request.
+   *
+   * Slack revokes one token per call, and its endpoint is a GET, so a provider
+   * that needs both the access and refresh tokens revoked has to own that.
+   *
+   * @returns Whether the provider confirmed revocation. Deletion proceeds
+   *   regardless — see `revokeTokens`.
+   */
+  revokeCredential?(args: {
+    accessToken: string;
+    refreshToken?: string;
+  }): Promise<boolean>;
 }
 
 /**
@@ -253,6 +281,20 @@ export interface HandlerContext {
   readonly knownParties?: KnownParties;
   /** Inclusive lower bound for a communication fetch. */
   readonly communicationWindowStart?: Date;
+  /**
+   * Slack conversations the user explicitly attributed to a customer.
+   *
+   * Supplied only to a `conversationScoped` handler. Absent until the engine
+   * supplies it; a handler that requires mappings must treat absence as a
+   * wiring bug and throw. A full-window scan is complete with an empty list.
+   */
+  readonly slackConversationMappings?: readonly SlackConversationMappingView[];
+  /**
+   * Root `ts` values of threads already tracked in the retained window, keyed
+   * by conversation id. Supplied only on incremental runs, so a reply to an
+   * older root can still be refreshed. Absent means "no tracked threads".
+   */
+  readonly slackThreadRoots?: ReadonlyMap<string, readonly string[]>;
 }
 
 /** One page of source records for a given object. */
@@ -357,17 +399,43 @@ export interface SyncHandler {
    * acquisition complete.
    */
   readonly streaming?: boolean;
+  /**
+   * Objects whose records must carry an attribution before they are written.
+   *
+   * Defaults to `objects` for a streaming handler. Declared separately so a
+   * future non-message object in the same function is not silently dropped by
+   * the engine's attribution filter.
+   */
+  readonly attributionObjects?: readonly TargetObject[];
+  /**
+   * Whether this handler reads only conversations a human mapped to a customer.
+   *
+   * The engine loads mappings and tracked thread roots only for such a handler,
+   * and only this kind may skip the known-parties gate entirely.
+   */
+  readonly conversationScoped?: boolean;
+  /**
+   * Whether an empty known-party set makes the run produce nothing.
+   *
+   * Gmail is address-matched and genuinely cannot attribute without known
+   * parties, so it defaults to true. Slack's customer comes from a mapping; an
+   * author-contact match is best-effort, so it must still ingest when the
+   * mapped customer has no email or domain.
+   */
+  readonly requiresKnownParties?: boolean;
   fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage>;
   /**
-   * Derived participant candidates for one message, when the handler itself
-   * does not write participants. Returning undefined filters the record out;
-   * a communication message with no known party is not stored.
+   * Derived attribution for one communication record.
+   *
+   * Returning undefined filters the record out for an object in
+   * `attributionObjects`; a message with no known party (email) or no mapping
+   * (Slack) is not stored.
    */
   attributionsOf?(
     record: RawRecord,
     object: TargetObject,
     ctx: HandlerContext
-  ): MessageAttribution | undefined;
+  ): CommunicationAttribution | undefined;
   /**
    * Provider ids of the records this one hangs off, keyed by what each is —
    * `{ customer }` for a contact, `{ product }` for an offering,

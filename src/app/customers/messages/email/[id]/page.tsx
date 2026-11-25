@@ -2,12 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { bootstrap } from "@/core/bootstrap";
-import { findMessageForUser } from "@/core/repositories/message-repository";
+import { findEmailMessageForUser } from "@/core/repositories/email-message-repository";
 import { currentUserId } from "@/lib/current-user";
 
 export const dynamic = "force-dynamic";
 
-export default async function MessageDetailPage({
+export default async function EmailMessageDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>;
@@ -15,17 +15,17 @@ export default async function MessageDetailPage({
   bootstrap();
 
   const { id } = await params;
-  const message = await findMessageForUser(id, await currentUserId());
+  const message = await findEmailMessageForUser(id, await currentUserId());
   if (message === undefined) notFound();
 
   return (
     <div className="space-y-6">
       <div>
         <Link
-          href="/customers?tab=messages"
+          href="/customers?tab=email"
           className="text-sm text-slate-500 hover:text-slate-800"
         >
-          ← Messages
+          ← Email messages
         </Link>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">
           {message.subject ?? "(no subject)"}

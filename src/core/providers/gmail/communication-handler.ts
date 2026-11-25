@@ -80,7 +80,9 @@ async function resolveMailboxEmail(
 }
 
 export const gmailCommunicationHandler: SyncHandler = {
-  objects: ["message"],
+  objects: ["emailMessage"],
+  attributionObjects: ["emailMessage"],
+  requiresKnownParties: true,
   streaming: true,
 
   async *fetchPages(ctx: HandlerContext): AsyncIterable<SourcePage> {
@@ -96,7 +98,7 @@ export const gmailCommunicationHandler: SyncHandler = {
 
     const chunks = buildQueryChunks(parties, ctx.communicationWindowStart);
     if (chunks.length === 0) {
-      yield { object: "message", records: [], complete: true };
+      yield { object: "emailMessage", records: [], complete: true };
       return;
     }
 
@@ -150,7 +152,7 @@ export const gmailCommunicationHandler: SyncHandler = {
         }
 
         if (records.length > 0) {
-          yield { object: "message", records };
+          yield { object: "emailMessage", records };
         }
 
         const next = asString(listing?.["nextPageToken"]);
@@ -168,11 +170,11 @@ export const gmailCommunicationHandler: SyncHandler = {
     if (truncated) {
       // A page-limited list is not a complete acquisition. Yielding a final
       // page with `complete: false` withholds the state update and prune.
-      yield { object: "message", records: [], complete: false };
+      yield { object: "emailMessage", records: [], complete: false };
       return;
     }
 
-    yield { object: "message", records: [], complete: true };
+    yield { object: "emailMessage", records: [], complete: true };
   },
 
   externalIdOf(record: RawRecord): string | undefined {
@@ -184,7 +186,7 @@ export const gmailCommunicationHandler: SyncHandler = {
   },
 
   attributionsOf(record, object, ctx) {
-    if (object !== "message") return undefined;
+    if (object !== "emailMessage") return undefined;
     const metadataMailbox = ctx.metadata["email"] ?? ctx.metadata["emailAddress"];
     return attributionFor(record, ctx.knownParties, metadataMailbox);
   },

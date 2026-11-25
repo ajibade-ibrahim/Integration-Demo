@@ -35,6 +35,6 @@ export const gmailFieldDiscovery: FieldDiscovery = {
     _ctx: Omit<HandlerContext, "requestedSourcePaths">,
     object: TargetObject
   ): Promise<readonly DiscoveredFieldDef[]> {
-    return object === "message" ? [...GMAIL_MESSAGE_FIELDS] : [];
+    return object === "emailMessage" ? [...GMAIL_MESSAGE_FIELDS] : [];
   },
 };

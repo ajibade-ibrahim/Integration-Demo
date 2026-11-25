@@ -21,7 +21,7 @@ import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { isFreeEmailDomain } from "../identity/free-email-domains";
 import { normalizeDomain, normalizeEmail } from "../identity/normalize";
-import type { CommunicationMatchKind } from "./types";
+import type { EmailMatchKind } from "./types";
 import { communicationConfig } from "./config";
 
 export const CONTACT_EMAIL_RANK = 3;
@@ -37,7 +37,7 @@ export interface KnownPartyCandidate {
   contactId?: string;
   customerId?: string;
   customerAccountId?: string;
-  matchKind: CommunicationMatchKind;
+  matchKind: EmailMatchKind;
   matchedValue: string;
   rank: number;
   /** Source integration's identity priority, for the fingerprint. */

@@ -1,5 +1,5 @@
 /**
- * Matching one message's addresses against the known parties.
+ * Matching addresses against the known parties.
  *
  * Exact email beats an account/company email, which beats an exact-host domain.
  * Domain matching never folds `retail.acme.com` into `acme.com`; the two are
@@ -10,6 +10,10 @@
  * several companies, and collapsing that to a single "attributed party" is the
  * failure this table exists to avoid. Primary is a convenience when the top
  * candidates agree; it is deliberately empty when they do not.
+ *
+ * Slack uses `matchAuthorContactsForCustomer` instead: the conversation mapping
+ * already fixes the customer, and this only adds a best-effort contact for the
+ * external author.
  */
 
 import { isFreeEmailDomain } from "../identity/free-email-domains";
@@ -21,9 +25,10 @@ import {
   CUSTOMER_DOMAIN_RANK,
 } from "./known-parties";
 import type {
-  MessageAttribution,
-  MessageParticipantCandidate,
-  MessageRole,
+  EmailAttribution,
+  EmailMessageRole,
+  EmailParticipantCandidate,
+  SlackAuthorContactCandidate,
 } from "./types";
 
 export interface MessageAddresses {
@@ -32,7 +37,7 @@ export interface MessageAddresses {
   cc: readonly string[];
 }
 
-const ROLE_ORDER: Record<MessageRole, number> = {
+const ROLE_ORDER: Record<EmailMessageRole, number> = {
   from: 0,
   to: 1,
   cc: 2,
@@ -90,7 +95,6 @@ function isAmbiguous(
 
 function collectRoleCandidates(
   parties: KnownParties,
-  role: MessageRole,
   addresses: readonly string[],
   mailboxEmail: string | undefined
 ): KnownPartyCandidate[] {
@@ -103,9 +107,7 @@ function collectRoleCandidates(
     const normalized = addressValue(raw);
     if (normalized === undefined || normalized === mailbox) continue;
 
-    const matches = [
-      ...(parties.byEmail.get(normalized) ?? []),
-    ];
+    const matches = [...(parties.byEmail.get(normalized) ?? [])];
     const domain = domainValue(normalized);
     if (domain !== undefined) {
       matches.push(...(parties.byDomain.get(domain) ?? []));
@@ -129,7 +131,7 @@ function collectRoleCandidates(
 }
 
 /**
- * Match every address on a message.
+ * Match every address on an email.
  *
  * @returns The participants, or undefined when nothing matched. The handler
  *   treats undefined as "not a communication record for this tenant", which is
@@ -139,16 +141,15 @@ export function matchMessage(args: {
   knownParties: KnownParties;
   addresses: MessageAddresses;
   mailboxEmail?: string;
-}): MessageAttribution | undefined {
+}): EmailAttribution | undefined {
   const { knownParties, addresses } = args;
   const mailbox = args.mailboxEmail ?? knownParties.mailboxEmail;
 
-  const participants: MessageParticipantCandidate[] = [];
+  const participants: EmailParticipantCandidate[] = [];
 
   for (const role of ["from", "to", "cc"] as const) {
     for (const candidate of collectRoleCandidates(
       knownParties,
-      role,
       addresses[role],
       mailbox
     )) {
@@ -187,7 +188,7 @@ export function matchMessage(args: {
     // more than one account group. Keeping all of them and declining to choose
     // is the only honest answer.
     for (const participant of top) participant.disputed = true;
-    return { participants };
+    return { kind: "email", participants };
   }
 
   const primary = [...top].sort((a, b) => {
@@ -200,10 +201,54 @@ export function matchMessage(args: {
 
   if (primary !== undefined) {
     primary.isPrimary = true;
-    return { participants, primaryPartyKey: primary.partyKey };
+    return { kind: "email", participants, primaryPartyKey: primary.partyKey };
   }
 
-  return { participants };
+  return { kind: "email", participants };
+}
+
+/**
+ * Match addresses to contacts belonging to one already-chosen customer.
+ *
+ * Used by a conversation-mapped provider: the customer is authoritative, and
+ * this only adds a best-effort contact for the external author. Restricting the
+ * result to that customer is the whole point — a message in a mapped
+ * conversation must never be attributed to a different company merely because
+ * the author's address matches one.
+ *
+ * Deliberately does not choose a primary: the handler picks one contact
+ * deterministically (rank, then match kind, then party key) and the mapping
+ * customer remains the attribution's primary party.
+ */
+export function matchAuthorContactsForCustomer(args: {
+  knownParties: KnownParties;
+  addresses: readonly string[];
+  customerId: string;
+}): SlackAuthorContactCandidate[] {
+  const { knownParties, customerId } = args;
+
+  return collectRoleCandidates(
+    knownParties,
+    args.addresses,
+    knownParties.mailboxEmail
+  )
+    .filter(
+      (candidate) =>
+        candidate.contactId !== undefined && candidate.customerId === customerId
+    )
+    .map((candidate) => ({
+      partyKey: candidate.partyKey,
+      contactId: candidate.contactId as string,
+      ...(candidate.customerId === undefined
+        ? {}
+        : { customerId: candidate.customerId }),
+      ...(candidate.customerAccountId === undefined
+        ? {}
+        : { customerAccountId: candidate.customerAccountId }),
+      matchKind: candidate.matchKind,
+      matchedValue: candidate.matchedValue,
+      rank: candidate.rank,
+    }));
 }
 
 /** Rank constants re-exported for tests and the detail page's explanations. */

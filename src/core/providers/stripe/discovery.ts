@@ -269,7 +269,8 @@ export const stripeFieldDiscovery: FieldDiscovery = {
       // "customer fields for everything" bug this switch was written to stop.
       case "agreementEntitlement":
       case "agreementDiscount":
-      case "message":
+      case "emailMessage":
+      case "slackMessage":
         return [];
       // An invoice's metadata is its own, so it is sampled from the invoices
       // endpoint like every other top-level object's.
