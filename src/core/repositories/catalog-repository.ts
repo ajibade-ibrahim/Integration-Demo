@@ -18,6 +18,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { priceLabel } from "../price-format";
+import { ownedScope, pageWindow, type DataPageQuery } from "./data-page";
 import { readJsonObject } from "./json-column";
 
 export interface OfferingRow {
@@ -110,15 +111,15 @@ export interface CatalogPage {
 
 export async function loadCatalog(
   userId: string,
-  take = 200
+  query: DataPageQuery = {}
 ): Promise<CatalogPage> {
-  const scope = { integration: { userId } };
+  const scope = ownedScope(userId, query.integrationId);
+  const window = pageWindow(query.page, query.pageSize);
 
   const [
     products,
     offerings,
-    features,
-    entitlements,
+    featureDefinitions,
     productTotal,
     offeringTotal,
     unlinked,
@@ -126,8 +127,10 @@ export async function loadCatalog(
   ] = await Promise.all([
     prisma.product.findMany({
       where: scope,
-      orderBy: { name: "asc" },
-      take,
+      // The id tiebreak keeps page boundaries stable when two products share a
+      // name; without it the same row can appear on two pages.
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      ...window,
       include: {
         integration: { select: { instanceLabel: true, providerName: true } },
         _count: { select: { offerings: true } },
@@ -137,8 +140,8 @@ export async function loadCatalog(
       where: scope,
       // By product, then by name: a catalog reads as a list of things with
       // their tiers underneath.
-      orderBy: [{ product: { name: "asc" } }, { name: "asc" }],
-      take,
+      orderBy: [{ product: { name: "asc" } }, { name: "asc" }, { id: "asc" }],
+      ...window,
       include: {
         integration: { select: { instanceLabel: true } },
         product: { select: { name: true } },
@@ -146,19 +149,14 @@ export async function loadCatalog(
         _count: { select: { entitlements: true } },
       },
     }),
+    // Every definition in scope, with no `take`. Features are grouped by lookup
+    // key *before* pagination, so slicing here would split a merged group
+    // across two pages and make the total disagree with the tab count.
     prisma.feature.findMany({
       where: scope,
-      orderBy: [{ name: "asc" }, { lookupKey: "asc" }],
-      take,
+      orderBy: [{ name: "asc" }, { lookupKey: "asc" }, { id: "asc" }],
       include: {
         integration: { select: { instanceLabel: true } },
-      },
-    }),
-    prisma.entitlement.findMany({
-      where: scope,
-      take,
-      include: {
-        offering: { select: { name: true } },
       },
     }),
     prisma.product.count({ where: scope }),
@@ -171,7 +169,23 @@ export async function loadCatalog(
     }),
   ]);
 
-  const featureRows = attachOfferings(features, entitlements);
+  // The grouping is the paginated unit, so it happens over the whole scope.
+  // Only the visible groups then cost an entitlement read.
+  const groups = groupFeatures(featureDefinitions);
+  const visibleGroups = groups.slice(window.skip, window.skip + window.take);
+  const visibleFeatureIds = visibleGroups.flatMap((group) => group.featureIds);
+
+  const entitlements =
+    visibleFeatureIds.length === 0
+      ? []
+      : await prisma.entitlement.findMany({
+          where: { ...scope, featureId: { in: visibleFeatureIds } },
+          include: {
+            offering: { select: { name: true } },
+          },
+        });
+
+  attachOfferings(visibleGroups, entitlements);
 
   return {
     products: products.map((row) => ({
@@ -205,11 +219,14 @@ export async function loadCatalog(
         integrationLabel: row.integration.instanceLabel,
       };
     }),
-    features: featureRows,
+    features: visibleGroups.map((group) => group.row),
     totals: {
       products: productTotal,
       offerings: offeringTotal,
-      features: featureRows.length,
+      // The merged-group count, not the number of definitions on this page:
+      // two definitions sharing a lookup key are one row here, which is what
+      // the tab claims to show.
+      features: groups.length,
       unlinkedOfferings: unlinked,
       // Counted from the entitlement rows rather than from the grouped
       // offerings: an entitlement whose *feature* did not resolve has no
@@ -240,23 +257,87 @@ type EntitlementWithOffering = {
 };
 
 /**
- * Group the definitions by lookup key and collect each group's offerings.
+ * A merged feature row, plus every definition that was folded into it.
  *
- * Two groupings, in order. First the entitlement rows are bucketed by internal
- * `featureId` — the join the schema actually holds, so no key stand-in is
- * needed. Then the definitions are folded together on
- * `(integrationId, lookupKey ?? externalSourceId)`, which is what "unique by
- * lookup key" means: a shared key brings the two offerings into one row, and a
- * definition with no key falls back to its provider id so it is never merged
- * with an unrelated one.
+ * The ids are kept because an entitlement points at a *definition*, and the
+ * definitions sharing a lookup key are otherwise indistinguishable from the
+ * row. Without them, a page containing the group would fetch the offerings for
+ * whichever definition happened to be first and silently drop the rest.
+ */
+interface FeatureGroup {
+  row: FeatureRow;
+  featureIds: string[];
+}
+
+/**
+ * Fold definitions together on `(integrationId, lookupKey ?? externalSourceId)`.
  *
- * An entitlement whose *feature* half did not resolve has no definition to
- * attach to and is skipped here; it is still counted, by `unlinkedEntitlements`.
+ * That is what "unique by lookup key" means: a shared key brings two
+ * definitions into one row, and a definition with no key falls back to its
+ * provider id so it is never merged with an unrelated one. Insertion order is
+ * the order the definitions arrived in, and it is preserved because it is the
+ * page's stable sort — the id tiebreak in the query makes that order total.
+ *
+ * Offerings are attached in a later pass — see {@link attachOfferings} — so the
+ * grouped rows can be paginated first. Slicing definitions before this fold
+ * would split a group across two pages.
+ */
+function groupFeatures(
+  features: readonly FeatureWithIntegration[]
+): FeatureGroup[] {
+  const grouped = new Map<string, FeatureGroup>();
+
+  for (const feature of features) {
+    const key = `${feature.integrationId}:${feature.lookupKey ?? feature.externalSourceId}`;
+
+    const existing = grouped.get(key);
+    if (existing === undefined) {
+      grouped.set(key, {
+        featureIds: [feature.id],
+        row: {
+          id: feature.id,
+          externalSourceId: feature.externalSourceId,
+          name: feature.name,
+          lookupKey: feature.lookupKey,
+          isMetered: feature.isMetered,
+          unit: feature.unit,
+          offerings: [],
+          customFields: readJsonObject(feature.customFields),
+          integrationLabel: feature.integration.instanceLabel,
+        },
+      });
+      continue;
+    }
+
+    existing.featureIds.push(feature.id);
+
+    // A gap in one definition is filled from the other rather than kept. These
+    // rows describe the same feature — a shared lookup key is the whole premise
+    // of the fold — so a field one of them states and the other leaves unset is
+    // a field the group knows. Without this, which definition happened to sort
+    // first would decide whether the metered and unit columns were populated,
+    // and the two orderings differ only by a null.
+    existing.row.lookupKey ??= feature.lookupKey;
+    existing.row.isMetered ??= feature.isMetered;
+    existing.row.unit ??= feature.unit;
+  }
+
+  return [...grouped.values()];
+}
+
+/**
+ * Attach each visible group's offering list.
+ *
+ * The entitlement rows are bucketed by internal `featureId` — the join the
+ * schema actually holds, so no key stand-in is needed — then each group merges
+ * the buckets of all its definitions and dedupes by offering identity. An
+ * entitlement whose *feature* half did not resolve has no definition to attach
+ * to and is skipped here; it is still counted, by `unlinkedEntitlements`.
  */
 function attachOfferings(
-  features: readonly FeatureWithIntegration[],
+  groups: readonly FeatureGroup[],
   entitlements: readonly EntitlementWithOffering[]
-): FeatureRow[] {
+): void {
   const offeringsByFeature = new Map<string, FeatureOffering[]>();
   const seenByFeature = new Map<string, Set<string>>();
 
@@ -279,50 +360,22 @@ function attachOfferings(
     offeringsByFeature.set(row.featureId, list);
   }
 
-  const grouped = new Map<string, FeatureRow>();
+  for (const group of groups) {
+    const merged: FeatureOffering[] = [];
+    const seen = new Set<string>();
 
-  for (const feature of features) {
-    const key = `${feature.integrationId}:${feature.lookupKey ?? feature.externalSourceId}`;
-    const offerings = offeringsByFeature.get(feature.id) ?? [];
-
-    const existing = grouped.get(key);
-    if (existing === undefined) {
-      grouped.set(key, {
-        id: feature.id,
-        externalSourceId: feature.externalSourceId,
-        name: feature.name,
-        lookupKey: feature.lookupKey,
-        isMetered: feature.isMetered,
-        unit: feature.unit,
-        // Copied, because the sort below must not reorder the source list out
-        // from under a second definition that merges into this row.
-        offerings: [...offerings],
-        customFields: readJsonObject(feature.customFields),
-        integrationLabel: feature.integration.instanceLabel,
-      });
-      continue;
-    }
-
-    for (const offering of offerings) {
-      if (!existing.offerings.some((it) => offeringIdentity(it) === offeringIdentity(offering))) {
-        existing.offerings.push(offering);
+    for (const featureId of group.featureIds) {
+      for (const offering of offeringsByFeature.get(featureId) ?? []) {
+        const identity = offeringIdentity(offering);
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        merged.push(offering);
       }
     }
 
-    // A gap in one definition is filled from the other rather than kept. These
-    // rows describe the same feature — a shared lookup key is the whole premise
-    // of the fold — so a field one of them states and the other leaves unset is
-    // a field the group knows. Without this, which definition happened to sort
-    // first would decide whether the metered and unit columns were populated,
-    // and the two orderings differ only by a null.
-    existing.lookupKey ??= feature.lookupKey;
-    existing.isMetered ??= feature.isMetered;
-    existing.unit ??= feature.unit;
+    merged.sort(compareOfferings);
+    group.row.offerings = merged;
   }
-
-  const rows = [...grouped.values()];
-  for (const row of rows) row.offerings.sort(compareOfferings);
-  return rows;
 }
 
 /**

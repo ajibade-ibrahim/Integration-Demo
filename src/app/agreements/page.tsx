@@ -1,7 +1,14 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { bootstrap } from "@/core/bootstrap";
 import { currentUserId } from "@/lib/current-user";
+import {
+  buildDataHref,
+  pageCount,
+  parsePage,
+  resolveIntegrationScope,
+} from "@/lib/integration-scope";
 import {
   loadAgreements,
   type AgreementDiscountRow,
@@ -9,13 +16,40 @@ import {
   type AgreementItemRow,
 } from "@/core/repositories/agreement-repository";
 import { Empty, Table, Td } from "../data-table";
+import { Pager } from "../pager";
+import { ScopeBanner, UnresolvedScopeNotice } from "../scope-banner";
 
 export const dynamic = "force-dynamic";
 
-export default async function AgreementsPage() {
+export default async function AgreementsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ integration?: string; page?: string }>;
+}) {
   bootstrap();
 
-  const { agreements, totals } = await loadAgreements(await currentUserId());
+  const { integration, page: rawPage } = await searchParams;
+
+  const userId = await currentUserId();
+  const { scope, unresolved } = await resolveIntegrationScope(
+    integration,
+    userId
+  );
+  const page = parsePage(rawPage);
+
+  const { agreements, totals } = await loadAgreements(userId, {
+    integrationId: scope?.integrationId,
+    page,
+  });
+
+  if (page > pageCount(totals.agreements)) {
+    redirect(
+      buildDataHref("/agreements", {
+        integration,
+        page: pageCount(totals.agreements),
+      })
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -27,19 +61,43 @@ export default async function AgreementsPage() {
         </p>
       </div>
 
+      {scope !== null && (
+        <ScopeBanner
+          label={scope.label}
+          clearHref={buildDataHref("/agreements", {})}
+        />
+      )}
+      {unresolved && <UnresolvedScopeNotice />}
+
       {totals.agreements === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
-          <p className="text-slate-600">Nothing synced yet.</p>
-          <p className="mt-1 text-sm text-slate-500">
-            Connect an integration that serves the Agreement function, then run
-            a sync.
-          </p>
-          <Link
-            href="/integrations"
-            className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          >
-            Go to integrations
-          </Link>
+          {scope !== null ? (
+            <>
+              <p className="text-slate-600">
+                Nothing synced from {scope.label} yet.
+              </p>
+              <Link
+                href={`/integrations/${scope.integrationId}`}
+                className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Back to connection
+              </Link>
+            </>
+          ) : (
+            <>
+              <p className="text-slate-600">Nothing synced yet.</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Connect an integration that serves the Agreement function, then
+                run a sync.
+              </p>
+              <Link
+                href="/integrations"
+                className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Go to integrations
+              </Link>
+            </>
+          )}
         </div>
       ) : (
         <>
@@ -166,6 +224,13 @@ export default async function AgreementsPage() {
               </tr>
             ))}
           </Table>
+
+          <Pager
+            page={page}
+            total={totals.agreements}
+            path="/agreements"
+            params={{ integration }}
+          />
         </>
       )}
     </div>

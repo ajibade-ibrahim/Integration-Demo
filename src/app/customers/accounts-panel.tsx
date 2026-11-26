@@ -70,16 +70,24 @@ export function AccountsPanel({
   issues,
   assertions,
   lastRunAt,
+  scopeLabel,
+  focusIntegrationId,
 }: {
   accounts: AccountView[];
   issues: IdentityIssue[];
   assertions: AssertionView[];
   lastRunAt: string | null;
+  /** Set when the tab is filtered to one connection. */
+  scopeLabel?: string;
+  /** The member (`Customer`) source whose integration is the filter. */
+  focusIntegrationId?: string;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mergeInto, setMergeInto] = useState<Record<string, string>>({});
+
+  const scoped = scopeLabel !== undefined;
 
   /**
    * Run the request, then the pass, then refresh.
@@ -132,8 +140,10 @@ export function AccountsPanel({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-500">
-          {accounts.length} account{accounts.length === 1 ? "" : "s"} resolved
-          from your synced customers
+          {accounts.length} account{accounts.length === 1 ? "" : "s"}{" "}
+          {scoped
+            ? `containing a record from ${scopeLabel}`
+            : "resolved from your synced customers"}
           {lastRunAt === null ? "" : ` · last run ${lastRunAt}`}
         </p>
         <button
@@ -156,63 +166,77 @@ export function AccountsPanel({
         Two accounts claim one address, and the matcher will not guess. Shown
         rather than silently resolved: a false merge is the worst failure this
         feature has, and it has no automatic undo.
-      */}
-      {conflicts.length > 0 && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <p className="font-medium">
-            {conflicts.length} match{conflicts.length === 1 ? "" : "es"} needs a
-            decision
-          </p>
-          <ul className="mt-2 space-y-1">
-            {conflicts.map((issue, index) => (
-              <li key={index}>{issue.reason}</li>
-            ))}
-          </ul>
-          <p className="mt-2">
-            Use “Same company as…” below to join them, or leave them apart.
-          </p>
-        </div>
-      )}
 
-      {/*
-        Priority defaults to 100 everywhere, so most ties are accidental rather
-        than a preference anyone expressed. Saying which field and which sources
-        turns a silent coin-flip into a prompt.
+        In scoped mode the tenant-wide blocks are replaced by one line. They
+        cannot be filtered honestly — an issue names another connection's
+        record — and showing them under a "this connection" banner would imply
+        they belong to it.
       */}
-      {fieldConflicts.length > 0 && (
-        <div className="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
-          <p className="font-medium">
-            {fieldConflicts.length} field
-            {fieldConflicts.length === 1 ? "" : "s"} resolved by a tie-break
-          </p>
-          <ul className="mt-2 space-y-2">
-            {fieldConflicts.map((issue, index) => (
-              <li key={index}>
-                {issue.reason}
-                {issue.contenders !== undefined && issue.contenders.length > 0 && (
-                  <ul className="mt-1 space-y-0.5 text-xs">
-                    {issue.contenders.map((contender, contenderIndex) => (
-                      <li key={`${contender.integrationId}:${contender.value}:${contenderIndex}`}>
-                        <span className="font-medium">
-                          {contender.won ? "Kept" : "Rejected"} {contender.value}
-                        </span>{" "}
-                        from {contender.instanceLabel ?? contender.integrationId}
-                        {contender.externalSourceId === undefined
-                          ? ""
-                          : ` #${contender.externalSourceId}`}
-                        : {contender.reason}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2">
-            Equal-ranked sources disagree. Set a source priority on the
-            integration to say which one you trust for these.
-          </p>
-        </div>
+      {scoped ? (
+        <p className="text-sm text-slate-500">
+          Cross-source conflicts and your identity decisions are shown on the
+          unfiltered page.
+        </p>
+      ) : (
+        <>
+          {conflicts.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              <p className="font-medium">
+                {conflicts.length} match{conflicts.length === 1 ? "" : "es"} needs a
+                decision
+              </p>
+              <ul className="mt-2 space-y-1">
+                {conflicts.map((issue, index) => (
+                  <li key={index}>{issue.reason}</li>
+                ))}
+              </ul>
+              <p className="mt-2">
+                Use “Same company as…” below to join them, or leave them apart.
+              </p>
+            </div>
+          )}
+
+          {/*
+            Priority defaults to 100 everywhere, so most ties are accidental
+            rather than a preference anyone expressed. Saying which field and
+            which sources turns a silent coin-flip into a prompt.
+          */}
+          {fieldConflicts.length > 0 && (
+            <div className="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
+              <p className="font-medium">
+                {fieldConflicts.length} field
+                {fieldConflicts.length === 1 ? "" : "s"} resolved by a tie-break
+              </p>
+              <ul className="mt-2 space-y-2">
+                {fieldConflicts.map((issue, index) => (
+                  <li key={index}>
+                    {issue.reason}
+                    {issue.contenders !== undefined && issue.contenders.length > 0 && (
+                      <ul className="mt-1 space-y-0.5 text-xs">
+                        {issue.contenders.map((contender, contenderIndex) => (
+                          <li key={`${contender.integrationId}:${contender.value}:${contenderIndex}`}>
+                            <span className="font-medium">
+                              {contender.won ? "Kept" : "Rejected"} {contender.value}
+                            </span>{" "}
+                            from {contender.instanceLabel ?? contender.integrationId}
+                            {contender.externalSourceId === undefined
+                              ? ""
+                              : ` #${contender.externalSourceId}`}
+                            : {contender.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2">
+                Equal-ranked sources disagree. Set a source priority on the
+                integration to say which one you trust for these.
+              </p>
+            </div>
+          )}
+        </>
       )}
 
       {accounts.length === 0 ? (
@@ -227,6 +251,7 @@ export function AccountsPanel({
             others={accounts.filter((other) => other.id !== account.id)}
             busy={busy}
             mergeTarget={mergeInto[account.id] ?? ""}
+            focusIntegrationId={focusIntegrationId}
             onMergeTargetChange={(value) => {
               setMergeInto((current) => ({ ...current, [account.id]: value }));
             }}
@@ -235,7 +260,7 @@ export function AccountsPanel({
         ))
       )}
 
-      {assertions.length > 0 && (
+      {!scoped && assertions.length > 0 && (
         <section className="space-y-2 rounded-xl border border-slate-200 bg-white p-4">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
             Your identity decisions
@@ -303,6 +328,7 @@ function AccountCard({
   others,
   busy,
   mergeTarget,
+  focusIntegrationId,
   onMergeTargetChange,
   onAssert,
 }: {
@@ -310,6 +336,7 @@ function AccountCard({
   others: AccountView[];
   busy: boolean;
   mergeTarget: string;
+  focusIntegrationId?: string;
   onMergeTargetChange: (value: string) => void;
   onAssert: (
     kind: "same" | "distinct",
@@ -448,6 +475,16 @@ function AccountCard({
                   {member.integrationLabel}
                   <span className="ml-1 font-mono">#{member.externalSourceId}</span>
                 </span>
+                {/*
+                  The badge marks the record that put this account inside a
+                  scoped view. Other members stay visible and labelled: the
+                  account is a merge, and hiding them would misrepresent it.
+                */}
+                {member.integrationId === focusIntegrationId && (
+                  <span className="ml-1 rounded bg-sky-100 px-1.5 py-0.5 text-[11px] text-sky-800">
+                    this connection
+                  </span>
+                )}
               </span>
               {/*
                 Only offered when there is something to separate from. Splitting

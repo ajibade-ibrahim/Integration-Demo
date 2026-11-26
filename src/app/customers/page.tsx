@@ -1,6 +1,13 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { bootstrap } from "@/core/bootstrap";
 import { currentUserId } from "@/lib/current-user";
+import {
+  buildDataHref,
+  pageCount,
+  parsePage,
+  resolveIntegrationScope,
+} from "@/lib/integration-scope";
 import {
   loadAssertionsForDisplay,
   loadCustomerAccounts,
@@ -22,6 +29,8 @@ import {
   SLACK_CONVERSATION_KIND_FILTERS,
   SLACK_CONVERSATION_KIND_LABELS,
 } from "./slack-kind";
+import { Pager } from "../pager";
+import { ScopeBanner, UnresolvedScopeNotice } from "../scope-banner";
 import { AccountsPanel } from "./accounts-panel";
 
 export const dynamic = "force-dynamic";
@@ -29,11 +38,16 @@ export const dynamic = "force-dynamic";
 export default async function SyncedDataPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; kind?: string }>;
+  searchParams: Promise<{
+    tab?: string;
+    kind?: string;
+    integration?: string;
+    page?: string;
+  }>;
 }) {
   bootstrap();
 
-  const { tab, kind } = await searchParams;
+  const { tab, kind, integration, page: rawPage } = await searchParams;
   const showContacts = tab === "contacts";
   const showAccounts = tab === "accounts";
   const showEmail = tab === "email";
@@ -45,19 +59,41 @@ export default async function SyncedDataPage({
     showSlack && isSlackConversationKind(kind) ? kind : undefined;
 
   const userId = await currentUserId();
+  const { scope, unresolved } = await resolveIntegrationScope(
+    integration,
+    userId
+  );
+  const integrationId = scope?.integrationId;
+  const page = parsePage(rawPage);
+
+  // The tab label counts every conversation; the pager needs the count the
+  // active kind filter produces, or "Showing 1–2 of 40" would describe rows the
+  // table never fetched.
   const [
     { customers, contacts, totals },
     emailTotal,
     slackTotal,
+    slackPageTotal,
     emailMessages,
     slackConversations,
   ] = await Promise.all([
-    loadSyncedData(userId),
-    countEmailMessagesForUser(userId),
-    countSlackConversationsForUser(userId),
-    showEmail ? loadEmailMessagesForUser(userId) : Promise.resolve([]),
+    loadSyncedData(userId, { integrationId, page }),
+    countEmailMessagesForUser(userId, integrationId),
+    countSlackConversationsForUser(userId, { integrationId }),
     showSlack
-      ? loadSlackConversationsForUser(userId, slackKind)
+      ? countSlackConversationsForUser(userId, {
+          integrationId,
+          kind: slackKind,
+        })
+      : Promise.resolve(0),
+    showEmail
+      ? loadEmailMessagesForUser(userId, { integrationId, page })
+      : Promise.resolve([]),
+    showSlack
+      ? loadSlackConversationsForUser(userId, slackKind, {
+          integrationId,
+          page,
+        })
       : Promise.resolve([]),
   ]);
 
@@ -66,7 +102,7 @@ export default async function SyncedDataPage({
   // the customer table.
   const [accounts, assertions, runs] = showAccounts
     ? await Promise.all([
-        loadCustomerAccounts(userId),
+        loadCustomerAccounts(userId, { integrationId, page }),
         loadAssertionsForDisplay(userId),
         listResolutionRuns(userId, 1),
       ])
@@ -77,6 +113,45 @@ export default async function SyncedDataPage({
   // anything it did not report again has been settled.
   const latestRun = runs[0];
 
+  // The active tab decides what "page N" means. Redirecting before render
+  // keeps the URL truthful rather than showing an empty table under a page
+  // number that cannot exist.
+  const activeTotal = showEmail
+    ? emailTotal
+    : showSlack
+      ? slackPageTotal
+      : showAccounts
+        ? totals.accounts
+        : showContacts
+          ? totals.contacts
+          : totals.customers;
+  const activeTab = showEmail
+    ? "email"
+    : showSlack
+      ? "slack"
+      : showAccounts
+        ? "accounts"
+        : showContacts
+          ? "contacts"
+          : undefined;
+
+  if (page > pageCount(activeTotal)) {
+    redirect(
+      buildDataHref("/customers", {
+        tab: activeTab,
+        integration,
+        page: pageCount(activeTotal),
+        kind: showSlack ? slackKind : undefined,
+      })
+    );
+  }
+
+  const empty =
+    totals.customers === 0 &&
+    totals.contacts === 0 &&
+    emailTotal === 0 &&
+    slackTotal === 0;
+
   return (
     <div className="space-y-6">
       <div>
@@ -86,29 +161,69 @@ export default async function SyncedDataPage({
         </p>
       </div>
 
-      {totals.customers === 0 &&
-      totals.contacts === 0 &&
-      emailTotal === 0 &&
-      slackTotal === 0 ? (
+      {scope !== null && (
+        <ScopeBanner
+          label={scope.label}
+          clearHref={buildDataHref("/customers", { tab: activeTab })}
+          // The Accounts tab is a cross-source merge. Saying "only this
+          // connection" there would be a promise the account card cannot keep:
+          // every field and member it shows is merged from all sources.
+          note={
+            showAccounts
+              ? "Accounts combine records from every source. Each account below contains at least one record from this connection; its fields and members may still come from other connections."
+              : undefined
+          }
+        />
+      )}
+      {unresolved && <UnresolvedScopeNotice />}
+
+      {empty ? (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
-          <p className="text-slate-600">Nothing synced yet.</p>
-          <Link
-            href="/integrations"
-            className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          >
-            Go to integrations
-          </Link>
+          {scope !== null ? (
+            <>
+              <p className="text-slate-600">
+                Nothing synced from {scope.label} yet.
+              </p>
+              <Link
+                href={`/integrations/${scope.integrationId}`}
+                className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Back to connection
+              </Link>
+            </>
+          ) : (
+            <>
+              <p className="text-slate-600">Nothing synced yet.</p>
+              <Link
+                href="/integrations"
+                className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Go to integrations
+              </Link>
+            </>
+          )}
         </div>
       ) : (
         <>
           <div className="flex items-center gap-2 border-b border-slate-200">
+            {/*
+              Every tab link is built through `buildDataHref` so the connection
+              filter survives a tab switch. A hand-written `?tab=…` here would
+              silently show every source while the banner still claimed one.
+            */}
             <Tab
-              href="/customers"
+              href={buildDataHref("/customers", { integration })}
               active={!showContacts && !showAccounts && !showEmail && !showSlack}
             >
               Customers ({totals.customers})
             </Tab>
-            <Tab href="/customers?tab=contacts" active={showContacts}>
+            <Tab
+              href={buildDataHref("/customers", {
+                tab: "contacts",
+                integration,
+              })}
+              active={showContacts}
+            >
               Contacts ({totals.contacts})
             </Tab>
             {/*
@@ -116,13 +231,31 @@ export default async function SyncedDataPage({
               company appears once per integration in Customers, and this is
               where those rows become one company.
             */}
-            <Tab href="/customers?tab=accounts" active={showAccounts}>
+            <Tab
+              href={buildDataHref("/customers", {
+                tab: "accounts",
+                integration,
+              })}
+              active={showAccounts}
+            >
               Accounts ({totals.accounts})
             </Tab>
-            <Tab href="/customers?tab=email" active={showEmail}>
+            <Tab
+              href={buildDataHref("/customers", {
+                tab: "email",
+                integration,
+              })}
+              active={showEmail}
+            >
               Email messages ({emailTotal})
             </Tab>
-            <Tab href="/customers?tab=slack" active={showSlack}>
+            <Tab
+              href={buildDataHref("/customers", {
+                tab: "slack",
+                integration,
+              })}
+              active={showSlack}
+            >
               Slack conversations ({slackTotal})
             </Tab>
           </div>
@@ -145,7 +278,11 @@ export default async function SyncedDataPage({
           {showEmail ? (
             <EmailMessageTable rows={emailMessages} />
           ) : showSlack ? (
-            <SlackConversationTable rows={slackConversations} kind={slackKind} />
+            <SlackConversationTable
+              rows={slackConversations}
+              kind={slackKind}
+              integration={integration}
+            />
           ) : showAccounts ? (
             <AccountsPanel
               accounts={accounts.map((account) => ({
@@ -160,12 +297,25 @@ export default async function SyncedDataPage({
                 latestRun?.startedAt.toLocaleString() ??
                 null
               }
+              scopeLabel={scope?.label}
+              focusIntegrationId={scope?.integrationId}
             />
           ) : showContacts ? (
             <ContactTable rows={contacts} />
           ) : (
             <CustomerTable rows={customers} />
           )}
+
+          <Pager
+            page={page}
+            total={activeTotal}
+            path="/customers"
+            params={{
+              tab: activeTab,
+              integration,
+              kind: showSlack ? slackKind : undefined,
+            }}
+          />
         </>
       )}
     </div>
@@ -362,19 +512,23 @@ function EmailMessageTable({ rows }: { rows: EmailMessageListRow[] }) {
 function SlackConversationTable({
   rows,
   kind,
+  integration,
 }: {
   rows: SlackConversationListRow[];
   kind?: SlackConversationListRow["conversationKind"];
+  /** Kept in the kind links so the connection filter survives a chip click. */
+  integration?: string;
 }) {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         {SLACK_CONVERSATION_KIND_FILTERS.map((filter) => {
           const active = filter.kind === kind;
-          const href =
-            filter.kind === undefined
-              ? "/customers?tab=slack"
-              : `/customers?tab=slack&kind=${filter.kind}`;
+          const href = buildDataHref("/customers", {
+            tab: "slack",
+            integration,
+            kind: filter.kind,
+          });
           return (
             <Link
               key={filter.key}

@@ -8,6 +8,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
+import { ownedScope, pageWindow, type DataPageQuery } from "./data-page";
 import { readJsonArray } from "./json-column";
 
 export interface EmailMessageParticipantView {
@@ -149,15 +150,17 @@ function toListRow(row: {
   };
 }
 
-/** Newest emails across every integration this user owns. */
+/** Newest emails across every integration this user owns, or one of them. */
 export async function loadEmailMessagesForUser(
   userId: string,
-  take = 200
+  query: DataPageQuery = {}
 ): Promise<EmailMessageListRow[]> {
   const rows = await prisma.emailMessage.findMany({
-    where: { integration: { userId } },
+    where: ownedScope(userId, query.integrationId),
+    // The id tiebreak is already here, and it is what keeps two messages that
+    // share a timestamp on the same page across renders.
     orderBy: [{ sentAt: "desc" }, { id: "asc" }],
-    take,
+    ...pageWindow(query.page, query.pageSize),
     include: {
       integration: { select: { instanceLabel: true, providerName: true } },
       participants: {
@@ -171,9 +174,12 @@ export async function loadEmailMessagesForUser(
 }
 
 export async function countEmailMessagesForUser(
-  userId: string
+  userId: string,
+  integrationId?: string
 ): Promise<number> {
-  return prisma.emailMessage.count({ where: { integration: { userId } } });
+  return prisma.emailMessage.count({
+    where: ownedScope(userId, integrationId),
+  });
 }
 
 /** One email for the detail page, scoped through its integration's owner. */

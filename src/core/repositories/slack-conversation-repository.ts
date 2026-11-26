@@ -20,6 +20,7 @@
 import { prisma } from "@/lib/prisma";
 import type { SlackConversationKind } from "../communication/types";
 import { slackConversationMessageLimit } from "../providers/slack/config";
+import { ownedScope, pageWindow, type DataPageQuery } from "./data-page";
 
 export interface SlackConversationMemberView {
   slackUserId: string;
@@ -101,11 +102,12 @@ export interface SlackConversationDetail {
  */
 export async function loadSlackConversationsForUser(
   userId: string,
-  kind?: SlackConversationKind
+  kind?: SlackConversationKind,
+  query: DataPageQuery = {}
 ): Promise<SlackConversationListRow[]> {
   const mappings = await prisma.slackConversationMapping.findMany({
     where: {
-      integration: { userId },
+      ...ownedScope(userId, query.integrationId),
       ...(kind === undefined ? {} : { conversationKind: kind }),
     },
     select: {
@@ -180,24 +182,40 @@ export async function loadSlackConversationsForUser(
     latestMessage: latestByMapping.get(mapping.id) ?? null,
   }));
 
-  return rows.sort((a, b) => {
+  // Sorted here rather than in SQL because newest-activity is a grouped `_max`,
+  // then sliced for the page. The mapping id is the final tiebreak so rows with
+  // the same label and time keep one order across pages instead of drifting
+  // when the window moves.
+  const ordered = rows.sort((a, b) => {
     if (a.latestMessage === null && b.latestMessage === null) {
-      return a.label.localeCompare(b.label);
+      return (
+        a.label.localeCompare(b.label) ||
+        a.mappingId.localeCompare(b.mappingId)
+      );
     }
     if (a.latestMessage === null) return 1;
     if (b.latestMessage === null) return -1;
     const byTime = b.latestMessage.sentAt.getTime() - a.latestMessage.sentAt.getTime();
     if (byTime !== 0) return byTime;
-    return a.label.localeCompare(b.label);
+    return (
+      a.label.localeCompare(b.label) || a.mappingId.localeCompare(b.mappingId)
+    );
   });
+
+  const { skip, take } = pageWindow(query.page, query.pageSize);
+  return ordered.slice(skip, skip + take);
 }
 
 /** The Slack tab count is conversations, not messages. */
 export async function countSlackConversationsForUser(
-  userId: string
+  userId: string,
+  query: { integrationId?: string; kind?: SlackConversationKind } = {}
 ): Promise<number> {
   return prisma.slackConversationMapping.count({
-    where: { integration: { userId } },
+    where: {
+      ...ownedScope(userId, query.integrationId),
+      ...(query.kind === undefined ? {} : { conversationKind: query.kind }),
+    },
   });
 }
 
